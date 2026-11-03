@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date, datetime, time
 import hashlib
-import json
 from zoneinfo import ZoneInfo
 
 from ..agent_evidence import normalize
@@ -23,7 +22,10 @@ from .deepseek_required import MODEL, RELEASE, SEARCH_MODE, sanitize_url, valida
 from .required_schemas import (clean_schema, sentiment_schema, risk_schema,
                                narrative_schema, decision_schema)
 from .market_evidence import market_snapshots
+from .model_budget import TokenBudgetError
 
+SOURCE_CONTENT_CONTRACT = "native-complete/v1"
+SOURCE_SUMMARY_PROJECTION = "full-source-annotations/v1"
 SYSTEM = (
     "你是严格按证据判断的美股交易研究员。所有语义判断、新闻解释、产业链与板块推理、"
     "最终选择或否决必须由你完成。数值行情、风控闸门、资金、股数、止损是不可修改的事实。"
@@ -82,11 +84,6 @@ TASKS = {
 
 def _fail(reason: str):
     raise RequiredModelFailed(reason)
-
-
-def _json(value: object) -> str:
-    return json.dumps(normalize(value), ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), allow_nan=False)
 
 
 def assessment_context(execution) -> dict:
@@ -157,38 +154,97 @@ def _fields(value) -> dict:
     return value["fields"] if value.get("__type__") == "dataclass" else value
 
 
-def _docs(docs, limit: int = 1600) -> list[dict]:
+def _docs(docs, *, legacy: bool = False, project_annotations: bool = False) -> list[dict]:
     _ids(docs)
     result = []
     for doc in docs:
         doc = _fields(doc)
         raw = _fields(doc["raw"]) if "raw" in doc else doc
         value = {"id": raw["doc_id"], "title": raw["title"], "url": raw["url"],
-                 "published_at": raw["published"] or None, "source": raw["source"],
-                 "content_excerpt": raw["content"][:limit],
-                 "content_excerpt_characters": min(limit, len(raw["content"])),
-                 "full_content_characters": len(raw["content"])}
+                 "published_at": raw["published"] or None, "source": raw["source"]}
+        content = raw["content"]
+        if legacy:
+            value.update(content_excerpt=content[:1600], content_excerpt_characters=min(1600, len(content)),
+                         full_content_characters=len(content))
+        else:
+            value.update(full_content_characters=len(content),
+                         native_content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest())
+            if not project_annotations:
+                value["content"] = content
         if "raw" in doc:
             value.update(tickers=doc["tickers"], summary_zh=doc["summary_zh"],
                          sentiment=doc["sentiment"], events=doc["events"],
                          corroborated=doc["corroborated"])
+            if not legacy:
+                value.update(sentiment_score=doc["sentiment_score"], relevance=doc["relevance"])
+        elif project_annotations:
+            _fail("The full-source annotations are missing from the evidence projection")
         result.append(value)
     return result
 
 
-def _call(llm, task: str, inputs: dict, schema: dict) -> dict:
+def chat_arguments(stage: str, inputs: dict, schema: dict, assessment: dict) -> dict:
+    if "assessment" in inputs:
+        _fail("Mandatory model assessment may only come from frozen execution")
+    return {"system": SYSTEM, "user": TASKS[stage], "schema_hint": {}, "schema": schema,
+            "public_payload": normalize({"assessment": assessment, **inputs})}
+
+
+def _call(llm, stage: str, inputs: dict, schema: dict) -> dict:
     try:
-        if "assessment" in inputs:
-            _fail("Mandatory model assessment may only come from frozen execution")
-        payload = {"assessment": assessment_context(llm.execution), **inputs}
-        out = llm.complete_json(system=SYSTEM, user=task + "\n" + _json(payload),
-                                schema_hint={}, schema=schema)
+        out = llm.complete_json(**chat_arguments(stage, inputs, schema, assessment_context(llm.execution)))
         # Revalidate even injected test/client implementations; no caller can
         # turn an unchecked dictionary into a semantic result.
         validate_schema(out, schema)
         return out
     except LLMUnavailable:
         _fail("Mandatory semantic model output failed validation or transport")
+
+
+def _window_fits(plan, inputs, schema) -> bool:
+    try:
+        plan(inputs, schema)
+    except TokenBudgetError as error:
+        if error.code == "INPUT_CONTEXT_EXCEEDED":
+            return False
+        raise
+    return True
+
+
+def _stage_plan(llm, stage):
+    assessment = assessment_context(llm.execution)
+    return lambda inputs, schema: llm.plan_chat(**chat_arguments(stage, inputs, schema, assessment))
+
+
+def plan_clean_documents(docs, plan):
+    """Partition consecutive full articles only if the complete request exceeds context."""
+    inputs, schema = {"documents": _docs(docs)}, clean_schema(_ids(docs))
+    if _window_fits(plan, inputs, schema):
+        return [(docs, inputs, schema)]
+    if len(docs) == 1:
+        _fail("A single native document exceeds the provider context and cannot be annotated intact")
+    split = len(docs) // 2
+    return plan_clean_documents(docs[:split], plan) + plan_clean_documents(docs[split:], plan)
+
+
+def plan_analysis_documents(docs, other_inputs, schema, plan) -> dict:
+    """If necessary, synthesize from every previously verified full-article annotation."""
+    full = {**other_inputs, "documents": _docs(docs)}
+    if _window_fits(plan, full, schema):
+        return full
+    projected = {**other_inputs, "documents": _docs(docs, project_annotations=True),
+                 "document_scope": SOURCE_SUMMARY_PROJECTION}
+    if not _window_fits(plan, projected, schema):
+        _fail("Source-linked analysis and its fixed context exceed the provider context")
+    return projected
+
+
+def _call_analysis(llm, stage, docs, other_inputs, schema):
+    try:
+        inputs = plan_analysis_documents(docs, other_inputs, schema, _stage_plan(llm, stage))
+    except (LLMUnavailable, TokenBudgetError):
+        _fail("Mandatory semantic model input could not be planned")
+    return _call(llm, stage, inputs, schema)
 
 
 def _coverage(rows: list[dict], key: str, expected: list[str]):
@@ -229,10 +285,13 @@ def collect(llm, topics: dict[str, str], trade_date: str) -> list[RawDocument]:
 def clean(llm, docs: list[RawDocument]) -> list[CleanDocument]:
     _ids(docs)
     cleaned = []
-    for start in range(0, len(docs), 12):
-        batch = docs[start:start + 12]
-        out = _call(llm, TASKS["clean.llm_semantic"],
-                    {"documents": _docs(batch)}, clean_schema(_ids(batch)))
+    stage = "clean.llm_semantic"
+    try:
+        batches = plan_clean_documents(docs, _stage_plan(llm, stage))
+    except (LLMUnavailable, TokenBudgetError):
+        _fail("Mandatory semantic model input could not be planned")
+    for batch, inputs, schema in batches:
+        out = _call(llm, stage, inputs, schema)
         _coverage(out["documents"], "id", _ids(batch))
         by_id = {row["id"]: row for row in out["documents"]}
         for raw in batch:
@@ -246,8 +305,7 @@ def clean(llm, docs: list[RawDocument]) -> list[CleanDocument]:
 
 def sentiment(llm, docs: list[CleanDocument]) -> dict[str, SentimentRow]:
     chains = list(TECH_SUBCHAINS)
-    out = _call(llm, TASKS["tech.sentiment"],
-                {"chains": chains, "documents": _docs(docs)}, sentiment_schema(chains, _ids(docs)))
+    out = _call_analysis(llm, "tech.sentiment", docs, {"chains": chains}, sentiment_schema(chains, _ids(docs)))
     _coverage(out["chains"], "chain_id", chains)
     return {row["chain_id"]: SentimentRow(chain_id=row["chain_id"], heat=row["heat"],
         sentiment_score=row["sentiment_score"], narrative_change=row["narrative_change"],
@@ -255,15 +313,13 @@ def sentiment(llm, docs: list[CleanDocument]) -> dict[str, SentimentRow]:
 
 
 def risk(llm, docs: list[CleanDocument]) -> list[RiskAlert]:
-    out = _call(llm, TASKS["tech.risk"],
-                {"chains": list(TECH_SUBCHAINS), "documents": _docs(docs)},
+    out = _call_analysis(llm, "tech.risk", docs, {"chains": list(TECH_SUBCHAINS)},
                 risk_schema(list(TECH_SUBCHAINS), _ids(docs)))
     return [RiskAlert(**row) for row in out["alerts"]]
 
 
 def narrative(llm, docs: list[CleanDocument], etfs: list[str]) -> dict:
-    out = _call(llm, TASKS["sector.narrative"],
-                {"etfs": etfs, "documents": _docs(docs)}, narrative_schema(etfs, _ids(docs)))
+    out = _call_analysis(llm, "sector.narrative", docs, {"etfs": etfs}, narrative_schema(etfs, _ids(docs)))
     _coverage(out["sectors"], "etf", etfs)
     return {row["etf"]: {"score": row["narrative_score"], "bias": row["eps_revision_bias"],
         "tone": row["guidance_tone"], "evidence": "; ".join(row["evidence"]),
@@ -279,12 +335,12 @@ def decision(llm, context: dict, docs: list[CleanDocument], account_usd: float) 
     market_by_symbol = {snapshot["symbol"]: snapshot for snapshot in market}
     market_by_id = {snapshot["id"]: snapshot for snapshot in market}
     original_action = context.get("action")
-    out = _call(llm, TASKS["decision.debate"],
+    out = _call_analysis(llm, "decision.debate", docs,
         {"approved_picks": [asdict(pick) for pick in approved.values()],
          "watch_candidates": [asdict(candidate) for candidate in watch],
          "numeric_action": original_action, "mrs": context.get("mrs"),
          "sectors": context.get("sectors"), "rejections": context.get("rejections"),
-         "risk_rationale": context.get("pick_rationale"), "documents": _docs(docs),
+         "risk_rationale": context.get("pick_rationale"),
          "market_evidence": market,
          "market_asof": market_asof(context["market_data"], symbols, assessment_context(llm.execution))},
         decision_schema(symbols, _ids(docs), list(market_by_id)))

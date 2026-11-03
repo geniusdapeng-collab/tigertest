@@ -68,6 +68,22 @@ def count_json_tokens(value: object) -> int:
         raise TokenBudgetError("TOKENIZER_ENCODE_FAILED") from None
 
 
+def chat_request_core(*, system: str, user: str, schema: dict, schema_hint: dict,
+                      thinking_mode: str, effort: str | None, temperature: float) -> dict:
+    """Build the fixed Tiger text-only wire request before planning its window."""
+    request = {"model": MODEL_ID, "messages": [
+        {"role": "system", "content": system + "\nReturn exactly one JSON object. JSON only."},
+        {"role": "user", "content": user + "\nJSON schema:\n" + canonical_json(schema)
+         + "\nJSON field guidance:\n" + canonical_json(schema_hint)}],
+        "stream": False, "response_format": {"type": "json_object"},
+        "thinking": {"type": thinking_mode}}
+    if thinking_mode == "enabled":
+        request["reasoning_effort"] = effort
+    else:
+        request["temperature"] = temperature
+    return request
+
+
 def plan_request(request_without_max_tokens: dict[str, Any]) -> tuple[dict[str, Any], int, int]:
     """Return the request, exact input-token count, and legal output ceiling."""
     if not isinstance(request_without_max_tokens, dict):
@@ -75,14 +91,28 @@ def plan_request(request_without_max_tokens: dict[str, Any]) -> tuple[dict[str, 
     if "max_tokens" in request_without_max_tokens:
         raise TokenBudgetError("CALLER_OUTPUT_CAP_FORBIDDEN")
     candidate = MAX_OUTPUT_TOKENS
-    request: dict[str, Any] = {}
-    input_tokens = 0
+    visited: set[int] = set()
+    feasible: dict[int, tuple[dict[str, Any], int, int]] = {}
     for _ in range(16):
+        if candidate in visited:
+            # The numeric output field itself is present in the counted JSON.
+            # At a digit-token boundary (e.g. 999 -> 1000), increasing by one
+            # can add an input token. Use the largest proven feasible wire in
+            # that cycle instead of rejecting a request that actually fits.
+            if feasible:
+                return feasible[max(feasible)]
+            break
+        visited.add(candidate)
         request = {**request_without_max_tokens, "max_tokens": candidate}
         input_tokens = count_json_tokens(request)
         remaining = CONTEXT_TOKENS - input_tokens
         if remaining < 1:
-            raise TokenBudgetError("INPUT_CONTEXT_EXCEEDED")
+            if candidate == 1:
+                raise TokenBudgetError("INPUT_CONTEXT_EXCEEDED")
+            candidate = 1  # A shorter wire field may leave one valid output token.
+            continue
+        if candidate <= remaining:
+            feasible[candidate] = (request, input_tokens, candidate)
         ceiling = min(MAX_OUTPUT_TOKENS, remaining)
         if ceiling == candidate:
             return request, input_tokens, ceiling

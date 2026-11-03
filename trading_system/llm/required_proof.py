@@ -18,17 +18,22 @@ from ..redline.execution import REQUIRED_MODEL_STAGES, RequiredModelFailed
 from ..redline.model_diagnostics import validate_model_diagnostic
 from ..tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
 from .deepseek_required import (
-    MODEL, RELEASE, SEARCH_MODE, retryable_search_failure, sanitize_url, validate_schema,
+    MODEL, RELEASE, SEARCH_MODE, retryable_search_failure, sanitize_model_text,
+    sanitize_model_value, sanitize_url, validate_schema,
     DeepSeekRequiredClient,
 )
 from .model_budget import (
+    CONTEXT_TOKENS,
     POLICY_VERSION,
     REGISTRY_VERSION,
     TOKENIZER_SHA256,
+    TokenBudgetError,
+    chat_request_core,
     plan_request,
 )
 from .required_schemas import clean_schema, sentiment_schema, risk_schema, narrative_schema, decision_schema
-from .required import SYSTEM, TASKS, _docs, market_asof
+from .required import (SYSTEM, TASKS, SOURCE_CONTENT_CONTRACT, _docs, chat_arguments,
+                       market_asof, plan_analysis_documents, plan_clean_documents)
 from .market_evidence import market_snapshots
 from .scene_policy import KERNEL_SCENE_MAP, scene_config
 
@@ -77,18 +82,20 @@ def _same_watch_facts(actual, observed) -> bool:
     return True
 
 
-def verify_required_model(run, result: dict, admission: dict, *, scene_policy_path=None) -> dict:
+def verify_required_model(run, result: dict, admission: dict, *, scene_policy_path=None,
+                          source_content_contract=None) -> dict:
     """No saved success flag is authoritative: walk bound stage IO again."""
     try:
-        return _verify(run, result, admission, scene_policy_path=scene_policy_path)
+        return _verify(run, result, admission, scene_policy_path=scene_policy_path,
+                       source_content_contract=source_content_contract)
     except EvidenceInvalid:
         raise
     except (KeyError, ValueError, TypeError, IndexError, LLMUnavailable,
-            RequiredModelFailed, OverflowError):
+            RequiredModelFailed, TokenBudgetError, OverflowError):
         _fail()
 
 
-def _verify(run, result, admission, *, scene_policy_path=None):
+def _verify(run, result, admission, *, scene_policy_path=None, source_content_contract=None):
     clock = admission["clock"]
     run_date, market_timezone = clock["run_date"], clock["market_timezone"]
     if (type(run_date) is not str or date.fromisoformat(run_date).isoformat() != run_date
@@ -99,11 +106,21 @@ def _verify(run, result, admission, *, scene_policy_path=None):
     by_stage = {row["stage"]: row for row in events if row["kind"] == "end"}
     counts = {stage: 0 for stage in REQUIRED_MODEL_STAGES}
     response_ids, call_ids, searches = [], set(), []
+    response_identity_hashes = set()
     chat_schema_retries = 0
     native_docs, decision_output, decision_inputs, decision_value = {}, None, None, None
     semantic_values, clean_expected, score_expected, collected_expected = {}, [], [], []
     def snapshot(row, role):
         return read_snapshot(run, row[role + "_ref"], run_id=run.name, stage=row["stage"], role=role)
+    base_input = snapshot(by_stage["clean.rule_base"], "input")
+    observed_contract = base_input.get("source_content_contract")
+    expected_contract = {None: observed_contract, "legacy-excerpts/v1": None,
+                         SOURCE_CONTENT_CONTRACT: SOURCE_CONTENT_CONTRACT}
+    if (observed_contract not in (None, SOURCE_CONTENT_CONTRACT)
+            or source_content_contract not in expected_contract
+            or observed_contract != expected_contract[source_content_contract]):
+        _fail()
+    legacy = observed_contract is None
     for stage in ("search.collect", *REQUIRED_MODEL_STAGES):
         end = by_stage[stage]
         if end["status"] != "completed" or end["error_type"] is not None or end["reason"] is not None:
@@ -125,10 +142,35 @@ def _verify(run, result, admission, *, scene_policy_path=None):
             source = doc.get("raw", doc)
             native = native_docs[source["doc_id"]]
             if (source["url"] != native["url"] or source["source"] != "deepseek_search"
-                    or source["title"] != _normalize_text(native["title"])[:200]
-                    or source["content"] != _normalize_text(native["content"])[:MAX_CONTENT]
+                    or source["title"] != (_normalize_text(native["title"])[:200] if legacy else native["title"])
+                    or source["content"] != (_normalize_text(native["content"])[:MAX_CONTENT] if legacy else native["content"])
                     or source["published"] != (native["published"] or "")):
                 _fail()
+        if stage != "search.collect":
+            thinking = scene_config(KERNEL_SCENE_MAP[stage], scene_policy_path)["thinking"]
+            thinking_mode = thinking["type"]
+            reasoning_effort = thinking.get("effort")
+
+            def plan(payload, schema):
+                if legacy:
+                    system = SYSTEM
+                    user = TASKS[stage] + "\n" + json.dumps(normalize({"assessment": assessment, **payload}),
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                else:
+                    args = chat_arguments(stage, payload, schema, assessment)
+                    system = sanitize_model_text(args["system"])
+                    user = sanitize_model_text(args["user"]) + "\n" + json.dumps(
+                        sanitize_model_value(args["public_payload"]), ensure_ascii=False,
+                        sort_keys=True, separators=(",", ":"), allow_nan=False)
+                return plan_request(chat_request_core(system=system, user=user, schema=schema,
+                    schema_hint={}, thinking_mode=thinking_mode, effort=reasoning_effort, temperature=0.2))
+
+        if stage == "clean.llm_semantic":
+            if legacy:
+                batches = [(batch, {"documents": _docs(batch, legacy=True)}, clean_schema(ids[start:start + 12]))
+                           for start in range(0, len(docs), 12) if (batch := docs[start:start + 12])]
+            else:
+                batches = plan_clean_documents(docs, plan)
         chat_index = 0
         for call in output["io_calls"]:
             if call["method"] not in {"model.deepseek.search", "model.deepseek.chat"} or "error_ref" in call:
@@ -194,18 +236,17 @@ def _verify(run, result, admission, *, scene_policy_path=None):
                 _fail()
             chat_schema_retries += len(retries)
             if stage == "clean.llm_semantic":
-                selected_ids = ids[chat_index * 12:(chat_index + 1) * 12]
-                expected_schema = clean_schema(selected_ids)
-                expected_payload = {"documents": _docs(docs[chat_index * 12:(chat_index + 1) * 12])}
+                batch, expected_payload, expected_schema = batches[chat_index]
+                selected_ids = [item["doc_id"] for item in batch]
             elif stage == "tech.sentiment":
                 selected_ids, expected_schema = ids, sentiment_schema(list(TECH_SUBCHAINS), ids)
-                expected_payload = {"chains": list(TECH_SUBCHAINS), "documents": _docs(docs)}
+                expected_payload = {"chains": list(TECH_SUBCHAINS)}
             elif stage == "tech.risk":
                 selected_ids, expected_schema = ids, risk_schema(list(TECH_SUBCHAINS), ids)
-                expected_payload = {"chains": list(TECH_SUBCHAINS), "documents": _docs(docs)}
+                expected_payload = {"chains": list(TECH_SUBCHAINS)}
             elif stage == "sector.narrative":
                 selected_ids, expected_schema = ids, narrative_schema(inputs["sector_symbols"], ids)
-                expected_payload = {"etfs": inputs["sector_symbols"], "documents": _docs(docs)}
+                expected_payload = {"etfs": inputs["sector_symbols"]}
             else:
                 selected_ids = ids
                 risk_value = snapshot(by_stage["layer4.risk"], "output")["value"]
@@ -235,30 +276,16 @@ def _verify(run, result, admission, *, scene_policy_path=None):
                     "watch_candidates": [row for row in inputs["watchlist"] if row["ticker"] not in approved][:5],
                     "numeric_action": inputs["action"], "mrs": bound_inputs["mrs"],
                     "sectors": bound_inputs["sectors"], "rejections": inputs["rejections"],
-                    "risk_rationale": inputs["rationale"], "documents": _docs(docs),
+                    "risk_rationale": inputs["rationale"],
                     "market_asof": expected_market_asof,
                     "market_evidence": expected_market_evidence}
-            expected_payload["assessment"] = assessment
+            if stage != "clean.llm_semantic":
+                if legacy:
+                    expected_payload["documents"] = _docs(docs, legacy=True)
+                else:
+                    expected_payload = plan_analysis_documents(docs, expected_payload, expected_schema, plan)
             body = request["request"]
-            expected_messages = [
-                {"role": "system", "content": SYSTEM + "\nReturn exactly one JSON object. JSON only."},
-                {"role": "user", "content": TASKS[stage] + "\n" + json.dumps(normalize(expected_payload),
-                    ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-                    + "\nJSON schema:\n" + json.dumps(expected_schema, ensure_ascii=False,
-                        sort_keys=True, separators=(",", ":"), allow_nan=False)
-                    + "\nJSON field guidance:\n{}"},
-            ]
-            thinking = scene_config(KERNEL_SCENE_MAP[stage], scene_policy_path)["thinking"]
-            thinking_mode = thinking["type"]
-            reasoning_effort = thinking.get("effort")
-            request_core = {"model": MODEL, "messages": expected_messages,
-                "stream": False, "response_format": {"type": "json_object"},
-                "thinking": {"type": thinking_mode}}
-            if thinking_mode == "enabled":
-                request_core["reasoning_effort"] = reasoning_effort
-            else:
-                request_core["temperature"] = 0.2
-            expected_body, input_token_estimate, output_ceiling = plan_request(request_core)
+            expected_body, input_token_estimate, output_ceiling = plan(expected_payload, expected_schema)
             if (request["endpoint"] != "https://api.deepseek.com/chat/completions"
                     or request["schema"] != "tiger.deepseek-request.v1"
                     or proof["schema"] != "tiger.deepseek-call.v1"
@@ -299,19 +326,41 @@ def _verify(run, result, admission, *, scene_policy_path=None):
                     or proof["response_id"] in response_ids
                     or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", proof["response_id"])):
                 _fail()
+            identity_hash = hashlib.sha256(proof["response_id"].encode()).hexdigest()
+            if identity_hash in response_identity_hashes:
+                _fail()
+            response_identity_hashes.add(identity_hash)
+            attempt = proof.get("retry_attempt")
+            if not legacy and bool(retries) != (attempt is not None):
+                _fail()
+            if attempt is not None:
+                if (not retries or set(attempt) != {"response_id_sha256", "transport_response_sha256",
+                            "request_sha256", "finish_reason", "model", "usage"}
+                        or not re.fullmatch(r"[0-9a-f]{64}", attempt["response_id_sha256"])
+                        or not re.fullmatch(r"[0-9a-f]{64}", attempt["transport_response_sha256"])
+                        or attempt["response_id_sha256"] in response_identity_hashes
+                        or attempt["transport_response_sha256"] == proof["transport_response_sha256"]
+                        or attempt["request_sha256"] != request["request_sha256"]
+                        or attempt["finish_reason"] != "stop" or attempt["model"] != MODEL
+                        or DeepSeekRequiredClient._usage(attempt["usage"], thinking_mode) != attempt["usage"]
+                        or attempt["usage"]["completion_tokens"] > output_ceiling
+                        or attempt["usage"]["total_tokens"] > CONTEXT_TOKENS):
+                    _fail()
+                response_identity_hashes.add(attempt["response_id_sha256"])
             usage = proof["usage"]
             if DeepSeekRequiredClient._usage(usage, thinking_mode) != usage:
                 _fail()
             if (any(type(usage[key]) is not int or usage[key] <= 0 for key in
                     ("prompt_tokens", "completion_tokens", "total_tokens"))
                     or usage["prompt_tokens"] + usage["completion_tokens"] != usage["total_tokens"]
+                    or usage["completion_tokens"] > output_ceiling or usage["total_tokens"] > CONTEXT_TOKENS
                     or body["max_tokens"] <= 0 or body["max_tokens"] > output_ceiling):
                 _fail()
             validate_schema(proof["parsed"], expected_schema)
             if stage == "clean.llm_semantic":
                 rows, key, expected_ids = proof["parsed"]["documents"], "id", selected_ids
                 by_id = {row["id"]: row for row in rows}
-                for raw in docs[chat_index * 12:(chat_index + 1) * 12]:
+                for raw in batch:
                     ann = by_id[raw["doc_id"]]
                     original = RawDocument(**raw)
                     clean_expected.append(CleanDocument(raw=original,
@@ -338,7 +387,7 @@ def _verify(run, result, admission, *, scene_policy_path=None):
             response_ids.append(proof["response_id"])
             counts[stage] += 1
             chat_index += 1
-        if stage != "search.collect" and counts[stage] != ((len(ids) + 11) // 12 if stage == "clean.llm_semantic" else 1):
+        if stage != "search.collect" and counts[stage] != (len(batches) if stage == "clean.llm_semantic" else 1):
             _fail()
         if stage == "search.collect":
             expected_collection = normalize({"documents": collected_expected,
@@ -347,8 +396,11 @@ def _verify(run, result, admission, *, scene_policy_path=None):
             if output["value"] != expected_collection:
                 _fail()
             base_end = by_stage["clean.rule_base"]
-            base_expected = rule_base_clean(collected_expected)
-            if (snapshot(base_end, "input") != normalize({"documents": collected_expected})
+            base_expected = rule_base_clean(collected_expected, preserve_source=not legacy)
+            expected_base_input = {"documents": collected_expected}
+            if not legacy:
+                expected_base_input["source_content_contract"] = SOURCE_CONTENT_CONTRACT
+            if (base_input != normalize(expected_base_input)
                     or snapshot(base_end, "output")["value"] != normalize({"documents": base_expected})
                     or snapshot(by_stage["clean.llm_semantic"], "input") != normalize({
                         "documents": base_expected, "assessment": assessment})):

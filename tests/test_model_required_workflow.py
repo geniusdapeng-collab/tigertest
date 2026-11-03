@@ -14,7 +14,7 @@ import main
 from trading_system.agent_evidence import (EvidenceInvalid, EvidenceStore, verify_events,
     atomic_json, atomic_bytes, read_json, read_bytes, file_ref, digest, json_bytes, SNAPSHOT_SCHEMA)
 from trading_system.agent_runtime import policy_manifest, PROFILE, ACTIVE_PROFILE, run_environment
-from trading_system.llm import required
+from trading_system.llm import model_budget, required
 from trading_system.llm.deepseek_required import DeepSeekRequiredClient
 from trading_system.llm.required_proof import verify_required_model
 from trading_system.redline import LLMUnavailable, ExecutionTracer, llm_guard
@@ -68,7 +68,8 @@ def _answer(stage, schema):
             for symbol in props["symbol"].get("enum", [])]}
 
 
-def required_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt_answer=None):
+def required_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt_answer=None,
+                     article_text=None, captured_requests=None):
     original, root, args, fixture, denied = daily_fixture(tmp_path, monkeypatch)
     execution = ExecutionContext(run_id=root.name, run_date=original.run_date,
         paths=original.paths, policy=ExecutionPolicy(REQUIRED_POLICY_ID, model_mode="enabled",
@@ -85,10 +86,13 @@ def required_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt_answe
             raise LLMUnavailable("fixture provider unavailable")
         if path == "/v1/tools/search":
             fingerprint = hashlib.sha256(request["query"].encode()).hexdigest()
+            body = article_text(fingerprint) if article_text else "TEST_FIXTURE Public source content " + fingerprint
             payload = {"results": [{"url": "https://www.reuters.com/fixture/" + fingerprint,
-                "title": "TEST_FIXTURE " + fingerprint, "content": "TEST_FIXTURE Public source content " + fingerprint,
+                "title": "TEST_FIXTURE " + fingerprint, "content": body,
                 "date": "2026-10-20T12:00:00Z"}]}
         else:
+            if captured_requests is not None:
+                captured_requests.append((stage, copy.deepcopy(request)))
             schema = json.loads(request["messages"][1]["content"].split("\nJSON schema:\n")[1].split("\nJSON field guidance:\n")[0])
             answer = _answer(stage, schema)
             if corrupt_answer:
@@ -113,11 +117,58 @@ def test_all39_stages_require_model_proof_and_model_plan(tmp_path, monkeypatch):
     result = asdict(output.result)
     proof = verify_required_model(root, result, _admission(execution))
     assert proof == result["raw"]["model"]
-    assert proof["search_count"] == 14 and proof["call_count"] == 6
+    assert proof["search_count"] == 14 and proof["call_count"] == 5
     assert result["action"] == "WAIT" and result["picks"] == []
     assert result["raw"]["activity_profile"] is None
     assert {stage for stage, path in attempts if path == "/chat/completions"} == set(REQUIRED_MODEL_STAGES)
     assert denied == []
+
+
+@pytest.mark.parametrize("small_window", [False, True])
+def test_native_source_tail_and_lineage_survive_real_request_planning(tmp_path, monkeypatch, small_window):
+    if small_window:
+        monkeypatch.setattr(model_budget, "CONTEXT_TOKENS", 25_000)
+
+    def article(identity):
+        prefix = "公司披露经营数据及供应情况。" * 640
+        return prefix + '\n实际原文尾部 "https://example.com/a?q=1" ' + identity
+
+    sent = []
+    execution, root, args, _, denied, _ = required_fixture(
+        tmp_path, monkeypatch, article_text=article, captured_requests=sent)
+    output = main._daily(args, "yahoo", execution=execution)
+    proof = verify_required_model(root, asdict(output.result), _admission(execution))
+    assert proof == output.result.raw["model"]
+    assert denied == []
+
+    cleaning_inputs = []
+    for stage, body in sent:
+        user = body["messages"][1]["content"]
+        payload = json.loads(user.split("\n", 1)[1].split("\nJSON schema:\n", 1)[0])
+        assert body["max_tokens"] == min(model_budget.MAX_OUTPUT_TOKENS,
+            model_budget.CONTEXT_TOKENS - model_budget.count_json_tokens(body))
+        if stage == "clean.llm_semantic":
+            cleaning_inputs.append(payload["documents"])
+        elif small_window:
+            assert payload["document_scope"] == required.SOURCE_SUMMARY_PROJECTION
+            assert all("content" not in item and item["summary_zh"] for item in payload["documents"])
+        else:
+            assert all("实际原文尾部" in item["content"] for item in payload["documents"])
+
+    documents = [item for group in cleaning_inputs for item in group]
+    assert len(documents) == len({item["id"] for item in documents}) == 14
+    assert (len(cleaning_inputs) > 1) is small_window
+    by_id = {}
+    for item in documents:
+        body = article(item["url"].rsplit("/", 1)[1])
+        assert len(body) > 4000 and item["content"] == body
+        assert item["native_content_sha256"] == hashlib.sha256(body.encode()).hexdigest()
+        by_id[item["id"]] = item["native_content_sha256"]
+    for stage, body in sent:
+        if stage != "clean.llm_semantic":
+            user = body["messages"][1]["content"]
+            payload = json.loads(user.split("\n", 1)[1].split("\nJSON schema:\n", 1)[0])
+            assert all(by_id[item["id"]] == item["native_content_sha256"] for item in payload["documents"])
 
 
 @pytest.mark.parametrize("stage", ["search.collect", *REQUIRED_MODEL_STAGES])

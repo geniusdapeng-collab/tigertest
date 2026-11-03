@@ -193,7 +193,7 @@ def _decision_client(action="watch", mode="own", captured=None):
     execution = SimpleNamespace(run_date=date(2026, 10, 25),
                                 policy=SimpleNamespace(market_timezone="America/New_York"))
     def complete_json(**kwargs):
-        payload = json.loads(kwargs["user"].split("\n", 1)[1])
+        payload = kwargs["public_payload"]
         if captured is not None:
             captured.append(payload)
         market = {row["symbol"]: row["id"] for row in payload["market_evidence"]}
@@ -214,7 +214,8 @@ def _decision_client(action="watch", mode="own", captured=None):
                 "risk_note": "没有公司新闻确认，行情收盘参考不构成买入证据", "source_ids": refs})
         return {"action": "BUY" if action == "buy" else "WAIT",
                 "action_summary": "离线夹具不构成实际交易研究", "decisions": decisions}
-    return SimpleNamespace(execution=execution, complete_json=complete_json)
+    return SimpleNamespace(execution=execution, complete_json=complete_json,
+                           plan_chat=lambda **kwargs: None)
 
 
 def test_market_only_watch_has_no_invented_news_and_no_allocation():

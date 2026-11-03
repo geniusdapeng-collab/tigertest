@@ -135,8 +135,8 @@ def test_research_date_is_never_inferred_from_latest_or_unknown_document(publish
     client = SimpleNamespace(execution=execution, complete_json=complete_json)
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}},
               "required": ["ok"], "additionalProperties": False}
-    required._call(client, "FIXTURE", {"documents": [{"published_at": published}]}, schema)
-    assert _payload(calls[0]["user"])["assessment"] == {
+    required._call(client, "tech.risk", {"documents": [{"published_at": published}]}, schema)
+    assert calls[0]["public_payload"]["assessment"] == {
         "run_date": "2026-10-26", "market_timezone": "America/New_York"}
     assert "不能把资料中的日期当作当前日期" in calls[0]["system"]
     assert "published_at为空代表发布时间未知" in calls[0]["system"]

@@ -141,11 +141,48 @@ def test_nonzero_reasoning_tokens_are_rejected_for_non_thinking_calls(configured
             system="s", user="u", schema_hint={}, schema=SCHEMA)
 
 
-def test_legacy_max_tokens_argument_cannot_shrink_the_complete_window(configured, monkeypatch):
-    monkeypatch.setattr(requests, "post", lambda *a, **k: Response(chat_response()))
+def test_caller_max_tokens_override_is_explicitly_rejected(configured):
     client = DeepSeekRequiredClient(configured)
-    client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA, max_tokens=1)
-    assert client.receipts[0]["output_ceiling"] > 300_000
+    with pytest.raises(LLMUnavailable, match="CALLER_OUTPUT_CAP_FORBIDDEN"):
+        client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA, max_tokens=1)
+    assert client.describe()["remote_requests"] == 0
+
+
+def test_chat_transmits_a_large_token_legal_body_and_records_exact_bytes(configured, monkeypatch):
+    from trading_system.llm.model_budget import count_json_tokens
+
+    body = " primary source evidence" * 48_000 + " verified original tail"
+    sent = []
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.append(kw["data"]) or Response(chat_response()))
+    client = DeepSeekRequiredClient(configured)
+    client.complete_json(system="Process all authorized documents", user=body, schema_hint={}, schema=SCHEMA)
+
+    assert len(sent) == 1 and len(sent[0]) > 1024 * 1024
+    wire = json.loads(sent[0])
+    assert body in wire["messages"][1]["content"] and wire["max_tokens"] == 393_216
+    assert client.receipts[0]["input_token_estimate"] == count_json_tokens(wire)
+    assert client.receipts[0]["request_sha256"] == hashlib.sha256(sent[0]).hexdigest()
+
+
+def test_invalid_schema_with_missing_usage_is_not_retried(configured, monkeypatch):
+    sent = []
+    payload = chat_response({"score": 12, "reason": "invalid"}, usage=None)
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.append(kw["data"]) or Response(payload))
+    with pytest.raises(LLMUnavailable, match="USAGE_REQUIRED"):
+        DeepSeekRequiredClient(configured).complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)
+    assert len(sent) == 1
+
+
+def test_structured_article_values_are_sanitized_before_json_escaping(configured, monkeypatch):
+    sent = []
+    monkeypatch.setattr(requests, "post", lambda url, **kw: sent.append(kw["data"]) or Response(chat_response()))
+    doc = 'Link "https://example.com/?token=untrusted-secret" then exact tail '
+    payload = {"documents": [{"content": doc}]}
+    DeepSeekRequiredClient(configured).complete_json(
+        system="s", user="u", schema_hint={}, schema=SCHEMA, public_payload=payload)
+    content = json.loads(sent[0])["messages"][1]["content"]
+    payload_sent = json.loads(content.split("\n", 1)[1].split("\nJSON schema:\n", 1)[0])
+    assert payload_sent == {"documents": [{"content": 'Link "[REDACTED_URL]" then exact tail '}]}
 
 
 def test_risk_scene_enables_high_thinking_and_accepts_reasoning_usage(configured, monkeypatch):
@@ -234,6 +271,8 @@ def test_network_exception_is_sanitized(configured, monkeypatch):
     ({"Content-Type": "text/html"}, b"{}"),
 ])
 def test_response_size_and_encoding_limits(configured, monkeypatch, headers, body):
+    from trading_system.llm import deepseek_required as transport
+    monkeypatch.setattr(transport, "CHAT_RESPONSE_MAX_BYTES", 1024 * 1024)
     monkeypatch.setattr(requests, "post", lambda *a, **k: Response(body=body, headers=headers))
     with pytest.raises(LLMUnavailable):
         DeepSeekRequiredClient(configured).complete_json(
@@ -326,6 +365,12 @@ def test_required_chat_retries_one_schema_mismatch_per_run(configured, monkeypat
         "schema": "tiger.model-failure.v1", "provider": "deepseek",
         "code": "OUTPUT_SCHEMA_MISMATCH", "schema_path": "/score", "schema_keyword": "maximum",
     }]
+    assert proof["retry_attempt"] == {
+        "response_id_sha256": hashlib.sha256(b"invalid-first").hexdigest(),
+        "transport_response_sha256": hashlib.sha256(Response(first_invalid).body).hexdigest(),
+        "request_sha256": proof["request_sha256"], "finish_reason": "stop",
+        "model": "deepseek-flash", "usage": first_invalid["usage"],
+    }
     assert KEY not in json.dumps(configured.calls)
     assert "invalid-first" not in json.dumps(configured.calls)
     with pytest.raises(LLMUnavailable, match="OUTPUT_SCHEMA_MISMATCH"):
@@ -469,7 +514,7 @@ def test_close_failure_and_deadline_are_safe(configured, monkeypatch):
             system="s", user="u", schema_hint={}, schema=SCHEMA)
     assert KEY not in str(error.value)
     import trading_system.llm.deepseek_required as transport
-    moments = iter([0.0, 181.0])
+    moments = iter([0.0, transport.CHAT_RESPONSE_DEADLINE + 1.0])
     monkeypatch.setattr(transport.time, "monotonic", lambda: next(moments))
     response = Response(chat_response())
     monkeypatch.setattr(requests, "post", lambda *a, **k: response)
@@ -645,7 +690,8 @@ def test_model_schema_failure_keeps_no_reasoning_content_or_unknown_key(configur
     configured._active.spec.name = "tech.risk"
     payload = chat_response({"score": 7, "reason": "public", KEY: "secret-modeltext"})
     payload["choices"][0]["message"]["reasoning_content"] = KEY + " secret-reasoning"
-    monkeypatch.setattr(requests, "post", lambda *a, **k: Response(payload))
+    identities = iter(["invalid-response-1", "invalid-response-2"])
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Response({**payload, "id": next(identities)}))
     client = DeepSeekRequiredClient(configured)
     with pytest.raises(RequiredModelUnavailable) as error:
         client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)
