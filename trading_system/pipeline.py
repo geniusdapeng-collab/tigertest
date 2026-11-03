@@ -834,8 +834,10 @@ def run_pipeline(
         chains = ChainCycleAgent(provider).execute(context)
         stage.output({"chains": chains, "chain_map": context.get("chain_map", {})})
     with tracer.step("layer0.scan", {"universe": universe, "top_n": top_n,
-                     "market_data": market_data, "scan_filters": scan_filt, "sectors": sectors}) as stage:
-        scanner = UniverseScannerAgent(provider, universe, top_n=top_n)
+                     "market_data": market_data, "scan_filters": scan_filt, "sectors": sectors,
+                     **({"include_entry_setups": True} if required else {})}) as stage:
+        scanner = UniverseScannerAgent(provider, universe, top_n=top_n,
+                                       include_entry_setups=required)
         candidates = scanner.execute(context)
         stage.output({"candidates": candidates, "scan_stats": context["scan_stats"]})
     with tracer.step("layer3.tss", {"watchlist": candidates, "market_data": market_data,

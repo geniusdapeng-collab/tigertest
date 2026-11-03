@@ -36,6 +36,8 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
 
 `model-required-request.json` 使用下文同一四字段结构，将 profile 设为 `us-public-model-required-paper-v1`。此配置沿用原策略和已通用的时序/预算正确性修复，activity 实验保持关闭。模型只能选择/否决数值风险闸门已批准的买入，不得新增、扩大或绕过任何风险限制；无合格买入也必须由实际模型生成等待理由。
 
+严格研究保留原初排和主线补扫名单。对初筛通过但未进入名单的股票，用已有日线逐只检查同一套 A/B/C 入场形态；有形态的股票追加到精评，再走原有期权、评分、风控和模型证据检查。结果中的 `raw.scan_stats.entry_setup_supplement` 分别记录原名单数 `baseline_selected`、额外检查数 `checked`、追加数 `added` 与缺少可用结构行情的数量 `unavailable`。检查范围以已取得合格行情的股票池为准。
+
 当前官方 API ID 为 `deepseek-flash`，2026-10-26 观察的 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) 映射是 `DeepSeek-V4.1-Flash-1017`。这是别名观察，不保证未来自动固定到同一发布；回执记录请求别名、实际 response.model、release 观察、response IDs 与 usage，不能虚构不可变日期 ID。
 
 应用调用同提供方 [Search & Fetch](https://api-docs.deepseek.com/guides/search/) 的原生 Search API，收集既有六条产业链与八类板块主题，将净化文档送入 Flash。适配器支持原生 Fetch，固定 collector 当前没有调用它。Flash 的 Responses `web_search` 在 [官方矩阵](https://api-docs.deepseek.com/guides/responses_api/) 中会被忽略，因此这里准确披露为 `provider_native_search`，不宣称 Flash 自带托管 web_search 已执行。来源 URL 中的凭据、token、签名等在持久化和送模型之前排除；原始响应只保留摘要，回执保留可重算的安全响应。

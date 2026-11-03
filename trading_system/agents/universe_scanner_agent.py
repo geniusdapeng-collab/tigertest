@@ -8,7 +8,7 @@ AMZN/SPY/QQQ），每次运行都分析同样的 10 只。本 Agent 彻底替换
        收盘价 ≥ $5；20 日平均成交额 ≥ $20M；历史 ≥ 260 日；ATR14/价 ≤ 12%
   3. 量化初排（真实数据计算，非搜索关键词）：
        RS63 分位 30% + RS20 分位 25% + 均线结构 20% + 波动收缩 15% + 接近新高 10%
-  4. 输出 Top N 进入 TSS 精评层
+  4. 输出 Top N 与主线补扫；严格研究另补评所有已出现入场形态的标的
 
 扫描结果每次运行随市场数据变化而变化 —— “总是同样几只票”问题在此终结。
 """
@@ -25,16 +25,19 @@ from ..chains import chain_of
 from ..data_models import StockCandidate
 from ..indicators import atr, last, percentile_rank, rs_line, sma
 from .base import BaseAgent
+from .tss_agent import TSSAgent
 
 
 class UniverseScannerAgent(BaseAgent):
     name = "Universe-Scanner"
     layer = 0
 
-    def __init__(self, provider, universe: list[str], top_n: int = config.SCAN_TOP_N):
+    def __init__(self, provider, universe: list[str], top_n: int = config.SCAN_TOP_N,
+                 *, include_entry_setups: bool = False):
         super().__init__(provider)
         self.universe = universe
         self.top_n = top_n
+        self.include_entry_setups = include_entry_setups
 
     def execute(self, context: dict) -> list[StockCandidate]:
         spy_close: pd.Series = context["market_data"]["spy"]["Close"]
@@ -124,6 +127,24 @@ class UniverseScannerAgent(BaseAgent):
                     chosen.add(row["ticker"])
                     boost += 1
 
+        # Keep the existing shortlist for observation and options history.
+        # An entry setup outside it earns the same full TSS and risk checks.
+        baseline_selected = len(top)
+        checked = unavailable = 0
+        if self.include_entry_setups:
+            chosen = {row["ticker"] for row in top}
+            for row in passed:
+                ticker = row["ticker"]
+                if ticker in chosen:
+                    continue
+                checked += 1
+                template = TSSAgent.entry_template_for(stock_data[ticker])
+                if template is None:
+                    unavailable += 1
+                elif template:
+                    top.append(row)
+                    chosen.add(ticker)
+
         candidates: list[StockCandidate] = []
         for row in top:
             cid, link = chain_of(row["ticker"])
@@ -147,6 +168,11 @@ class UniverseScannerAgent(BaseAgent):
             "chain_mapped": f"{sum(1 for c in candidates if c.chain_id)}/{len(candidates)}",
             "top10": [(c.ticker, c.rank_score) for c in candidates[:10]],
         }
+        if self.include_entry_setups:
+            context["scan_stats"]["entry_setup_supplement"] = {
+                "checked": checked, "added": len(candidates) - baseline_selected,
+                "baseline_selected": baseline_selected, "unavailable": unavailable,
+            }
         context["watchlist"] = candidates
         self.log.info("扫描完成: 池 %d → 通过过滤 %d → 候选 %d；Top10=%s",
                       len(self.universe), len(passed), len(candidates),
