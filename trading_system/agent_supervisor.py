@@ -578,6 +578,7 @@ def engine(run: Path) -> int:
         policy_args["search_source_names"] = tuple(policy_args["search_source_names"])
         execution = ExecutionContext(
             run_id=run.name, run_date=date.fromisoformat(admission["clock"]["run_date"]),
+            admitted_at=datetime.fromisoformat(admission["clock"]["admitted_at_utc"]),
             paths=paths, policy=ExecutionPolicy(**policy_args),
             store=EvidenceStore(run, run.name),
         )

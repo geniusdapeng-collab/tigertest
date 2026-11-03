@@ -376,12 +376,14 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
         markdown_text = render_markdown(result) + "\n" + _journal_section(stats)
         stage.output(write_text(md_path, markdown_text))
 
+    frozen_benchmark = execution.signal_benchmark_chart
+    chart_symbols = ["SPY"] if frozen_benchmark is not None else ["QQQ", "SPY"]
     with execution.step("report.html", {"result": result, "journal_stats": stats,
                                         "journal_entries": j.records, "sim_state": sim.state,
-                                        "sim_stats": sim_stats, "benchmarks": ["QQQ", "SPY"]}) as stage:
+                                        "sim_stats": sim_stats, "benchmarks": chart_symbols}) as stage:
         from trading_system.report_html import render_html
-        benchmarks = {}
-        for symbol in ("QQQ", "SPY"):
+        benchmarks = {"SPY": frozen_benchmark} if frozen_benchmark is not None else {}
+        for symbol in chart_symbols if frozen_benchmark is None else ():
             try:
                 frame = _single_with_fallback(settle_provider, "ohlcv", symbol, days=400)
                 if frame is not None and len(frame):

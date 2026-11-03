@@ -23,7 +23,8 @@ from .data_models import PipelineResult
 from .redline import STEP_REGISTRY
 from .report import (
     _accounting_note, _execution_blocked, _freshness_note, _market_currency,
-    _market_name, _universe_note, model_instruction_fields, model_instructions, model_source_html,
+    _market_name, _universe_note, company_evidence_note,
+    model_instruction_fields, model_instructions, model_source_html,
 )
 
 try:  # AI 生成美术资源（老虎全球资产管理头图 / 产业链主题产品图，内嵌 base64，零外链）
@@ -2561,9 +2562,12 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
         ss0 = raw.get("scan_stats", {})
         P.append(f"<span class='tag'>池 {ss0.get('universe_size', '?')} → "
                  f"精评 {ss0.get('selected', '?')}</span>")
-    P.append(f"<div style='margin-top:8px;font-size:14.5px'>{_esc(r.market_view)}</div>"
-             f"</div>"
-             f"<div style='flex:0 0 auto;opacity:0.95'>{_pulse_svg()}</div>")
+    instructions = model_instructions(raw)
+    company_note = company_evidence_note(raw) if instructions is not None else ""
+    P.append(f"<div style='margin-top:8px;font-size:14.5px'>{_esc(r.market_view)}</div>")
+    if company_note:
+        P.append(f"<p class='sub'>{_esc(company_note)}</p>")
+    P.append(f"</div><div style='flex:0 0 auto;opacity:0.95'>{_pulse_svg()}</div>")
     # —— 数据源公示：配置主源 + 本轮实际拉取血缘，真实可审计 ——
     prov_zh = _PROVIDER_ZH.get(r.provider, _esc(r.provider))
     lineage0 = raw.get("source_lineage", [])
@@ -2617,7 +2621,6 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
 
     # ---- 今日决策（基金经理视角：放行谁、为什么、怎么进怎么出）----
     P.append("<h2>今日决策</h2>")
-    instructions = model_instructions(raw)
     if instructions is not None:
         P.append(_model_instruction_cards(instructions))
     else:

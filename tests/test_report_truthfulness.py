@@ -483,3 +483,43 @@ def test_required_model_with_no_single_stock_instructions_still_reports_the_fina
     for report in (render_markdown(r), render_html(r)):
         assert "本轮没有新增单票指令" in report
         assert r.market_view in report
+
+
+@pytest.mark.parametrize(("candidates", "expected"), [
+    ({}, ["本轮没有标的通过数值风控，未启动按标的检索"]),
+    ({"AAPL": {"status": "filing_verified", "source_ids": ["ds_1"]}},
+     ["1 只标的通过数值风控，1 只取得合格的 SEC 公司文件"]),
+    ({"AAA": {"status": "filing_verified", "source_ids": ["ds_1"]},
+      "BBB": {"status": "no_results", "source_ids": []},
+      "CCC": {"status": "no_eligible_filing", "source_ids": []},
+      "DDD": {"status": "search_unavailable", "source_ids": []}},
+     ["4 只标的通过数值风控，1 只取得合格的 SEC 公司文件",
+      "检索零命中 1 只", "未取得合格文件 1 只", "检索不可用 1 只", "本轮仅可观察"]),
+    ({"AAA": {"status": ["<img src=x onerror=alert(1)>"]}},
+     ["公司证据检查记录不完整"]),
+])
+def test_required_model_reports_numeric_and_company_evidence_outcomes(candidates, expected):
+    from trading_system.llm.company_evidence import COMPANY_EVIDENCE_CONTRACT
+
+    r = _result(picks=False)
+    r.action = "WAIT"
+    r.raw.update(
+        model={"required": True, "all_required_completed": True, "model": "deepseek-flash",
+               "call_count": 5, "required_stages": [], "search_count": 14},
+        execution_decisions=[],
+        debate={"company_evidence": {"contract": COMPANY_EVIDENCE_CONTRACT, "candidates": candidates}},
+    )
+    before = copy.deepcopy(asdict(r))
+    markdown = render_markdown(r)
+    page = render_html(r)
+    for report in (markdown, page):
+        visible = _text(report)
+        assert all(fragment in visible for fragment in expected)
+        assert "<img src=x onerror=alert(1)>" not in report
+    assert "无达标标的，等待" not in markdown
+    assert asdict(r) == before
+
+    # Older reports have no SEC candidate outcome contract.
+    r.raw["debate"].pop("company_evidence")
+    assert "公司证据检查" not in render_markdown(r)
+    assert "公司证据检查" not in render_html(r)

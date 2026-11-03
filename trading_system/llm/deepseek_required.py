@@ -810,7 +810,9 @@ class DeepSeekRequiredClient:
                     continue
                 title = item.get("title", "")
                 title = self._source_title(title) if isinstance(title, str) else None
-                content = item.get("content") or item.get("summary") or item.get("snippet")
+                content = item.get("content")
+                if stage != "decision.debate":
+                    content = content or item.get("summary") or item.get("snippet")
                 if (not title or len(title) > 500
                         or not isinstance(content, str) or not content.strip()):
                     continue
