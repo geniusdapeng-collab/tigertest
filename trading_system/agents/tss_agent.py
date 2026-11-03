@@ -35,6 +35,7 @@ from .chain_cycle_agent import chain_bonus
 class TSSAgent(BaseAgent):
     name = "TSS-Agent"
     layer = 3
+    MIN_HISTORY = 130
 
     def execute(self, context: dict) -> list[StockCandidate]:
         stock_data: dict[str, pd.DataFrame] = context["market_data"]["stock_ohlcv"]
@@ -46,7 +47,7 @@ class TSSAgent(BaseAgent):
 
         for c in candidates:
             df = stock_data.get(c.ticker)
-            if df is None or len(df) < 130:
+            if df is None or len(df) < self.MIN_HISTORY:
                 continue
             if context.get("options_store") is not None:
                 self._score(c, df, options_store=context["options_store"])
@@ -132,6 +133,14 @@ class TSSAgent(BaseAgent):
         if adv_usd >= 50_000_000: return 0.9
         if adv_usd >= 20_000_000: return 0.8
         return 0.5
+
+    @classmethod
+    def entry_template_for(cls, df: pd.DataFrame) -> str | None:
+        """Check the TSS entry gate from OHLCV, or report unavailable features."""
+        complete = df.dropna()
+        if len(df) < cls.MIN_HISTORY or complete.empty:
+            return None
+        return cls._detect_template(extract_structure_features(complete), df)
 
     @staticmethod
     def _detect_template(f: dict, df: pd.DataFrame) -> str:

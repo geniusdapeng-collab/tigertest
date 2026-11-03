@@ -120,6 +120,10 @@ def test_all39_stages_require_model_proof_and_model_plan(tmp_path, monkeypatch):
     assert proof["search_count"] == 14 and proof["call_count"] == 5
     assert result["action"] == "WAIT" and result["picks"] == []
     assert result["raw"]["activity_profile"] is None
+    scan = result["raw"]["scan_stats"]
+    coverage = scan["entry_setup_supplement"]
+    assert coverage["checked"] == scan["passed"] - coverage["baseline_selected"]
+    assert scan["selected"] == coverage["baseline_selected"] + coverage["added"]
     assert {stage for stage, path in attempts if path == "/chat/completions"} == set(REQUIRED_MODEL_STAGES)
     assert denied == []
 
