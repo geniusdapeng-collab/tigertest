@@ -91,14 +91,28 @@ def plan_request(request_without_max_tokens: dict[str, Any]) -> tuple[dict[str, 
     if "max_tokens" in request_without_max_tokens:
         raise TokenBudgetError("CALLER_OUTPUT_CAP_FORBIDDEN")
     candidate = MAX_OUTPUT_TOKENS
-    request: dict[str, Any] = {}
-    input_tokens = 0
+    visited: set[int] = set()
+    feasible: dict[int, tuple[dict[str, Any], int, int]] = {}
     for _ in range(16):
+        if candidate in visited:
+            # The numeric output field itself is present in the counted JSON.
+            # At a digit-token boundary (e.g. 999 -> 1000), increasing by one
+            # can add an input token. Use the largest proven feasible wire in
+            # that cycle instead of rejecting a request that actually fits.
+            if feasible:
+                return feasible[max(feasible)]
+            break
+        visited.add(candidate)
         request = {**request_without_max_tokens, "max_tokens": candidate}
         input_tokens = count_json_tokens(request)
         remaining = CONTEXT_TOKENS - input_tokens
         if remaining < 1:
-            raise TokenBudgetError("INPUT_CONTEXT_EXCEEDED")
+            if candidate == 1:
+                raise TokenBudgetError("INPUT_CONTEXT_EXCEEDED")
+            candidate = 1  # A shorter wire field may leave one valid output token.
+            continue
+        if candidate <= remaining:
+            feasible[candidate] = (request, input_tokens, candidate)
         ceiling = min(MAX_OUTPUT_TOKENS, remaining)
         if ceiling == candidate:
             return request, input_tokens, ceiling

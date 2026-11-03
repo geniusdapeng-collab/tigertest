@@ -34,6 +34,28 @@ def test_budget_shrinks_to_exact_remaining_window(monkeypatch):
     assert input_tokens + ceiling <= 512
 
 
+def test_legal_window_does_not_fail_when_serialized_limit_changes_token_width(monkeypatch):
+    core = _request()
+    short = budget.count_json_tokens({**core, "max_tokens": 999})
+    long = budget.count_json_tokens({**core, "max_tokens": 1000})
+    assert long == short + 1
+    monkeypatch.setattr(budget, "CONTEXT_TOKENS", short + 1000)
+
+    wire, actual_input, output = budget.plan_request(core)
+    assert wire["max_tokens"] == output == 999
+    assert actual_input == short and actual_input + output <= budget.CONTEXT_TOKENS
+    assert long + 1000 > budget.CONTEXT_TOKENS
+
+
+def test_shorter_output_field_can_leave_one_legal_output_token(monkeypatch):
+    core = _request()
+    short = budget.count_json_tokens({**core, "max_tokens": 1})
+    assert budget.count_json_tokens({**core, "max_tokens": budget.MAX_OUTPUT_TOKENS}) == short + 1
+    monkeypatch.setattr(budget, "CONTEXT_TOKENS", short + 1)
+    wire, input_tokens, output = budget.plan_request(core)
+    assert (wire["max_tokens"], input_tokens, output) == (1, short, 1)
+
+
 def test_oversized_input_and_caller_caps_fail_closed(monkeypatch):
     monkeypatch.setattr(budget, "CONTEXT_TOKENS", 64)
     monkeypatch.setattr(budget, "MAX_OUTPUT_TOKENS", 32)
