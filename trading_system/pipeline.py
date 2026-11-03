@@ -535,8 +535,9 @@ def run_pipeline(
         stage.output({"documents": raw_docs, "topics": all_topics,
                       "batches": batches, "cleanup": search_cleanup})
 
-    with tracer.step("clean.rule_base", {"documents": raw_docs}) as stage:
-        base_docs = rule_base_clean(raw_docs)
+    with tracer.step("clean.rule_base", {"documents": raw_docs,
+                     **({"source_content_contract": semantic.SOURCE_CONTENT_CONTRACT} if required else {})}) as stage:
+        base_docs = rule_base_clean(raw_docs, preserve_source=required)
         logger.info("clean.rule_base: %d→%d（去重/格式校验）", len(raw_docs), len(base_docs))
 
         stage.output({"documents": base_docs})

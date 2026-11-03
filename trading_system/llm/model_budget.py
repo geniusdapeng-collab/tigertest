@@ -68,6 +68,22 @@ def count_json_tokens(value: object) -> int:
         raise TokenBudgetError("TOKENIZER_ENCODE_FAILED") from None
 
 
+def chat_request_core(*, system: str, user: str, schema: dict, schema_hint: dict,
+                      thinking_mode: str, effort: str | None, temperature: float) -> dict:
+    """Build the fixed Tiger text-only wire request before planning its window."""
+    request = {"model": MODEL_ID, "messages": [
+        {"role": "system", "content": system + "\nReturn exactly one JSON object. JSON only."},
+        {"role": "user", "content": user + "\nJSON schema:\n" + canonical_json(schema)
+         + "\nJSON field guidance:\n" + canonical_json(schema_hint)}],
+        "stream": False, "response_format": {"type": "json_object"},
+        "thinking": {"type": thinking_mode}}
+    if thinking_mode == "enabled":
+        request["reasoning_effort"] = effort
+    else:
+        request["temperature"] = temperature
+    return request
+
+
 def plan_request(request_without_max_tokens: dict[str, Any]) -> tuple[dict[str, Any], int, int]:
     """Return the request, exact input-token count, and legal output ceiling."""
     if not isinstance(request_without_max_tokens, dict):

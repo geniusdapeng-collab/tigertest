@@ -44,9 +44,15 @@ REQUIRED_ACCOUNT_FILES = frozenset({
 })
 DEPENDENCIES = ("pandas", "numpy", "yfinance", "requests", "PyYAML", "tokenizers")
 SCENE_POLICY_RELATIVE = "governance/bundles/trading/model-policy.yml"
+SOURCE_CONTENT_CONTRACT = "native-complete/v1"
+LEGACY_SOURCE_CONTENT_CONTRACT = "legacy-excerpts/v1"
+# The last deployed contract used 4,000/1,600-character excerpts. Recognize it
+# only from its already frozen source bytes, not a missing marker in new runs.
+LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
 
 
-def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None) -> dict:
+def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None,
+                    source_content_contract: str = SOURCE_CONTENT_CONTRACT) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     required = profile == REQUIRED_PROFILE
@@ -101,6 +107,10 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "search_documentation_url": "https://api-docs.deepseek.com/guides/search/",
             "model_mapping_observed_date": "2026-10-26",
         }
+        if source_content_contract == SOURCE_CONTENT_CONTRACT:
+            value["model_contract"]["source_content_contract"] = source_content_contract
+        elif source_content_contract != LEGACY_SOURCE_CONTENT_CONTRACT:
+            raise EvidenceInvalid("RESULT_INVALID", "Unknown source content contract")
         value["limitations"][1] = "All five semantic stages require actual DeepSeek Flash calls; failure stops publication."
         value["limitations"] += [
             "deepseek-flash is a provider alias observed as V4.1-Flash-1017, not an immutable version ID.",
@@ -484,7 +494,12 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     source = verify_source(run)
     if admission.get("source_sha256") != digest(read_bytes(run, "source-manifest.json")):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission source identity differs")
-    expected_policy = policy_manifest(request["profile"],
+    required_source = next((ref for ref in source["files"]
+                            if ref["path"] == "trading_system/llm/required.py"), None)
+    source_content_contract = (LEGACY_SOURCE_CONTENT_CONTRACT if required_source
+                               and required_source["sha256"] == LEGACY_REQUIRED_SOURCE_SHA256
+                               else SOURCE_CONTENT_CONTRACT)
+    expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
@@ -666,7 +681,9 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
     }
     if profile == REQUIRED_PROFILE:
         from .llm.required_proof import verify_required_model
-        summary["model"] = verify_required_model(run, result, admission, scene_policy_path=scene_policy_path)
+        model_contract = read_json(run, "policy.json")["model_contract"]
+        summary["model"] = verify_required_model(run, result, admission, scene_policy_path=scene_policy_path,
+            source_content_contract=model_contract.get("source_content_contract", LEGACY_SOURCE_CONTENT_CONTRACT))
         summary["action_summary"] = raw["action_summary"]
         summary["execution_decisions"] = raw["execution_decisions"]
         summary["disclosures"].update(model_mode="enabled", model_required=True)

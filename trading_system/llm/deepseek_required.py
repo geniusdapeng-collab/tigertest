@@ -27,10 +27,12 @@ from ..redline.model_diagnostics import RequiredModelUnavailable, validate_model
 from .model_budget import (
     CONTEXT_TOKENS,
     MAX_OUTPUT_TOKENS,
+    MODEL_ID as MODEL,
     POLICY_VERSION,
     REGISTRY_VERSION,
     TOKENIZER_SHA256,
     TokenBudgetError,
+    chat_request_core,
     plan_request,
     tokenizer_receipt,
 )
@@ -42,14 +44,16 @@ from .scene_policy import (
 )
 
 BASE_URL = "https://api.deepseek.com"
-MODEL = "deepseek-flash"
 RELEASE = "DeepSeek-V4.1-Flash-1017"
 SEARCH_MODE = "provider_native_search"
 THINKING_MODE = "scene-policy"
-MAX_RESPONSE_BYTES = 1024 * 1024
+SEARCH_FETCH_MAX_BYTES = 1024 * 1024
+CHAT_RESPONSE_MAX_BYTES = 64 * 1024 * 1024  # Transport memory guard, never a model token cap.
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 60.0
 RESPONSE_DEADLINE = 180.0
+CHAT_READ_TIMEOUT = 180.0
+CHAT_RESPONSE_DEADLINE = 480.0
 _URL = re.compile(r"https?://[^\s<>\"'`\[\]{}]+", re.IGNORECASE)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _CREDENTIAL = re.compile(
@@ -407,6 +411,40 @@ def _json_loads(value: bytes | str) -> object:
         _fail("INVALID_RESPONSE_JSON")
 
 
+def sanitize_model_text(value: str, secret: str | None = None) -> str:
+    def replace_url(match):
+        raw = match.group(0)
+        clean = raw.rstrip(".,;:!?)")
+        suffix = raw[len(clean):]
+        return (sanitize_url(clean, secret=secret) or "[REDACTED_URL]") + suffix
+
+    value = _URL.sub(replace_url, value)
+    if secret:
+        value = value.replace(secret, "[REDACTED_SECRET]")
+    value = _JWT.sub("[REDACTED_TOKEN]", value)
+    return _CREDENTIAL.sub(lambda m: m.group(1) + "=[REDACTED_SECRET]", value)
+
+
+def sanitize_model_value(value: object, secret: str | None = None, depth: int = 0) -> object:
+    if depth > 64:
+        _fail("RESPONSE_DEPTH_LIMIT")
+    if isinstance(value, str):
+        return sanitize_model_text(value, secret)
+    if isinstance(value, list):
+        return [sanitize_model_value(v, secret, depth + 1) for v in value]
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                _fail("INVALID_JSON_OBJECT_KEY")
+            key = sanitize_model_text(key, secret)
+            if key in out:
+                _fail("INVALID_JSON_OBJECT_KEY")
+            out[key] = sanitize_model_value(item, secret, depth + 1)
+        return out
+    return value
+
+
 class DeepSeekRequiredClient:
     required = True
 
@@ -437,6 +475,7 @@ class DeepSeekRequiredClient:
         self.fetch_receipts: list[dict] = []
         self._remote_requests = 0
         self._chat_schema_retry_used = False
+        self._observed_response_ids: set[str] = set()
 
     def describe(self) -> dict:
         return {"mode": "required", "enabled": True, "provider": "deepseek",
@@ -464,43 +503,31 @@ class DeepSeekRequiredClient:
         return name
 
     def _text(self, value: str) -> str:
-        def replace_url(match):
-            raw = match.group(0)
-            clean = raw.rstrip(".,;:!?)")
-            suffix = raw[len(clean):]
-            return (sanitize_url(clean, secret=self._api_key) or "[REDACTED_URL]") + suffix
-        value = _URL.sub(replace_url, value)
-        value = value.replace(self._api_key, "[REDACTED_SECRET]")
-        value = _JWT.sub("[REDACTED_TOKEN]", value)
-        return _CREDENTIAL.sub(lambda m: m.group(1) + "=[REDACTED_SECRET]", value)
+        return sanitize_model_text(value, self._api_key)
 
     def _clean(self, value: object, depth: int = 0) -> object:
-        if depth > 64:
-            _fail("RESPONSE_DEPTH_LIMIT")
-        if isinstance(value, str):
-            return self._text(value)
-        if isinstance(value, list):
-            return [self._clean(v, depth + 1) for v in value]
-        if isinstance(value, dict):
-            if any(not isinstance(k, str) for k in value):
-                _fail("INVALID_JSON_OBJECT_KEY")
-            return {self._text(k): self._clean(v, depth + 1) for k, v in value.items()}
-        return value
+        return sanitize_model_value(value, self._api_key, depth)
 
     def _post_json(self, path: str, request: dict) -> tuple[dict, str]:
         if path not in ("/chat/completions", "/v1/tools/search", "/v1/tools/fetch"):
             _fail("ENDPOINT_NOT_ALLOWED")
-        if len(_canonical(request)) > MAX_RESPONSE_BYTES:
+        chat = path == "/chat/completions"
+        wire = _canonical(request)
+        # Chat admission is governed by the pinned tokenizer and model window.
+        # The Search/Fetch byte envelope is a separate endpoint constraint.
+        if not chat and len(wire) > SEARCH_FETCH_MAX_BYTES:
             _fail("REQUEST_TOO_LARGE")
+        response_limit = CHAT_RESPONSE_MAX_BYTES if chat else SEARCH_FETCH_MAX_BYTES
         response = None
-        deadline = time.monotonic() + RESPONSE_DEADLINE
+        deadline = time.monotonic() + (CHAT_RESPONSE_DEADLINE if chat else RESPONSE_DEADLINE)
         self._remote_requests += 1
         try:
             response = requests.post(
-                BASE_URL + path, data=_canonical(request),
+                BASE_URL + path, data=wire,
                 headers={"Content-Type": "application/json", "Accept": "application/json",
                          "Accept-Encoding": "identity", "Authorization": "Bearer " + self._api_key},
-                timeout=(CONNECT_TIMEOUT, READ_TIMEOUT), allow_redirects=False, verify=True, stream=True)
+                timeout=(CONNECT_TIMEOUT, CHAT_READ_TIMEOUT if chat else READ_TIMEOUT),
+                allow_redirects=False, verify=True, stream=True)
             status = response.status_code
             if type(status) is not int or status != 200:
                 _fail(f"HTTP_{status}" if type(status) is int and 100 <= status <= 599 else "HTTP_INVALID")
@@ -510,7 +537,7 @@ class DeepSeekRequiredClient:
             if response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
                 _fail("UNEXPECTED_CONTENT_TYPE")
             declared = response.headers.get("Content-Length")
-            if declared is not None and (not declared.isdecimal() or int(declared) > MAX_RESPONSE_BYTES):
+            if declared is not None and (not declared.isdecimal() or int(declared) > response_limit):
                 _fail("RESPONSE_TOO_LARGE")
             chunks: list[bytes] = []
             size = 0
@@ -525,7 +552,7 @@ class DeepSeekRequiredClient:
                 if not isinstance(chunk, bytes):
                     _fail("INVALID_RESPONSE_BYTES")
                 size += len(chunk)
-                if size > MAX_RESPONSE_BYTES:
+                if size > response_limit:
                     _fail("RESPONSE_TOO_LARGE")
                 chunks.append(chunk)
             raw = b"".join(chunks)
@@ -586,8 +613,9 @@ class DeepSeekRequiredClient:
                     result[parent] = {child: n}
         return result
 
-    def complete_json(self, *, system: str, user: str, schema_hint: dict,
-                      max_tokens: int | None = None, temperature: float = 0.2, schema: dict) -> dict:
+    def plan_chat(self, *, system: str, user: str, schema_hint: dict, schema: dict,
+                  temperature: float = 0.2, public_payload: dict | None = None) -> tuple[dict, int, int]:
+        """Plan the exact sanitized wire without transport or acceptance-budget side effects."""
         stage = self._stage()
         if stage not in self._scene_policies:
             _fail("UNSUPPORTED_MODEL_STAGE")
@@ -596,28 +624,33 @@ class DeepSeekRequiredClient:
             _fail("UNSAFE_OUTPUT_SCHEMA")
         if (not isinstance(system, str) or not system.strip() or not isinstance(user, str) or not user.strip()
                 or not isinstance(schema_hint, dict)
-                or max_tokens is not None and type(max_tokens) is not int
+                or (public_payload is not None and not isinstance(public_payload, dict))
                 or not _finite_number(temperature)
                 or not 0 <= temperature <= 2):
             _fail("INVALID_CHAT_REQUEST")
         thinking = self._scene_policies[stage]["thinking"]
-        thinking_mode = thinking["type"]
-        effort = thinking.get("effort")
-        request_core = {"model": MODEL, "messages": [
-            {"role": "system", "content": self._text(system) + "\nReturn exactly one JSON object. JSON only."},
-            {"role": "user", "content": self._text(user) + "\nJSON schema:\n" +
-             _canonical(schema).decode() + "\nJSON field guidance:\n" +
-             _canonical(self._clean(schema_hint)).decode()}],
-            "stream": False, "response_format": {"type": "json_object"},
-            "thinking": {"type": thinking_mode}}
-        if thinking_mode == "enabled":
-            request_core["reasoning_effort"] = effort
-        else:
-            request_core["temperature"] = temperature
+        user_text = self._text(user)
+        if public_payload is not None:
+            # Redact data values before JSON escaping: escaped delimiters must
+            # never become part of a URL/credential match in the whole prompt.
+            user_text += "\n" + _canonical(self._clean(public_payload)).decode("utf-8")
+        return plan_request(chat_request_core(system=self._text(system), user=user_text,
+            schema=schema, schema_hint=self._clean(schema_hint), thinking_mode=thinking["type"],
+            effort=thinking.get("effort"), temperature=temperature))
+
+    def complete_json(self, *, system: str, user: str, schema_hint: dict,
+                      max_tokens: int | None = None, temperature: float = 0.2, schema: dict,
+                      public_payload: dict | None = None) -> dict:
+        if max_tokens is not None:
+            _fail("CALLER_OUTPUT_CAP_FORBIDDEN")
+        stage = self._stage()
         try:
-            request, input_token_estimate, output_ceiling = plan_request(request_core)
+            request, input_token_estimate, output_ceiling = self.plan_chat(system=system, user=user,
+                schema_hint=schema_hint, schema=schema, temperature=temperature, public_payload=public_payload)
         except TokenBudgetError as error:
             _fail(error.code)
+        thinking_mode = request["thinking"]["type"]
+        effort = request.get("reasoning_effort")
         call_id = uuid.uuid4().hex
         inputs = {"schema": "tiger.deepseek-request.v1", "call_id": call_id, "stage": stage,
                   "provider": "deepseek", "method": "POST", "endpoint": BASE_URL + "/chat/completions",
@@ -628,20 +661,27 @@ class DeepSeekRequiredClient:
                   "output_ceiling": output_ceiling, "policy_version": POLICY_VERSION,
                   "registry_version": REGISTRY_VERSION, "tokenizer_sha256": TOKENIZER_SHA256}
 
+        observed_attempt = None
+
         def invoke_once():
+            nonlocal observed_attempt
+            observed_attempt = None
             response, body_hash = self._post_json("/chat/completions", request)
             if response.get("model") != MODEL:
                 _fail("RESPONSE_MODEL_MISMATCH")
             if response.get("object") != "chat.completion":
                 _fail("RESPONSE_OBJECT_MISMATCH")
             response_id = self._identifier(response.get("id"))
-            if self._api_key in response_id or any(r["response_id"] == response_id for r in self.receipts):
+            if self._api_key in response_id or response_id in self._observed_response_ids:
                 _fail("RESPONSE_IDENTITY_REUSED_OR_UNSAFE")
+            self._observed_response_ids.add(response_id)
             choices = response.get("choices")
             if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
                 _fail("INVALID_CHOICES")
             choice = choices[0]
             message = choice.get("message")
+            if choice.get("finish_reason") == "length":
+                _fail("MODEL_OUTPUT_TRUNCATED")
             if (type(choice.get("index")) is not int or choice["index"] != 0
                     or choice.get("finish_reason") != "stop" or not isinstance(message, dict)
                     or message.get("role") != "assistant" or message.get("tool_calls")
@@ -652,6 +692,13 @@ class DeepSeekRequiredClient:
                 _fail("INVALID_REASONING_CONTENT")
             if thinking_mode == "disabled" and (reasoning_content or "").strip():
                 _fail("NON_THINKING_REASONING_CONTENT")
+            usage = self._usage(response.get("usage"), thinking_mode)
+            if (usage["completion_tokens"] > output_ceiling
+                    or usage["total_tokens"] > CONTEXT_TOKENS):
+                _fail("MODEL_USAGE_EXCEEDS_BUDGET")
+            observed_attempt = {"response_id_sha256": hashlib.sha256(response_id.encode()).hexdigest(),
+                "transport_response_sha256": body_hash, "request_sha256": inputs["request_sha256"],
+                "finish_reason": "stop", "model": MODEL, "usage": usage}
             text = message.get("content")
             if not isinstance(text, str) or not text.strip():
                 _fail("EMPTY_MODEL_OUTPUT")
@@ -665,10 +712,6 @@ class DeepSeekRequiredClient:
                 fingerprint = self._identifier(fingerprint)
                 if self._api_key in fingerprint:
                     _fail("UNSAFE_RESPONSE_FINGERPRINT")
-            usage = self._usage(response.get("usage"), thinking_mode)
-            if (usage["completion_tokens"] > output_ceiling
-                    or usage["total_tokens"] > CONTEXT_TOKENS):
-                _fail("MODEL_USAGE_EXCEEDS_BUDGET")
             safe_response = {
                 "id": response_id, "model": MODEL, "system_fingerprint": fingerprint,
                 "choices": [{"index": 0, "finish_reason": "stop", "message": {
@@ -693,10 +736,11 @@ class DeepSeekRequiredClient:
             except RequiredModelUnavailable as error:
                 diagnostic = error.diagnostic
                 if (self._chat_schema_retry_used or diagnostic["code"] != "OUTPUT_SCHEMA_MISMATCH"
-                        or "schema_keyword" not in diagnostic):
+                        or "schema_keyword" not in diagnostic or observed_attempt is None):
                     raise
                 self._chat_schema_retry_used = True
-                return {**invoke_once(), "retry_diagnostics": [diagnostic]}
+                first_attempt = observed_attempt
+                return {**invoke_once(), "retry_diagnostics": [diagnostic], "retry_attempt": first_attempt}
 
         proof = self.execution.call_io("model.deepseek.chat", inputs, invoke)
         self.receipts.append({k: v for k, v in proof.items() if k not in ("schema", "parsed", "response")})
