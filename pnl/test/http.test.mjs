@@ -84,6 +84,16 @@ test('publisher performs actual post and receipt read-back and forbids remote HT
   await assert.rejects(publishRecord({ baseUrl: 'https://example.com', token: TEST_TOKEN, record: fixture(), fetcher: mismatch }), /Read-back/);
 });
 
+test('publisher rejects incomplete website receipts even when POST and GET agree', async () => {
+  const record = fixture();
+  const fetcher = async () => Response.json({ receipt: {
+    idempotencyKey: record.idempotencyKey, payloadHash: digest(record),
+  } });
+  await assert.rejects(publishRecord({
+    baseUrl: 'https://example.com', token: TEST_TOKEN, record, fetcher,
+  }), { code: 'PUBLICATION_RECEIPT_INVALID' });
+});
+
 test('startup rejects weak authentication and repository-local data paths', async () => {
   await assert.rejects(createPnlServer({ dataDir: '/tmp/unused', token: 'short' }), /32-512/);
   await assert.rejects(createPnlServer({ dataDir: new URL('../private-data', import.meta.url).pathname, token: TEST_TOKEN }), /outside the source/);

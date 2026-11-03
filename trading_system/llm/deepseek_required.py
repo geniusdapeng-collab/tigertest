@@ -23,7 +23,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 import requests
 
 from ..redline import LLMUnavailable
-from ..redline.model_diagnostics import RequiredModelUnavailable
+from ..redline.model_diagnostics import RequiredModelUnavailable, validate_model_diagnostic
 from .model_budget import (
     CONTEXT_TOKENS,
     MAX_OUTPUT_TOKENS,
@@ -76,6 +76,13 @@ def _fail(code: str, *, schema_path: str | None = None,
         raise RequiredModelUnavailable("HTTP_ERROR", http_status=int(code[5:])) from None
     raise RequiredModelUnavailable(code, schema_path=schema_path,
                                    schema_keyword=schema_keyword) from None
+
+
+def retryable_search_failure(diagnostic: dict) -> bool:
+    """DeepSeek's documented retryable HTTP responses for native Search."""
+    diagnostic = validate_model_diagnostic(diagnostic)
+    status = diagnostic.get("http_status")
+    return status is not None and (status in (408, 429) or 500 <= status <= 599)
 
 
 def _canonical(value: object) -> bytes:
@@ -429,6 +436,7 @@ class DeepSeekRequiredClient:
         self.search_receipts: list[dict] = []
         self.fetch_receipts: list[dict] = []
         self._remote_requests = 0
+        self._chat_schema_retry_used = False
 
     def describe(self) -> dict:
         return {"mode": "required", "enabled": True, "provider": "deepseek",
@@ -620,7 +628,7 @@ class DeepSeekRequiredClient:
                   "output_ceiling": output_ceiling, "policy_version": POLICY_VERSION,
                   "registry_version": REGISTRY_VERSION, "tokenizer_sha256": TOKENIZER_SHA256}
 
-        def invoke():
+        def invoke_once():
             response, body_hash = self._post_json("/chat/completions", request)
             if response.get("model") != MODEL:
                 _fail("RESPONSE_MODEL_MISMATCH")
@@ -679,6 +687,17 @@ class DeepSeekRequiredClient:
                     "schema_sha256": inputs["schema_sha256"], "response": safe_response,
                     "system_fingerprint": fingerprint, "search_mode": SEARCH_MODE, "parsed": parsed}
 
+        def invoke():
+            try:
+                return invoke_once()
+            except RequiredModelUnavailable as error:
+                diagnostic = error.diagnostic
+                if (self._chat_schema_retry_used or diagnostic["code"] != "OUTPUT_SCHEMA_MISMATCH"
+                        or "schema_keyword" not in diagnostic):
+                    raise
+                self._chat_schema_retry_used = True
+                return {**invoke_once(), "retry_diagnostics": [diagnostic]}
+
         proof = self.execution.call_io("model.deepseek.chat", inputs, invoke)
         self.receipts.append({k: v for k, v in proof.items() if k not in ("schema", "parsed", "response")})
         return proof["parsed"]
@@ -726,7 +745,15 @@ class DeepSeekRequiredClient:
                   "query_sha256": hashlib.sha256(query.encode()).hexdigest(), "search_mode": SEARCH_MODE}
 
         def invoke():
-            response, body_hash = self._post_json("/v1/tools/search", request)
+            retry_diagnostics = []
+            try:
+                response, body_hash = self._post_json("/v1/tools/search", request)
+            except RequiredModelUnavailable as error:
+                if not retryable_search_failure(error.diagnostic):
+                    raise
+                retry_diagnostics.append(error.diagnostic)
+                time.sleep(1)
+                response, body_hash = self._post_json("/v1/tools/search", request)
             original = response.get("results")
             if not isinstance(original, list) or len(original) > count:
                 _fail("INVALID_SEARCH_RESPONSE")
@@ -745,12 +772,13 @@ class DeepSeekRequiredClient:
                     continue
                 results.append(self._document(url=url, title=title, content=content,
                                published=item.get("date"), source="deepseek_search"))
-            if not results:
+            if original and not results:
                 _fail("NO_USABLE_SEARCH_RESULTS")
             return {"schema": "tiger.deepseek-search.v1", "call_id": call_id, "stage": stage,
                     "provider": "deepseek", "method": "POST", "search_mode": SEARCH_MODE,
                     "query_sha256": inputs["query_sha256"], "request_sha256": inputs["request_sha256"],
                     "result_count": len(original), "usable_result_count": len(results),
+                    "retry_diagnostics": retry_diagnostics,
                     "response_sha256": _hash({"results": results}),
                     "transport_response_sha256": body_hash, "results": results}
 

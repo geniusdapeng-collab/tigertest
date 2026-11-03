@@ -23,7 +23,7 @@ from .data_models import PipelineResult
 from .redline import STEP_REGISTRY
 from .report import (
     _accounting_note, _execution_blocked, _freshness_note, _market_currency,
-    _market_name, _universe_note,
+    _market_name, _universe_note, model_instruction_fields, model_instructions, model_source_html,
 )
 
 try:  # AI 生成美术资源（老虎全球资产管理头图 / 产业链主题产品图，内嵌 base64，零外链）
@@ -57,6 +57,28 @@ def _action_style(action: str) -> tuple[str, str]:
         "WAIT": (YELLOW, "等待信号"),
         "AVOID": (RED, "回避开仓"),
     }.get(action, (MUTED, action))
+
+
+def _model_instruction_cards(instructions: list[dict]) -> str:
+    cards = ["<h2>模型最终判断与执行条件（纸面研究）</h2>"]
+    if not instructions:
+        cards.append("<p class='card'>本轮没有新增单票指令。</p>")
+    for item in instructions:
+        action = "纸面买入计划" if item["action"] == "buy" else "观察"
+        cards.append("<article class='card' style='margin-bottom:10px;overflow-wrap:anywhere'>"
+                     f"<h3>{_esc(item['symbol'])} · {action}</h3>"
+                     f"<p>{_esc(item['action_summary'])}</p><dl>")
+        for label, value in model_instruction_fields(item):
+            cards.append(f"<dt><b>{label}</b></dt><dd>{_esc(value)}</dd>")
+        cards.append("</dl>")
+        if item["sources"]:
+            cards.append("<details><summary>新闻来源</summary><ul>")
+            cards.extend(f"<li>{model_source_html(source)}</li>" for source in item["sources"])
+            cards.append("</ul></details>")
+        else:
+            cards.append("<p class='sub'>本条未引用新闻。</p>")
+        cards.append("</article>")
+    return "".join(cards)
 
 
 # ---------------------------------------------------------------- SVG 组件
@@ -2595,44 +2617,48 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
 
     # ---- 今日决策（基金经理视角：放行谁、为什么、怎么进怎么出）----
     P.append("<h2>今日决策</h2>")
-    # —— 今日作战三句话：天气 / 方向 / 刀口（大白话翻译层）——
-    cap = (mrs.position_cap if mrs and isinstance(mrs.position_cap, (tuple, list))
-           else (0.0, mrs.position_cap if mrs else 0.0))
-    if mrs:
-        if mrs.mrs_star >= 7.5:
-            w_line = f"天气不错。环境 {mrs.mrs_star}/10，系统给自己开了 {cap[1]:.0%} 弹药上限。"
-        elif mrs.mrs_star >= 6.0:
-            w_line = (f"能动手，但别上头。环境 {mrs.mrs_star}/10，"
-                      f"弹药上限 {cap[1]:.0%}——不是每一天都值得满仓。")
+    instructions = model_instructions(raw)
+    if instructions is not None:
+        P.append(_model_instruction_cards(instructions))
+    else:
+        # —— 今日作战三句话：天气 / 方向 / 刀口（大白话翻译层）——
+        cap = (mrs.position_cap if mrs and isinstance(mrs.position_cap, (tuple, list))
+               else (0.0, mrs.position_cap if mrs else 0.0))
+        if mrs:
+            if mrs.mrs_star >= 7.5:
+                w_line = f"天气不错。环境 {mrs.mrs_star}/10，系统给自己开了 {cap[1]:.0%} 弹药上限。"
+            elif mrs.mrs_star >= 6.0:
+                w_line = (f"能动手，但别上头。环境 {mrs.mrs_star}/10，"
+                          f"弹药上限 {cap[1]:.0%}——不是每一天都值得满仓。")
+            else:
+                w_line = f"今天收着来。环境 {mrs.mrs_star}/10 没过关，空仓也是一种仓位。"
         else:
-            w_line = f"今天收着来。环境 {mrs.mrs_star}/10 没过关，空仓也是一种仓位。"
-    else:
-        w_line = "环境数据缺席，按纪律收着来。"
-    main_secs = [s for s in r.sectors if s.in_main_pool]
-    hot_chains = [c for c in r.chains if c.hot]
-    d_parts = []
-    if main_secs:
-        d_parts.append("钱在往 " + "、".join(_ETF_ZH.get(s.etf, s.etf) for s in main_secs) + " 走")
-    if hot_chains:
-        d_parts.append("产业链里 " + "、".join(c.name for c in hot_chains[:2]) + " 最烫")
-    d_line = "；".join(d_parts) + "。" if d_parts else "今天没有明确主线，方向不明就不硬做。"
-    if r.picks:
-        k_line = ("刀口看清了，放出 "
-                  + "、".join(f"<b>{p.ticker}</b>" for p in r.picks)
-                  + f" 这 {len(r.picks)} 枪——每笔都写清认错线，跌破就走，不商量。")
-    elif accounting_blocked:
-        k_line = "本轮仅保留研究；USD 交易记账暂停，原有账本保持原样。"
-    else:
-        k_line = "今日无新放行标的；既有持仓继续按出场规则管理。"
-    P.append(f"<div class='card' style='border-color:#d4af3766;margin-bottom:12px'>"
-             f"<div class='eyebrow-l'>TODAY'S BATTLE PLAN · 今日作战三句话</div>"
-             f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:4px'>"
-             f"<div style='flex:1;min-width:min(220px,100%)'><b>① 天气</b>"
-             f"<div class='sub' style='margin-top:2px'>{w_line}</div></div>"
-             f"<div style='flex:1;min-width:min(220px,100%)'><b>② 方向</b>"
-             f"<div class='sub' style='margin-top:2px'>{d_line}</div></div>"
-             f"<div style='flex:1;min-width:min(220px,100%)'><b>③ 刀口</b>"
-             f"<div class='sub' style='margin-top:2px'>{k_line}</div></div></div></div>")
+            w_line = "环境数据缺席，按纪律收着来。"
+        main_secs = [s for s in r.sectors if s.in_main_pool]
+        hot_chains = [c for c in r.chains if c.hot]
+        d_parts = []
+        if main_secs:
+            d_parts.append("钱在往 " + "、".join(_ETF_ZH.get(s.etf, s.etf) for s in main_secs) + " 走")
+        if hot_chains:
+            d_parts.append("产业链里 " + "、".join(c.name for c in hot_chains[:2]) + " 最烫")
+        d_line = "；".join(d_parts) + "。" if d_parts else "今天没有明确主线，方向不明就不硬做。"
+        if r.picks:
+            k_line = ("刀口看清了，放出 "
+                      + "、".join(f"<b>{p.ticker}</b>" for p in r.picks)
+                      + f" 这 {len(r.picks)} 枪——每笔都写清认错线，跌破就走，不商量。")
+        elif accounting_blocked:
+            k_line = "本轮仅保留研究；USD 交易记账暂停，原有账本保持原样。"
+        else:
+            k_line = "今日无新放行标的；既有持仓继续按出场规则管理。"
+        P.append(f"<div class='card' style='border-color:#d4af3766;margin-bottom:12px'>"
+                 f"<div class='eyebrow-l'>TODAY'S BATTLE PLAN · 今日作战三句话</div>"
+                 f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:4px'>"
+                 f"<div style='flex:1;min-width:min(220px,100%)'><b>① 天气</b>"
+                 f"<div class='sub' style='margin-top:2px'>{w_line}</div></div>"
+                 f"<div style='flex:1;min-width:min(220px,100%)'><b>② 方向</b>"
+                 f"<div class='sub' style='margin-top:2px'>{d_line}</div></div>"
+                 f"<div style='flex:1;min-width:min(220px,100%)'><b>③ 刀口</b>"
+                 f"<div class='sub' style='margin-top:2px'>{k_line}</div></div></div></div>")
     if r.picks:
         bull = THEME_ART_B64.get("tech", "")
         bull_img = (f"<img src='data:image/jpeg;base64,{bull}' width='96' height='96' "
@@ -2662,7 +2688,7 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
         P.append(f"<div class='card'><b>今日无新放行标的</b><div class='sub' style='margin-top:6px'>"
                  f"{_esc(r.market_view)}；{ledger_note}</div></div>")
         # —— 开门条件（业务化，告诉投资者"等什么"）——
-        if mrs:
+        if instructions is None and mrs:
             weak = []
             dims = mrs.dimensions
             for key, cond_zh in (
@@ -2684,7 +2710,7 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
                     P.append(f"<div class='sub'>· {_esc(w_)}</div>")
                 P.append("</div>")
         # —— 预备观察名单（环境开门后的第一梯队）——
-        if r.watchlist:
+        if instructions is None and r.watchlist:
             watch_note = ("个股质量与原币价位仅供研究；币种执行边界解除前不生成交易指令。"
                           if accounting_blocked else
                           "个股质量已评估完毕，等待市场环境开门——开门后按此优先级复核入场：")

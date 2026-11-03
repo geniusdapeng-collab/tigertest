@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildResearch, invokeAgent, parseArgs, syncResearch, SyncError } from '../sync-research.mjs';
+import { publishRecord } from '../publish.mjs';
 import { canonical } from '../lib/schema.mjs';
 import { modelFixture, instructionFixture } from './model-fixture.mjs';
 
@@ -30,7 +31,15 @@ async function setup(t) {
   const env = { TIGER_AGENT_PYTHON: '/test/trusted/python', TIGER_AGENT_STATE_ROOT: stateRoot, TIGER_AGENT_PERMISSION: 'paper', TIGER_PNL_SYNC_STATE_DIR: join(path, 'sync'), TIGER_PNL_WRITE_TOKEN: TEST_TOKEN, TIGER_PNL_URL: 'https://example.com', LLM_BACKEND: 'api', LLM_BASE_URL: 'https://api.deepseek.com', LLM_MODEL: 'deepseek-flash', LLM_API_KEY: 'SYNC-UNIT-TEST-ONLY-MODEL-KEY' };
   const calls = []; const published = [];
   const invoke = async (operation, input) => { calls.push({ operation, input }); if (operation === 'doctor') return envelope(operation, { status: 'ready', data: { access_mode: 'paper' } }); if (operation === 'describe') return envelope(operation, { status: 'ready', data: { profile: { profile: input.profile, execution: { model_mode: 'enabled' }, model_contract: { provider: 'deepseek', model: 'deepseek-flash', release: 'DeepSeek-V4.1-Flash-1017', required: true, search_mode: 'provider_native_search' } }, access_mode: 'paper' } }); if (operation === 'run') return envelope(operation, { status: 'accepted' }); if (operation === 'status') return envelope(operation); if (operation === 'receipt') return receipt; if (operation === 'verify') return verification; throw new Error('Unexpected operation'); };
-  const publish = async options => { published.push(options); return { idempotencyKey: options.record.idempotencyKey, payloadHash: hash(canonical(options.record)), hash: 'c'.repeat(64), sequence: 1 }; };
+  const publish = async options => {
+    published.push(options);
+    const record = options.record;
+    const entry = { sequence: 1, acceptedAt: '2026-01-03T20:02:00.000Z',
+      previousHash: '0'.repeat(64), payloadHash: hash(canonical(record)), record };
+    const { record: _, ...receipt } = entry;
+    return { ...receipt, schemaVersion: 1, idempotencyKey: record.idempotencyKey, asOf: record.asOf,
+      hash: hash(canonical(entry)), replayed: false };
+  };
   const stateFile = join(env.TIGER_PNL_SYNC_STATE_DIR, `${PROFILE}-${DATE}.json`);
   return { path, env, originalRequest, raw, runDir, receipt, verification, calls, published, invoke, publish, stateFile };
 }
@@ -68,6 +77,20 @@ test('lost website response retries the persisted identical payload without reru
   assert.equal((await syncResearch({ env: f.env, date: DATE, profile: PROFILE }, { invoke: f.invoke, publish })).status, 'pending');
   assert.equal((await syncResearch({ env: f.env, date: DATE, profile: PROFILE }, { invoke: f.invoke, publish })).status, 'published_and_verified');
   assert.deepEqual(f.published[0].record, f.published[1].record); assert.equal(f.calls.filter(c => c.operation === 'run').length, 1); assert.equal(f.calls.filter(c => c.operation === 'verify').length, 1);
+});
+
+test('an HTML proxy rejection is reported instead of indefinitely retrying the unchanged payload', async t => {
+  const f = await setup(t);
+  const publish = options => publishRecord({
+    ...options, fetcher: async () => new Response('<html>Payload rejected</html>', { status: 413 }),
+  });
+  await assert.rejects(syncResearch({ env: f.env, date: DATE }, { invoke: f.invoke, publish }), {
+    code: 'PUBLICATION_REJECTED', message: /413/,
+  });
+  const state = JSON.parse(await readFile(f.stateFile, 'utf8'));
+  assert.equal(state.runId, RUN);
+  assert.equal(state.phase, 'verified');
+  assert.equal(state.websiteReceipt, null);
 });
 
 test('missing receipt/failed run/mismatched verification cannot publish and retain their run identity', async t => {
