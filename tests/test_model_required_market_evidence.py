@@ -190,6 +190,19 @@ def _decision_context():
 
 
 def _decision_client(action="watch", mode="own", captured=None):
+    def search(query, *, count, need_content):
+        assert '"AAA"' in query and count == 4 and need_content
+        body = (
+            "UNITED STATES\nSECURITIES AND EXCHANGE COMMISSION\n\nFORM 8-K\n"
+            "| Title of each class | Trading Symbol(s) | Name of each exchange on which registered |\n"
+            "| Class A Common Stock | AAA | New York Stock Exchange |\n"
+            "Fixture disclosure only."
+        )
+        return [{"id": "ds_fixture_company", "title": "Fixture issuer filing",
+                 "url": "https://www.sec.gov/Archives/edgar/data/123/000000012326000001/aaa-8k.htm",
+                 "published": "2026-10-23T20:45:00+00:00", "content": body,
+                 "content_hash": hashlib.sha256(body.encode()).hexdigest()}]
+
     execution = SimpleNamespace(run_date=date(2026, 10, 25),
                                 policy=SimpleNamespace(market_timezone="America/New_York"))
     def complete_json(**kwargs):
@@ -201,7 +214,7 @@ def _decision_client(action="watch", mode="own", captured=None):
         for symbol in market:
             own = market[symbol]
             other = next(item for candidate, item in market.items() if candidate != symbol)
-            refs = {"own": [own], "own_news": [own, "ds_fixture_article"], "none": [],
+            refs = {"own": [own], "own_news": [own, "ds_fixture_company"], "none": [],
                     "news_only": ["ds_fixture_article"], "foreign": [other],
                     "multiple": [own, other], "duplicate": [own, own],
                     "forged": ["md_" + symbol + "_20261023_" + "a" * 24]}[mode]
@@ -214,7 +227,7 @@ def _decision_client(action="watch", mode="own", captured=None):
                 "risk_note": "没有公司新闻确认，行情收盘参考不构成买入证据", "source_ids": refs})
         return {"action": "BUY" if action == "buy" else "WAIT",
                 "action_summary": "离线夹具不构成实际交易研究", "decisions": decisions}
-    return SimpleNamespace(execution=execution, complete_json=complete_json,
+    return SimpleNamespace(execution=execution, complete_json=complete_json, search=search,
                            plan_chat=lambda **kwargs: None)
 
 
@@ -234,7 +247,7 @@ def test_buy_requires_article_plus_own_snapshot_and_preserves_all_approved_numbe
     context, docs, pick = _decision_context()
     output = required.decision(_decision_client("buy", "own_news"), context, docs, 100000.0)
     row = output["execution_decisions"][0]
-    assert row["sources"][0]["id"] == docs[0].raw.doc_id
+    assert row["sources"][0]["id"] == "ds_fixture_company"
     assert row["market_evidence"] == market_snapshots(context["market_data"], ["AAA"], ASSESSMENT)
     assert (row["entry_price"], row["stop_price"], row["shares"], row["risk_usd"],
             row["target_weight"], row["time_stop_days"]) == (104.0, 99.0, 100, 500.0, .104, 5)

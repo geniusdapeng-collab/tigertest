@@ -27,6 +27,8 @@ from .cleaning.pipeline import llm_semantic_clean, rule_base_clean, unwrap_clean
 from .data_models import PipelineResult
 from .events import EventCalendar
 from .llm.client import DisabledLLMClient, default_client
+from .market_close import (close_chart, close_metadata, close_observation,
+                           macro_limits, requires_foreign_calendar)
 from .providers import get_provider
 from .providers.base import is_synthetic
 from .redline import ExecutionTracer, Passthrough
@@ -38,7 +40,7 @@ from .tech_chain.agents import (
     ChainRiskAgent, ChainSentimentAgent, CycleLinkageAgent, TechChainMonitorAgent,
 )
 from .tech_chain.fusion import TechChainFusionAgent, signals_to_bonus_map
-from .tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS
+from .tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
 from .universe import load_universe
 
 logger = logging.getLogger(__name__)
@@ -167,7 +169,7 @@ def _supports(provider, method: str) -> bool:
     return method in caps
 
 
-def _single_with_fallback(provider, method: str, *args, **kwargs):
+def _single_with_fallback(provider, method: str, *args, close_cutoff=None, **kwargs):
     """单只/单序列拉取：yahoo → stooq → 服务端通道群（agentgw/ifind/tiingo）。
 
     v3 修复两条降级协议缺陷（2026-08-30 真实运行暴露）：
@@ -175,11 +177,24 @@ def _single_with_fallback(provider, method: str, *args, **kwargs):
       2) 序列级陈旧检测：返回的宏观序列末根过旧时视同失败继续降级。
     """
     execution = getattr(provider, "execution", None)
-    as_of = execution.run_date if execution is not None else None
+    as_of = close_cutoff or (execution.run_date if execution is not None else None)
+    prior_close_observed = False
+
+    def fetch(src):
+        nonlocal prior_close_observed
+        observed = getattr(src, method)(*args, **kwargs)
+        if close_cutoff is None or _missing_data(observed):
+            return observed
+        exact = method == "ohlcv"
+        bounded = close_observation(observed, close_cutoff, exact=exact)
+        if bounded is None and exact and isinstance(observed, pd.DataFrame):
+            prior_close_observed |= bool(len(observed.loc[observed.index.date < close_cutoff]))
+        return bounded
+
     what = f"{method}({args[0] if args else ''})"
     t0 = time.time()
     try:
-        out = getattr(provider, method)(*args, **kwargs)
+        out = fetch(provider)
         if _missing_data(out):
             kind = "None" if out is None else "空数据（含全 NaN）"
             raise RuntimeError(f"{provider.name}.{method} 返回 {kind}（视同失败，继续降级）")
@@ -209,7 +224,7 @@ def _single_with_fallback(provider, method: str, *args, **kwargs):
             try:
                 logger.warning("%s.%s 失败（%s），降级 %s",
                                failure.provider, method, failure.error_type, alt.name)
-                out = getattr(alt, method)(*args, **kwargs)
+                out = fetch(alt)
                 if _missing_data(out):
                     kind = "None" if out is None else "空数据（含全 NaN）"
                     raise RuntimeError(f"{alt.name}.{method} 返回 {kind}（视同失败，继续降级）")
@@ -225,6 +240,8 @@ def _single_with_fallback(provider, method: str, *args, **kwargs):
                 _data_issue(alt, method, list(args[:1]), "provider_error", error=e2)
                 failure = ProviderDataError(alt.name, method, type(e2).__name__)
     # 离开原异常处理块再抛出，避免 __context__ / traceback 带出源端正文。
+    if prior_close_observed:
+        raise StrictDataStale(f"{method} 缺少已完成交易日 {close_cutoff} 的可用收盘数据") from None
     raise failure from None
 
 
@@ -329,7 +346,7 @@ def quote_with_fallback(provider, ticker: str) -> dict | None:
 
 
 def _batch_with_fallback(provider, tickers: list[str], days: int,
-                         label: str = "batch") -> dict[str, pd.DataFrame]:
+                         label: str = "batch", *, close_cutoff=None, minimum=None) -> dict[str, pd.DataFrame]:
     """批量拉取：yahoo → stooq → 服务端通道群依次补洞
     （仅真实源之间降级；生产链路绝不回退合成数据，覆盖率如实记录 data_coverage）。"""
     execution = getattr(provider, "execution", None)
@@ -362,6 +379,13 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         invalid = [t for t in missing if t in batch and t not in got]
         if invalid:
             _data_issue(src, "ohlcv_batch", invalid, "invalid_data", label=label)
+        if close_cutoff is not None:
+            aligned = {symbol: close_observation(frame, close_cutoff, exact=True)
+                       for symbol, frame in got.items()}
+            absent = [symbol for symbol, frame in aligned.items() if frame is None]
+            if absent:
+                _data_issue(src, "ohlcv_batch", absent, "completed_session_bar_missing", label=label)
+            got = {symbol: frame for symbol, frame in aligned.items() if frame is not None}
         if not got:
             _data_issue(src, "ohlcv_batch", missing, "no_data", label=label)
         availability = getattr(src, "last_batch_status", None)
@@ -382,7 +406,7 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         return data
 
     data = _fetch(provider, tickers)
-    enough = max(3, len(tickers) // 3)
+    enough = minimum if minimum is not None else max(3, len(tickers) // 3)
     _LINEAGE.append((f"{label}[{len(data)}/{len(tickers)}]", _provider_source(provider)))
     if len(data) >= enough:
         return _finish()
@@ -581,6 +605,11 @@ def run_pipeline(
     logger.info("=== Pipeline 启动 market=%s provider=%s universe=%s(%d) ===",
                 spec.market_id, provider.name, universe_mode, len(universe))
 
+    signal_close = execution.completed_session_close if required else None
+    session = signal_close.date() if signal_close is not None else None
+    macro_dates = macro_limits(signal_close, execution.admitted_at) if signal_close else {}
+    close_binding = close_metadata(signal_close) if signal_close else None
+
     # ---------- 数据真实性与时效性闸门（v6.1，白皮书§12"地基不牢评分皆是沙上之塔"）----------
     # S4：日历/指数名/板块清单全部按市场规格参数化（US 行为与现状完全一致）
 
@@ -615,7 +644,7 @@ def run_pipeline(
                            if not ok]
             if missing_bmk:
                 report["benchmark_missing"] = missing_bmk   # 缺失维披露（再归一化）
-        expect = spec.prev_trading_day(trade_date)
+        expect = session or spec.prev_trading_day(trade_date)
         spy_last = spy_df.index[-1].date()
         lag = (expect - spy_last).days
         report["benchmark_last_bar"] = str(spy_last)
@@ -659,11 +688,13 @@ def run_pipeline(
     market_data: dict = {"benchmark_labels": benchmark_labels}
     with tracer.step("data.prepare", {"universe": universe, "benchmarks": bmk,
                      "sector_symbols": spec.sector_symbols, "days": days,
-                     "trade_date": trade_date, "scan_filters": spec.scan_filters()}) as stage:
+                     "trade_date": trade_date, "scan_filters": spec.scan_filters(),
+                     **({"market_close": close_binding} if close_binding else {})}) as stage:
         idx_sym = bmk["index"]
         try:
-            spy = _single_with_fallback(provider, "ohlcv", idx_sym, days=days)
-        except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+            spy = _single_with_fallback(provider, "ohlcv", idx_sym, days=days,
+                                         **({"close_cutoff": session} if session else {}))
+        except (EvidenceWriteError, ExecutionContractError, StrictObservationError, StrictDataStale):
             raise
         except Exception as exc:
             # D2 诚实失败：该市场基准（指数）全断 → 当日中止，其余市场不受影响
@@ -674,7 +705,8 @@ def run_pipeline(
         # 利率基准：US 硬依赖（现状行为）；CN/HK 缺失 → 记 None 走再归一化
         try:
             market_data["tnx"] = _single_with_fallback(
-                provider, "rate_yield_for", bmk["rate"], days=days)
+                provider, "rate_yield_for", bmk["rate"], days=days,
+                **({"close_cutoff": macro_dates["tnx"]} if session else {}))
         except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
             raise
         except Exception as exc:
@@ -688,7 +720,8 @@ def run_pipeline(
         # 波动率基准：同上
         try:
             market_data["vix"] = _single_with_fallback(
-                provider, "vol_index_for", bmk["vol"], days=days)
+                provider, "vol_index_for", bmk["vol"], days=days,
+                **({"close_cutoff": macro_dates["vix"]} if session else {}))
         except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
             raise
         except Exception as exc:
@@ -701,14 +734,17 @@ def run_pipeline(
             market_data["vix"] = None
         try:
             market_data["vix9d"] = (_single_with_fallback(
-                provider, "vol_index_for", bmk["vol_short"], days=days)
+                provider, "vol_index_for", bmk["vol_short"], days=days,
+                **({"close_cutoff": macro_dates["vix9d"]} if session else {}))
                 if bmk.get("vol_short") else None)
         except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
             raise
         except Exception:
             market_data["vix9d"] = None
 
-        sector_etfs = _batch_with_fallback(provider, spec.sector_symbols, days)
+        sector_etfs = _batch_with_fallback(provider, spec.sector_symbols, days,
+            **({"label": "signal_etfs", "close_cutoff": session,
+                "minimum": (len(spec.sector_symbols) * 2 + 2) // 3} if session else {}))
         market_data["sector_etfs"] = sector_etfs
 
         # full 模式两级拉取：先用 30 日短历史做流动性预筛，再对幸存者拉全历史
@@ -718,7 +754,8 @@ def run_pipeline(
             logger.info("池规模 %d > %d，启动流动性预筛（%d 日短历史）",
                         len(universe), config.FULL_PREFILTER_THRESHOLD,
                         config.FULL_PREFILTER_DAYS)
-            light = _batch_with_fallback(provider, universe, config.FULL_PREFILTER_DAYS)
+            light = _batch_with_fallback(provider, universe, config.FULL_PREFILTER_DAYS,
+                **({"label": "signal_prefilter", "close_cutoff": session} if session else {}))
             survivors: list[tuple[str, float]] = []
             for t, df in light.items():
                 if len(df) < 15:
@@ -743,11 +780,25 @@ def run_pipeline(
                 for link in ("upstream", "midstream", "downstream"):
                     chain_tickers.update(c[link]["tickers"])
         all_tickers = sorted(set(universe) | chain_tickers)
-        stock_data = _batch_with_fallback(provider, all_tickers, days)
+        stock_data = _batch_with_fallback(provider, all_tickers, days,
+            **({"label": "signal_stocks", "close_cutoff": session} if session else {}))
+        if session and not stock_data:
+            raise StrictDataUnavailable(f"缺少已完成交易日 {session} 的可用股票收盘数据")
         market_data["stock_ohlcv"] = stock_data
         # v6.1：真实性/时效性闸门——充足性、新鲜度、陈旧标的剔除（诚实失败优于脏数据）
         freshness = _freshness_gate(spy, market_data["tnx"], market_data["vix"],
                                     sector_etfs, stock_data)
+        if close_binding:
+            from .agent_evidence import normalize
+            freshness["market_close"] = {
+                **close_binding,
+                "etf_missing": sorted(set(spec.sector_symbols) - sector_etfs.keys()),
+                "stock_missing": sorted(set(all_tickers) - stock_data.keys()),
+                "macro_last_bars": {name: (values.index[-1].date().isoformat()
+                    if (values := market_data[name]) is not None else None) for name in macro_dates},
+                "benchmark_chart": {"SPY": "signal_benchmark", "QQQ": "not_collected"},
+            }
+            execution.signal_benchmark_chart = close_chart(normalize(spy))
         market_data["freshness"] = freshness
         market_data["universe_closes"] = {t: df["Close"] for t, df in stock_data.items()}
         logger.info("数据准备完成: 股票 %d/%d, 板块ETF %d",
@@ -758,11 +809,40 @@ def run_pipeline(
 
     # ================= 科技股产业链专项子集群 =================
     # （放在数据准备之后：monitor 复用已下载行情，仅全球联动标的单独拉取）
-    with tracer.step("tech.monitor", {"prefetched": stock_data, "provider": provider.name}) as stage:
-        tech_monitor = TechChainMonitorAgent(provider).execute(tracer, prefetched=stock_data)
+    monitor_excluded = (frozenset(t for chain in TECH_SUBCHAINS.values()
+        for tickers in chain["links"].values() for t in tickers if requires_foreign_calendar(t))
+        if session else frozenset())
+    with tracer.step("tech.monitor", {"prefetched": stock_data, "provider": provider.name,
+                     **({"market_close": close_binding, "excluded": sorted(monitor_excluded)}
+                        if session else {})}) as stage:
+        if monitor_excluded:
+            _data_issue(provider, "ohlcv_batch", sorted(monitor_excluded), "linkage_calendar_unverified",
+                        label="signal_tech_monitor")
+        tech_monitor = TechChainMonitorAgent(provider).execute(
+            tracer, prefetched=stock_data, **({"excluded": monitor_excluded} if session else {}))
         stage.output(tech_monitor)
-    with tracer.step("tech.cycle_linkage", {"leaders": CycleLinkageAgent.LEADERS, "provider": provider.name}) as stage:
-        tech_linkage = CycleLinkageAgent(provider).execute(tracer)
+    linkage_frozen = ({"SPY": spy, **{symbol: stock_data[symbol]
+                       for symbol in CycleLinkageAgent.LEADERS if symbol in stock_data}} if session else None)
+    with tracer.step("tech.cycle_linkage", {"leaders": CycleLinkageAgent.LEADERS, "provider": provider.name,
+                     **({"market_close": close_binding, "prefetched": sorted(linkage_frozen)}
+                        if linkage_frozen is not None else {})}) as stage:
+        linkage = CycleLinkageAgent(provider)
+        if linkage_frozen is None:
+            tech_linkage = linkage.execute(tracer)
+        else:
+            def fetch_leader(symbol):
+                if requires_foreign_calendar(symbol):
+                    # These exchanges need their own local dates and holidays.
+                    _data_issue(provider, "ohlcv", [symbol], "linkage_calendar_unverified",
+                                label="signal_linkage")
+                    return None
+                return _single_with_fallback(provider, "ohlcv", symbol, days=90, close_cutoff=session)
+
+            tech_linkage = linkage.execute(tracer, prefetched=linkage_frozen, fetch=fetch_leader)
+            covered = {row.ticker for row in tech_linkage}
+            missing = [symbol for symbol in CycleLinkageAgent.LEADERS if symbol not in covered]
+            if missing:
+                _data_issue(provider, "ohlcv", missing, "completed_session_linkage_missing", label="signal_linkage")
         stage.output(tech_linkage)
     with tracer.step("tech.sentiment", {"documents": score_docs,
                      **({"assessment": assessment} if required else {})}) as stage:

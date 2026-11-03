@@ -211,7 +211,7 @@ class StageScope:
 
 class ExecutionContext:
     def __init__(self, *, run_id: str, run_date: date, paths: RuntimePaths,
-                 policy: ExecutionPolicy, store: EvidenceStore):
+                 policy: ExecutionPolicy, store: EvidenceStore, admitted_at: datetime | None = None):
         if not isinstance(run_id, str) or not run_id:
             raise ExecutionContractError("run_id is required")
         if not isinstance(run_date, date) or isinstance(run_date, datetime):
@@ -219,6 +219,16 @@ class ExecutionContext:
         self.run_id, self.run_date = run_id, run_date
         self.paths, self.policy, self.store = paths, policy, store
         self.model_required = policy.policy_id == REQUIRED_POLICY_ID
+        self.admitted_at = admitted_at
+        self.completed_session_close = None
+        if self.model_required and admitted_at is not None:
+            from ..market_close import completed_session
+            from zoneinfo import ZoneInfo
+
+            self.completed_session_close = completed_session(admitted_at)
+            if admitted_at.astimezone(ZoneInfo(policy.market_timezone)).date() != run_date:
+                raise ExecutionContractError("Admission timestamp differs from the frozen market date")
+        self.signal_benchmark_chart = None
         self._specs = daily_stage_specs(self.model_required)
         self._cursor = 0
         self._sequence = 0
@@ -470,8 +480,19 @@ class RecordingProvider:
                 lambda: value(*args, **kwargs),
             )
             try:
-                return market_observation(raw, run_date=self.execution.run_date,
-                                          market_timezone=self.execution.policy.market_timezone)
+                observed = market_observation(raw, run_date=self.execution.run_date,
+                                              market_timezone=self.execution.policy.market_timezone)
+                close = self.execution.completed_session_close
+                stage = self.execution._active.spec.name
+                if close is not None and stage == "tech.monitor":
+                    from ..market_close import close_observation
+
+                    if name == "ohlcv":
+                        return close_observation(observed, close.date(), exact=True)
+                    if name == "ohlcv_batch" and isinstance(observed, dict):
+                        return {symbol: aligned for symbol, frame in observed.items()
+                                if (aligned := close_observation(frame, close.date(), exact=True)) is not None}
+                return observed
             except StrictObservationError as error:
                 # A caught boundary violation still poisons this stage before
                 # another provider, ledger write, or output can be started.

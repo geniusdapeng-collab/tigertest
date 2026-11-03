@@ -104,8 +104,9 @@ def narrative_schema(etfs, doc_ids) -> dict:
     return _object(sectors=_array(sector, len(sectors), len(sectors), unique=True))
 
 
-def decision_schema(symbols, doc_ids, market_ids) -> dict:
-    candidates, docs = _ids(symbols, allow_empty=True, symbols=True), _ids(doc_ids)
+def decision_schema(symbols, doc_ids, market_ids, *, company_sources=None) -> dict:
+    candidates = _ids(symbols, allow_empty=True, symbols=True)
+    docs = _ids(doc_ids, allow_empty=company_sources is not None)
     markets = _ids(market_ids, allow_empty=True)
     if (set(markets) & set(docs) or len(markets) != len(candidates)
             or any(re.fullmatch(r"md_[A-Z][A-Z0-9.\-]{0,14}_[0-9]{8}_[0-9a-f]{24}", item) is None
@@ -114,12 +115,13 @@ def decision_schema(symbols, doc_ids, market_ids) -> dict:
                    for symbol in candidates)):
         raise ValueError("MODEL_SCHEMA_MARKET_EVIDENCE_REQUIRED")
     symbol = _enum(candidates) if candidates else {"type": "string", "pattern": r"(?!)"}
+    citation = _enum([*docs, *markets]) if docs or markets else {"type": "string", "pattern": r"(?!)"}
     decision = _object(
         symbol=symbol, action=_enum(["buy", "watch"]), action_summary=_text(300, public=True),
         why_this=_text(1200, public=True), why_now=_text(1200, public=True),
         entry_condition=_text(1200, public=True), invalidation=_text(1200, public=True),
         risk_note=_text(1200, public=True),
-        source_ids=_array(_enum([*docs, *markets]), 1, 9, unique=True),
+        source_ids=_array(citation, 1, 9, unique=True),
     )
     # A buy must carry at least its own market snapshot and one article. The
     # execution owner additionally verifies the exact citation types and owner.
@@ -127,5 +129,20 @@ def decision_schema(symbols, doc_ids, market_ids) -> dict:
         {"properties": {"action": {"const": "buy"}, "source_ids": {"minItems": 2}}},
         {"properties": {"action": {"const": "watch"}}},
     ]}]
+    if company_sources is not None:
+        if (set(company_sources) - set(candidates)
+                or {doc for owned in company_sources.values() for doc in owned} != set(docs)):
+            raise ValueError("MODEL_SCHEMA_COMPANY_EVIDENCE_OWNERSHIP_REQUIRED")
+        if candidates:
+            company_constraints = []
+            for candidate in candidates:
+                market = next(item for item in markets if item.startswith("md_" + candidate + "_"))
+                owned = _ids(company_sources.get(candidate, []), allow_empty=True)
+                company_constraints.append({"properties": {
+                    "symbol": {"const": candidate},
+                    "source_ids": {"items": _enum([market, *owned])},
+                    "action": _enum(["buy", "watch"] if owned else ["watch"]),
+                }})
+            decision["allOf"].append({"oneOf": company_constraints})
     return _object(action=_enum(["BUY", "WAIT", "AVOID"]), action_summary=_text(1200, public=True),
                    decisions=_array(decision, 0, len(candidates), unique=True))

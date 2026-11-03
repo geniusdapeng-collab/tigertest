@@ -17,6 +17,9 @@ from ..redline import LLMUnavailable
 from ..redline.execution import REQUIRED_MODEL_STAGES, RequiredModelFailed
 from ..redline.model_diagnostics import validate_model_diagnostic
 from ..tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
+from .company_evidence import (
+    COMPANY_EVIDENCE_CONTRACT, SEARCH_COUNT, candidate_evidence, candidate_searches,
+)
 from .deepseek_required import (
     MODEL, RELEASE, SEARCH_MODE, retryable_search_failure, sanitize_model_text,
     sanitize_model_value, sanitize_url, validate_schema,
@@ -82,12 +85,50 @@ def _same_watch_facts(actual, observed) -> bool:
     return True
 
 
+def _verify_search_request(request, query, stage, count):
+    if (request["schema"] != "tiger.deepseek-search-request.v1"
+            or request["stage"] != stage or request["provider"] != "deepseek"
+            or request["endpoint"] != "https://api.deepseek.com/v1/tools/search"
+            or request["method"] != "POST" or request["search_mode"] != SEARCH_MODE
+            or request["request"] != {"query": query, "count": count, "need_content": True}
+            or request["request_sha256"] != _hash(request["request"])
+            or request["query_sha256"] != hashlib.sha256(query.encode()).hexdigest()):
+        _fail()
+
+
+def _verify_search_rows(proof, request, count):
+    retries = proof.get("retry_diagnostics", [])
+    if (proof["schema"] != "tiger.deepseek-search.v1"
+            or proof["query_sha256"] != request["query_sha256"]
+            or proof["search_mode"] != SEARCH_MODE
+            or proof["response_sha256"] != _hash({"results": proof["results"]})
+            or type(retries) is not list or len(retries) > 1
+            or any(not retryable_search_failure(item) for item in retries)
+            or type(proof["results"]) is not list
+            or type(proof["result_count"]) is not int
+            or type(proof["usable_result_count"]) is not int
+            or proof["usable_result_count"] != len(proof["results"])
+            or not 0 <= proof["usable_result_count"] <= proof["result_count"] <= count
+            or bool(proof["result_count"]) != bool(proof["usable_result_count"])):
+        _fail()
+    for doc in proof["results"]:
+        identity = {key: doc[key] for key in ("url", "title", "content", "published")}
+        if (sanitize_url(doc["url"]) != doc["url"] or len(doc["url"]) > 2048
+                or not 1 <= len(doc["title"]) <= 500 or not doc["content"].strip()
+                or doc["id"] != "ds_" + _hash(identity)[:24]
+                or doc["content_hash"] != hashlib.sha256(doc["content"].encode()).hexdigest()
+                or doc["source"] != "deepseek_search"):
+            _fail()
+    return proof["results"]
+
+
 def verify_required_model(run, result: dict, admission: dict, *, scene_policy_path=None,
-                          source_content_contract=None) -> dict:
+                          source_content_contract=None, company_evidence_contract=None) -> dict:
     """No saved success flag is authoritative: walk bound stage IO again."""
     try:
         return _verify(run, result, admission, scene_policy_path=scene_policy_path,
-                       source_content_contract=source_content_contract)
+                       source_content_contract=source_content_contract,
+                       company_evidence_contract=company_evidence_contract)
     except EvidenceInvalid:
         raise
     except (KeyError, ValueError, TypeError, IndexError, LLMUnavailable,
@@ -95,7 +136,8 @@ def verify_required_model(run, result: dict, admission: dict, *, scene_policy_pa
         _fail()
 
 
-def _verify(run, result, admission, *, scene_policy_path=None, source_content_contract=None):
+def _verify(run, result, admission, *, scene_policy_path=None, source_content_contract=None,
+            company_evidence_contract=None):
     clock = admission["clock"]
     run_date, market_timezone = clock["run_date"], clock["market_timezone"]
     if (type(run_date) is not str or date.fromisoformat(run_date).isoformat() != run_date
@@ -121,6 +163,18 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
             or observed_contract != expected_contract[source_content_contract]):
         _fail()
     legacy = observed_contract is None
+    company_value = snapshot(by_stage["decision.debate"], "output")["value"].get("company_evidence")
+    observed_company = company_value["contract"] if company_value is not None else ""
+    if (observed_company not in ("", COMPANY_EVIDENCE_CONTRACT)
+            or company_evidence_contract is not None and observed_company != company_evidence_contract
+            or legacy and observed_company):
+        _fail()
+    company_enabled = bool(observed_company)
+    company_outcomes, company_documents = {}, {}
+    admitted_at = (datetime.fromisoformat(clock["admitted_at_utc"])
+                   if company_enabled and "admitted_at_utc" in clock else None)
+    if admitted_at is not None and admitted_at.utcoffset() is None:
+        _fail()
     for stage in ("search.collect", *REQUIRED_MODEL_STAGES):
         end = by_stage[stage]
         if end["status"] != "completed" or end["error_type"] is not None or end["reason"] is not None:
@@ -171,56 +225,65 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                            for start in range(0, len(docs), 12) if (batch := docs[start:start + 12])]
             else:
                 batches = plan_clean_documents(docs, plan)
+        company_queries = []
+        if company_enabled and stage == "decision.debate":
+            approved_symbols = [pick["fields"]["ticker"]
+                                for pick in snapshot(by_stage["layer4.risk"], "output")["value"]["picks"]]
+            company_queries = list(candidate_searches(approved_symbols, date.fromisoformat(run_date)).items())
         chat_index = 0
         for call in output["io_calls"]:
-            if call["method"] not in {"model.deepseek.search", "model.deepseek.chat"} or "error_ref" in call:
+            method = call["method"]
+            if method not in {"model.deepseek.search", "model.deepseek.chat"}:
                 _fail()
             request = read_snapshot(run, call["input_ref"], run_id=run.name, stage=stage, role="input")
-            proof = read_snapshot(run, call["output_ref"], run_id=run.name, stage=stage, role="output")
             call_id = request["call_id"]
-            if (call_id in call_ids or not re.fullmatch(r"[0-9a-f]{32}", call_id)
-                    or proof["call_id"] != call_id or request["stage"] != stage or proof["stage"] != stage
+            if call_id in call_ids or not re.fullmatch(r"[0-9a-f]{32}", call_id):
+                _fail()
+            call_ids.add(call_id)
+            company_search = company_enabled and stage == "decision.debate" and method == "model.deepseek.search"
+            if company_search:
+                if chat_index or len(company_outcomes) >= len(company_queries):
+                    _fail()
+                symbol, query = company_queries[len(company_outcomes)]
+                _verify_search_request(request, query, stage, SEARCH_COUNT)
+            if "error_ref" in call:
+                if not company_search:
+                    _fail()
+                error = read_snapshot(run, call["error_ref"], run_id=run.name, stage=stage, role="output")
+                if (set(error) != {"error_type", "message", "outcome_observed", "diagnostic"}
+                        or error["error_type"] != "RequiredModelUnavailable"
+                        or error["message"] != "External call failed" or error["outcome_observed"] is not True):
+                    _fail()
+                outcome, _ = candidate_evidence(symbol, [], date.fromisoformat(run_date),
+                                                admitted_at, failure=error["diagnostic"])
+                company_outcomes[symbol] = outcome
+                continue
+            proof = read_snapshot(run, call["output_ref"], run_id=run.name, stage=stage, role="output")
+            if (proof["call_id"] != call_id or request["stage"] != stage or proof["stage"] != stage
                     or request["provider"] != "deepseek" or proof["provider"] != "deepseek"
                     or request["method"] != "POST" or request["request_sha256"] != _hash(request["request"])
                     or proof["request_sha256"] != request["request_sha256"]
                     or not re.fullmatch(r"[0-9a-f]{64}", proof["transport_response_sha256"])):
                 _fail()
-            call_ids.add(call_id)
+            if company_search:
+                rows = _verify_search_rows(proof, request, SEARCH_COUNT)
+                outcome, filings = candidate_evidence(symbol, rows, date.fromisoformat(run_date), admitted_at)
+                company_outcomes[symbol] = outcome
+                company_documents.update((row["id"], row) for row in filings)
+                continue
             if stage == "search.collect":
-                expected_queries = [query + " as of " + admission["clock"]["run_date"]
+                expected_queries = [query + " as of " + run_date
                                     for query in {**CHAIN_TOPICS, **SECTOR_TOPICS}.values()]
                 query = request["request"]["query"]
-                retries = proof.get("retry_diagnostics", [])
-                if (call["method"] != "model.deepseek.search" or query not in expected_queries
-                        or request["schema"] != "tiger.deepseek-search-request.v1"
-                        or proof["schema"] != "tiger.deepseek-search.v1"
-                        or request["endpoint"] != "https://api.deepseek.com/v1/tools/search"
-                        or request["request"] != {"query": query, "count": 4, "need_content": True}
-                        or request["query_sha256"] != hashlib.sha256(query.encode()).hexdigest()
-                        or proof["query_sha256"] != request["query_sha256"]
-                        or proof["search_mode"] != SEARCH_MODE
-                        or proof["response_sha256"] != _hash({"results": proof["results"]})
-                        or type(retries) is not list or len(retries) > 1
-                        or any(not retryable_search_failure(item) for item in retries)
-                        or type(proof["result_count"]) is not int
-                        or type(proof["usable_result_count"]) is not int
-                        or proof["usable_result_count"] != len(proof["results"])
-                        or not 0 <= proof["usable_result_count"] <= proof["result_count"] <= 4
-                        or bool(proof["result_count"]) != bool(proof["usable_result_count"])):
+                if method != "model.deepseek.search" or query not in expected_queries:
                     _fail()
+                _verify_search_request(request, query, stage, 4)
                 searches.append(query)
-                for doc in proof["results"]:
-                    identity = {key: doc[key] for key in ("url", "title", "content", "published")}
-                    if (sanitize_url(doc["url"]) != doc["url"] or len(doc["url"]) > 2048
-                            or len(doc["title"]) > 500 or not doc["content"].strip()
-                            or doc["id"] != "ds_" + _hash(identity)[:24]
-                            or doc["content_hash"] != hashlib.sha256(doc["content"].encode()).hexdigest()
-                            or doc["source"] != "deepseek_search"):
-                        _fail()
+                for doc in _verify_search_rows(proof, request, 4):
                     if doc["id"] not in native_docs:
                         native_docs[doc["id"]] = doc
                         topic = next(name for name, text in {**CHAIN_TOPICS, **SECTOR_TOPICS}.items()
-                                     if text + " as of " + admission["clock"]["run_date"] == query)
+                                     if text + " as of " + run_date == query)
                         collected_expected.append(RawDocument(doc["id"], "deepseek_search", doc["title"],
                             doc["url"], doc["content"], doc["published"] or "",
                             datetime.fromisoformat(doc["fetched_at"].replace("Z", "+00:00")).timestamp(),
@@ -267,7 +330,15 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                 expected_market_evidence = market_snapshots(prepared_market_data, approved + watch, assessment)
                 market_by_symbol = {row["symbol"]: row for row in expected_market_evidence}
                 market_by_id = {row["id"]: row for row in expected_market_evidence}
-                expected_schema = decision_schema(approved + watch, ids, list(market_by_id))
+                if company_enabled:
+                    if (list(company_outcomes) != approved
+                            or company_value != {"contract": COMPANY_EVIDENCE_CONTRACT,
+                                                 "candidates": company_outcomes}):
+                        _fail()
+                    expected_schema = decision_schema(approved + watch, list(company_documents), list(market_by_id),
+                        company_sources={symbol: outcome["source_ids"] for symbol, outcome in company_outcomes.items()})
+                else:
+                    expected_schema = decision_schema(approved + watch, ids, list(market_by_id))
                 if (inputs.get("market_asof") != expected_market_asof
                         or inputs.get("market_evidence") != expected_market_evidence):
                     _fail()
@@ -279,6 +350,9 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                     "risk_rationale": inputs["rationale"],
                     "market_asof": expected_market_asof,
                     "market_evidence": expected_market_evidence}
+                if company_enabled:
+                    expected_payload["company_evidence"] = {
+                        **company_value, "documents": list(company_documents.values())}
             if stage != "clean.llm_semantic":
                 if legacy:
                     expected_payload["documents"] = _docs(docs, legacy=True)
@@ -444,22 +518,36 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
             or decision_inputs["action"] == "AVOID" and (buys or result["action"] != "AVOID")
             or result["picks"] != [pick for symbol, pick in picks.items() if symbol in buys]):
         _fail()
-    valid_for = datetime.combine(next_trading_day(admission["clock"]["run_date"]),
-                                 time(16), ZoneInfo("America/New_York")).isoformat()
+    if prepared_market_data["freshness"].get("market_close"):
+        from ..market_close import next_scheduled_close
+        from ..redline.execution import StrictObservationError
+
+        try:
+            valid_for = next_scheduled_close(date.fromisoformat(run_date)).isoformat()
+        except StrictObservationError:
+            _fail()
+    else:
+        valid_for = datetime.combine(next_trading_day(run_date), time(16), ZoneInfo("America/New_York")).isoformat()
     expected = []
     decision_docs = {doc["raw"]["doc_id"]: doc["raw"] for doc in decision_inputs["documents"]}
     for row in decision_output["decisions"]:
         pick = picks[row["symbol"]] if row["action"] == "buy" else None
         own_market = market_by_symbol[row["symbol"]]
         market_refs = [source_id for source_id in row["source_ids"] if source_id in market_by_id]
-        news_refs = [source_id for source_id in row["source_ids"] if source_id in decision_docs]
+        allowed = (company_outcomes.get(row["symbol"], {}).get("source_ids", [])
+                   if company_enabled else decision_docs)
+        news_refs = [source_id for source_id in row["source_ids"] if source_id in allowed]
         if (market_refs != [own_market["id"]]
                 or len(market_refs) + len(news_refs) != len(row["source_ids"])
                 or len(news_refs) > 8 or row["action"] == "buy" and not news_refs):
             _fail()
-        sources = [{"id": source_id, "title": decision_docs[source_id]["title"],
-            "url": decision_docs[source_id]["url"], "published_at": decision_docs[source_id]["published"] or None}
-            for source_id in news_refs]
+        if company_enabled:
+            sources = [{key: company_documents[source_id][key] for key in ("id", "title", "url", "published_at")}
+                       for source_id in news_refs]
+        else:
+            sources = [{"id": source_id, "title": decision_docs[source_id]["title"],
+                "url": decision_docs[source_id]["url"], "published_at": decision_docs[source_id]["published"] or None}
+                for source_id in news_refs]
         expected.append({key: value for key, value in row.items() if key != "source_ids"} | {
             "target_weight": pick["position_pct"] if pick else 0, "sources": sources,
             "market_evidence": [own_market],
@@ -468,9 +556,14 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
             "valid_for": valid_for, "reference_capital_usd": 100000.0})
     if raw["execution_decisions"] != expected:
         _fail()
-    if decision_value != {"status": "model_required",
+    expected_value = {"status": "model_required",
             "triggered": list(picks) + [row["ticker"] for row in decision_inputs["watchlist"] if row["ticker"] not in picks][:5],
             "evidence": {}, "model_output": decision_output,
-            "execution_decisions": expected, "action_summary": decision_output["action_summary"]}:
+            "execution_decisions": expected, "action_summary": decision_output["action_summary"]}
+    if company_enabled:
+        expected_value["company_evidence"] = company_value
+        if raw["debate"].get("company_evidence") != company_value:
+            _fail()
+    if decision_value != expected_value:
         _fail()
     return summary

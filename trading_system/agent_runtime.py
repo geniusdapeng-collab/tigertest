@@ -46,13 +46,16 @@ DEPENDENCIES = ("pandas", "numpy", "yfinance", "requests", "PyYAML", "tokenizers
 SCENE_POLICY_RELATIVE = "governance/bundles/trading/model-policy.yml"
 SOURCE_CONTENT_CONTRACT = "native-complete/v1"
 LEGACY_SOURCE_CONTENT_CONTRACT = "legacy-excerpts/v1"
+COMPANY_EVIDENCE_RELATIVE = "trading_system/llm/company_evidence.py"
+COMPANY_EVIDENCE_CONTRACT = "sec-cover-search/v1"
 # The last deployed contract used 4,000/1,600-character excerpts. Recognize it
 # only from its already frozen source bytes, not a missing marker in new runs.
 LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
 
 
 def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None,
-                    source_content_contract: str = SOURCE_CONTENT_CONTRACT) -> dict:
+                    source_content_contract: str = SOURCE_CONTENT_CONTRACT,
+                    company_evidence_contract: str = COMPANY_EVIDENCE_CONTRACT) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     required = profile == REQUIRED_PROFILE
@@ -111,6 +114,10 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             value["model_contract"]["source_content_contract"] = source_content_contract
         elif source_content_contract != LEGACY_SOURCE_CONTENT_CONTRACT:
             raise EvidenceInvalid("RESULT_INVALID", "Unknown source content contract")
+        if company_evidence_contract == COMPANY_EVIDENCE_CONTRACT:
+            value["model_contract"]["company_evidence_contract"] = company_evidence_contract
+        elif company_evidence_contract:
+            raise EvidenceInvalid("RESULT_INVALID", "Unknown company evidence contract")
         value["limitations"][1] = "All five semantic stages require actual DeepSeek Flash calls; failure stops publication."
         value["limitations"] += [
             "deepseek-flash is a provider alias observed as V4.1-Flash-1017, not an immutable version ID.",
@@ -499,7 +506,11 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     source_content_contract = (LEGACY_SOURCE_CONTENT_CONTRACT if required_source
                                and required_source["sha256"] == LEGACY_REQUIRED_SOURCE_SHA256
                                else SOURCE_CONTENT_CONTRACT)
+    company_evidence_contract = (COMPANY_EVIDENCE_CONTRACT
+                                 if any(ref["path"] == COMPANY_EVIDENCE_RELATIVE for ref in source["files"])
+                                 else "")
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
+                                      company_evidence_contract=company_evidence_contract,
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
@@ -613,6 +624,19 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
         raise EvidenceInvalid("RESULT_INVALID", "Invalid benchmark date") from exc
     from .calendar import prev_trading_day
     expected_date = prev_trading_day(datetime.fromisoformat(date).date())
+    if profile == REQUIRED_PROFILE:
+        from .market_close import SOURCE_PATH, completed_session, verify_close_evidence
+        from .redline.execution import StrictObservationError
+
+        manifest = read_json(run, "source-manifest.json")
+        if any(ref["path"] == SOURCE_PATH for ref in manifest["files"]):
+            try:
+                expected_date = completed_session(datetime.fromisoformat(admission["clock"]["admitted_at_utc"])).date()
+            except StrictObservationError as exc:
+                raise EvidenceInvalid("RESULT_INVALID", "Unverifiable completed market session") from exc
+            if benchmark_date != expected_date:
+                raise EvidenceInvalid("RESULT_INVALID", "Benchmark differs from the completed market session")
+            verify_close_evidence(run, admission, freshness)
     if freshness["benchmark_lag_days"] != (expected_date - benchmark_date).days:
         raise EvidenceInvalid("RESULT_INVALID", "Benchmark lag and frozen market date disagree")
     from .currency import require_usd_sim_state
@@ -683,7 +707,10 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
         from .llm.required_proof import verify_required_model
         model_contract = read_json(run, "policy.json")["model_contract"]
         summary["model"] = verify_required_model(run, result, admission, scene_policy_path=scene_policy_path,
-            source_content_contract=model_contract.get("source_content_contract", LEGACY_SOURCE_CONTENT_CONTRACT))
+            source_content_contract=model_contract.get("source_content_contract", LEGACY_SOURCE_CONTENT_CONTRACT),
+            company_evidence_contract=model_contract.get("company_evidence_contract", ""))
+        if model_contract.get("company_evidence_contract"):
+            summary["disclosures"]["company_evidence"] = raw["debate"]["company_evidence"]
         summary["action_summary"] = raw["action_summary"]
         summary["execution_decisions"] = raw["execution_decisions"]
         summary["disclosures"].update(model_mode="enabled", model_required=True)

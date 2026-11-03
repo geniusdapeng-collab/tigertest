@@ -64,6 +64,14 @@ def _freshness_note(raw: dict) -> str:
     benchmarks = (raw.get("market") or {}).get("benchmarks") or {}
     label = benchmarks.get("index_label") or benchmarks.get("index") or "基准"
     latest = freshness.get("benchmark_last_bar")
+    session = freshness.get("market_close")
+    if session:
+        macro = session["macro_last_bars"]
+        return (f"已完成收盘交易日 {session['session']}（纽约），基准、已覆盖板块 ETF 和个股均按该日收盘对齐。"
+                f"缺该日可用收盘的板块 ETF {len(session['etf_missing'])} 只、个股 {len(session['stock_missing'])} 只。"
+                f"利率基准末根 {macro['tnx'] or '缺失'}，波动率基准末根 {macro['vix'] or '缺失'}，"
+                f"短期波动率末根 {macro['vix9d'] or '缺失'}。净值图的 SPY 来自同一基准序列，本轮未采集 QQQ 对照。"
+                "行情使用供应商报告的日线，可能延迟或修订。")
     note = (f"基准最新日K：{label} {latest}" if latest else "基准最新日K日期未知")
     lag = freshness.get("benchmark_lag_days")
     if lag is not None:
@@ -177,6 +185,41 @@ def model_instructions(raw: dict) -> list[dict] | None:
     return None
 
 
+def company_evidence_note(raw: dict) -> str:
+    """Explain the recorded SEC lookup outcomes without repeating model prose."""
+    debate = raw.get("debate")
+    company = debate.get("company_evidence") if isinstance(debate, dict) else None
+    if not isinstance(company, dict):
+        return ""
+    from .llm.company_evidence import COMPANY_EVIDENCE_CONTRACT
+
+    if company.get("contract") != COMPANY_EVIDENCE_CONTRACT:
+        return ""
+    candidates = company.get("candidates")
+    unavailable = "公司证据检查记录不完整。"
+    if not isinstance(candidates, dict):
+        return unavailable
+    if not candidates:
+        return "公司证据检查显示，本轮没有标的通过数值风控，未启动按标的检索。"
+
+    labels = {"no_results": "检索零命中", "no_eligible_filing": "未取得合格文件",
+              "search_unavailable": "检索不可用"}
+    counts = dict.fromkeys(("filing_verified", *labels), 0)
+    for outcome in candidates.values():
+        status = outcome.get("status") if isinstance(outcome, dict) else None
+        if not isinstance(status, str) or status not in counts:
+            return unavailable
+        counts[status] += 1
+    eligible = counts["filing_verified"]
+    note = (f"公司证据检查显示，{len(candidates)} 只标的通过数值风控，"
+            f"{eligible} 只取得合格的 SEC 公司文件。")
+    if eligible < len(candidates):
+        gaps = "、".join(f"{label} {counts[status]} 只"
+                        for status, label in labels.items() if counts[status])
+        note += f"其余标的中，{gaps}。缺合格文件的标的本轮仅可观察。"
+    return note
+
+
 def model_instruction_fields(item: dict) -> list[tuple[str, str]]:
     """Describe a verified plan without computing new execution values."""
     market = item["market_evidence"][0]
@@ -217,6 +260,8 @@ def render_markdown(r: PipelineResult) -> str:
     m = r.mrs
     mk = r.raw.get("market") or {}
     mk_grad = r.raw.get("market_grad") or {}
+    instructions = model_instructions(r.raw)
+    company_note = company_evidence_note(r.raw) if instructions is not None else ""
     lines: list[str] = []
     lines.append(f"# AI 短线{_market_name(r.raw)}交易日报 — {r.trade_date}")
     lines.append("")
@@ -254,11 +299,13 @@ def render_markdown(r: PipelineResult) -> str:
         lines.append(f"4. **允许交易标的**：{len(r.picks)} 只 → " +
                      ("、".join(p.ticker for p in r.picks) if r.picks else
                       "币种执行边界受阻，仅供研究" if _execution_blocked(r.raw) else
+                      "本轮无新增纸面买入计划" if company_note else
                       "无达标标的，等待"))
     lines.append("")
-    instructions = model_instructions(r.raw)
     overview = _markdown_text(r.market_view) if instructions is not None else r.market_view
     lines.extend([f"**系统指令**：`{r.action}` — {overview}", ""])
+    if company_note:
+        lines.extend([_markdown_text(company_note), ""])
     if instructions is not None:
         lines.extend(["## 模型最终判断与执行条件（纸面研究）", ""])
         if not instructions:
