@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { exitCode, parseJson, runtimeEnvironment, safeEvidencePath, sanitizeMessage, validateEnvelope, validateRequest } from '../bundles/trading/capabilities/workflow-client.mjs';
 import { canonical, MODEL_PROFILE, validateResearch } from './lib/schema.mjs';
 import { isCliEntry } from './lib/cli.mjs';
-import { publishRecord } from './publish.mjs';
+import { PublicationHttpError, publicationReceiptMatches, publishRecord } from './publish.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PROFILES = new Set([MODEL_PROFILE]);
@@ -132,7 +132,7 @@ export async function syncResearch({ env = process.env, date = marketDate(), pro
       if (!state.imported && canonical(state.request) !== canonical(request)) error('SYNC_STATE_CONFLICT', 'Persistent original request differs');
       if (state.payload) { validateResearch(state.payload); if (state.payload.runId !== state.runId || state.payload.idempotencyKey !== `pnl-${identity}`) error('SYNC_STATE_CONFLICT', 'Persistent publication identity differs'); }
       if (['verified', 'published'].includes(state.phase) && (!state.payload || state.evidence?.receiptHash !== state.payload.receiptHash || state.evidence?.runId !== state.runId)) error('SYNC_STATE_CONFLICT', 'Persistent verified evidence is missing or differs');
-      if (state.phase === 'published' && (state.websiteReceipt?.idempotencyKey !== state.payload.idempotencyKey || state.websiteReceipt?.payloadHash !== sha256(canonical(state.payload)) || !/^[a-f0-9]{64}$/.test(state.websiteReceipt?.hash ?? '') || !Number.isSafeInteger(state.websiteReceipt?.sequence) || state.websiteReceipt.sequence < 1)) error('SYNC_STATE_CONFLICT', 'Persistent published receipt is missing or differs');
+      if (state.phase === 'published' && !publicationReceiptMatches(state.websiteReceipt, state.payload)) error('SYNC_STATE_CONFLICT', 'Persistent published receipt is missing or differs');
     } else {
       state = { schemaVersion: 1, date, profile, python: config.python, runnerStateRoot: config.stateRoot, request: runId ? null : request, imported: Boolean(runId), runId, phase: 'prepared', payload: null, evidence: null, websiteReceipt: null };
       await saveState(file, state, env);
@@ -174,14 +174,17 @@ export async function syncResearch({ env = process.env, date = marketDate(), pro
       const fetcher = (url, options) => { const remaining = deadline - Date.now(); if (remaining < 1) error('OBSERVATION_TIMEOUT', 'Publication observation deadline reached'); return fetch(url, { ...options, signal: AbortSignal.timeout(Math.min(20000, remaining)) }); };
       // Payload is persisted before network submission, preserving exact retries after lost responses.
       const written = await publish({ baseUrl: env.TIGER_PNL_URL ?? 'https://tigerpnl.com', token: env.TIGER_PNL_WRITE_TOKEN, record: state.payload, research: true, allowLocalHttp, fetcher });
-      if (written?.idempotencyKey !== state.payload.idempotencyKey || written?.payloadHash !== sha256(canonical(state.payload))) error('PUBLICATION_RECEIPT_INVALID', 'Website receipt does not match the persistent research payload');
+      if (!publicationReceiptMatches(written, state.payload)) error('PUBLICATION_RECEIPT_INVALID', 'Website receipt does not match the persistent research payload');
       // Preserve only the narrow receipt, never arbitrary remote response fields.
       state.websiteReceipt = Object.fromEntries(['schemaVersion', 'idempotencyKey', 'sequence', 'asOf', 'acceptedAt', 'hash', 'previousHash', 'payloadHash', 'replayed'].filter(key => Object.hasOwn(written, key)).map(key => [key, written[key]]));
       state.phase = 'published'; await saveState(file, state, env);
       return { status: 'published_and_verified', runId: state.runId, receipt: state.websiteReceipt, research: { asOf: state.payload.asOf, dataAsOf: state.payload.dataAsOf, decisions: state.payload.decisions.length } };
     } catch (cause) {
       if (['OBSERVATION_TIMEOUT', 'TIMEOUT', 'INTERRUPTED', 'CANCELLED', 'AbortError', 'TimeoutError'].includes(cause.code ?? cause.name)) return pending(cause.code ?? cause.name);
-      if (/Publisher failed \(4\d\d /.test(cause.message ?? '')) error('PUBLICATION_REJECTED', 'Website rejected the persistent research payload; its original identity is retained');
+      if (cause instanceof PublicationHttpError && cause.status >= 400 && cause.status < 500 && ![408, 425, 429].includes(cause.status)) {
+        error('PUBLICATION_REJECTED', `Website rejected the persistent research payload. ${cause.message}. The original identity is retained`);
+      }
+      if (cause.code === 'PUBLICATION_RECEIPT_INVALID') error(cause.code, cause.message);
       if (state.phase === 'verified' && !(cause instanceof SyncError)) return pending('PUBLICATION_RETRY_REQUIRED');
       throw cause;
     }

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, fields, is_dataclass
+from html import escape
 from pathlib import Path
+import re
 
 from . import config
 from .data_models import PipelineResult
@@ -167,6 +169,50 @@ def _debate_card_section(ticker: str, debate: dict) -> str:
     return ""
 
 
+def model_instructions(raw: dict) -> list[dict] | None:
+    """Distinguish an assessed empty decision set from a legacy report."""
+    model = raw.get("model") or {}
+    if model.get("required") is True and model.get("all_required_completed") is True:
+        return raw["execution_decisions"]
+    return None
+
+
+def model_instruction_fields(item: dict) -> list[tuple[str, str]]:
+    """Describe a verified plan without computing new execution values."""
+    market = item["market_evidence"][0]
+    plan = "仅观察，未提供下单价格或股数。"
+    if item["action"] == "buy":
+        plan = (f"入场参考 USD {item['entry_price']:,.2f} · 止损 USD {item['stop_price']:,.2f} · "
+                f"{item['shares']} 股 · 目标仓位 {item['target_weight']:.1%} · "
+                f"计划风险 USD {item['risk_usd']:,.2f} · "
+                f"资金基准 USD {item['reference_capital_usd']:,.2f}")
+        if item["time_stop_days"] is not None:
+            plan += f" · 时间止损 {item['time_stop_days']} 个交易日"
+    return [
+        ("为什么关注", item["why_this"]), ("为什么现在", item["why_now"]),
+        ("行情依据", f"{market['symbol']} · {market['as_of']} 日线收盘 USD {market['close']:,.2f}"),
+        ("纸面计划", plan), ("入场条件", item["entry_condition"]),
+        ("失效条件", item["invalidation"]), ("主要风险", item["risk_note"]),
+        ("有效至（纽约时间）", item["valid_for"]),
+    ]
+
+
+def _markdown_text(value: str) -> str:
+    return re.sub(r"([\\`*_{}\[\]()#+!|~])", r"\\\1", escape(value))
+
+
+def model_source_html(source: dict, *, markdown: bool = False) -> str:
+    """Render a verified public citation without activating an unsafe URL."""
+    from .llm.deepseek_required import sanitize_url
+    format_text = _markdown_text if markdown else escape
+    title = format_text(source["title"])
+    url = source["url"]
+    published = format_text(source["published_at"] or "发布时间未知")
+    if sanitize_url(url) == url:
+        title = f'<a href="{escape(url)}" rel="noreferrer">{title}</a>'
+    return f"{title}（{published}）"
+
+
 def render_markdown(r: PipelineResult) -> str:
     m = r.mrs
     mk = r.raw.get("market") or {}
@@ -210,8 +256,25 @@ def render_markdown(r: PipelineResult) -> str:
                       "币种执行边界受阻，仅供研究" if _execution_blocked(r.raw) else
                       "无达标标的，等待"))
     lines.append("")
-    lines.append(f"**系统指令**：`{r.action}` — {r.market_view}")
-    lines.append("")
+    instructions = model_instructions(r.raw)
+    overview = _markdown_text(r.market_view) if instructions is not None else r.market_view
+    lines.extend([f"**系统指令**：`{r.action}` — {overview}", ""])
+    if instructions is not None:
+        lines.extend(["## 模型最终判断与执行条件（纸面研究）", ""])
+        if not instructions:
+            lines.extend(["本轮没有新增单票指令。", ""])
+        for item in instructions:
+            action = "纸面买入计划" if item["action"] == "buy" else "观察"
+            lines.extend([f"### {_markdown_text(item['symbol'])} · {action}", "",
+                          _markdown_text(item["action_summary"]), ""])
+            for label, value in model_instruction_fields(item):
+                lines.append(f"- **{label}**：{_markdown_text(value)}")
+            if item["sources"]:
+                lines.extend(f"- **新闻来源**：{model_source_html(source, markdown=True)}"
+                             for source in item["sources"])
+            else:
+                lines.append("- 本条未引用新闻。")
+            lines.append("")
 
     # ---- MRS 明细 ----
     if m:
@@ -295,7 +358,7 @@ def render_markdown(r: PipelineResult) -> str:
             lines.append(p.card)
             # v6.3 S2：交易卡片"第六段：多空辩论证据"（只读证据附加，
             # 辩论绝不修改任何分数与闸门输出；LLM 透传时如实标注）
-            sec = _debate_card_section(p.ticker, debate)
+            sec = _debate_card_section(p.ticker, debate) if instructions is None else ""
             if sec:
                 lines.append(sec)
             lines.append("```")
@@ -318,10 +381,14 @@ def render_markdown(r: PipelineResult) -> str:
                  "LLM 不可用时按红线透传并剔除再归一化，绝不用规则估算。")
     lines.append("- 微观（GEX/0DTE/Skew）免费源缺失：缺失因子在聚合时【剔除并再归一化】，"
                  "期权维度（PCR/IV 分位）随信号日记逐日积累满 10 个样本后自动启用真实评分。")
-    lines.append(f"- 多空辩论证据层（v6.3 S2）：仅灰区标的触发（每日上限 "
-                 f"{config.DEBATE_MAX_PER_DAY} 场，HOLD 区高分线 "
-                 f"{config.DEBATE_HOLD_TSS_MIN}），辩论结论只作交易卡片第六段证据，"
-                 "不修改任何分数与闸门输出；回测路径禁用。")
+    if instructions is None:
+        lines.append(f"- 多空辩论证据层（v6.3 S2）：仅灰区标的触发（每日上限 "
+                     f"{config.DEBATE_MAX_PER_DAY} 场，HOLD 区高分线 "
+                     f"{config.DEBATE_HOLD_TSS_MIN}），辩论结论只作交易卡片第六段证据，"
+                     "不修改任何分数与闸门输出；回测路径禁用。")
+    else:
+        lines.append("- 本轮由模型在已通过风控的范围内作最终判断；"
+                     "行情、股数、止损和风险预算取自同一次纸面计划。")
     # ---- S4 多市场披露：市场标识 / 基准缺失 / 板块广度缺失 / 合规校验 / 链覆盖率 ----
     if mk:
         lines.append("")

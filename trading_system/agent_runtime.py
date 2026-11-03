@@ -43,9 +43,10 @@ REQUIRED_ACCOUNT_FILES = frozenset({
     "governance_events.jsonl",
 })
 DEPENDENCIES = ("pandas", "numpy", "yfinance", "requests", "PyYAML", "tokenizers")
+SCENE_POLICY_RELATIVE = "governance/bundles/trading/model-policy.yml"
 
 
-def policy_manifest(profile: str = PROFILE) -> dict:
+def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     required = profile == REQUIRED_PROFILE
@@ -76,15 +77,21 @@ def policy_manifest(profile: str = PROFILE) -> dict:
         ],
     }
     if required:
-        from .llm.scene_policy import KERNEL_SCENE_MAP, scene_config
+        from yaml import YAMLError
+        from .llm.scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config, validate_coverage
+        path = scene_policy_path or SOURCE_ROOT / SCENE_POLICY_RELATIVE
+        try:
+            if validate_coverage(path):
+                raise ScenePolicyError("Missing required scene definitions")
+            thinking_policy = {stage: scene_config(scene, path)["thinking"]
+                               for stage, scene in KERNEL_SCENE_MAP.items()}
+        except (OSError, ValueError, TypeError, AttributeError, YAMLError, ScenePolicyError) as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Required model scene policy is missing or invalid") from exc
         value["model_contract"] = {
             "provider": "deepseek", "model": "deepseek-flash",
             "release": "DeepSeek-V4.1-Flash-1017", "required": True,
             "thinking_mode": "scene-policy",
-            "thinking_policy": {
-                stage: scene_config(scene)["thinking"]
-                for stage, scene in KERNEL_SCENE_MAP.items()
-            },
+            "thinking_policy": thinking_policy,
             "context_tokens": 1_048_576,
             "max_output_tokens": 393_216,
             "tokenizer_sha256": "89085f12ef79460ac5f66d1119325ddfc694b4ab209d80bbd81d35f081dc9614",
@@ -159,7 +166,7 @@ def dependency_identity() -> dict:
 
 
 def executable_files(root: Path) -> list[str]:
-    paths = {"main.py", "requirements.txt"}
+    paths = {"main.py", "requirements.txt", SCENE_POLICY_RELATIVE}
     for file in (root / "trading_system").rglob("*"):
         if file.is_symlink():
             raise EvidenceInvalid("RESULT_INVALID", "Source symlinks are not supported")
@@ -466,8 +473,7 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
             or admission.get("request_sha256") != digest(json_bytes(request))
             or admission.get("policy_sha256") != digest(json_bytes(policy))
             or not isinstance(request.get("profile"), str)
-            or request.get("profile") not in SUPPORTED_PROFILES
-            or policy != strict_json(json_bytes(policy_manifest(request["profile"])))):
+            or request.get("profile") not in SUPPORTED_PROFILES):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy or request identity differs")
     expected = {"schema_version": "tiger.agent-request/v1", "profile": request["profile"],
                 "paper_account": ACCOUNT, "idempotency_key": request.get("idempotency_key")}
@@ -478,6 +484,10 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     source = verify_source(run)
     if admission.get("source_sha256") != digest(read_bytes(run, "source-manifest.json")):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission source identity differs")
+    expected_policy = policy_manifest(request["profile"],
+                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
+    if policy != strict_json(json_bytes(expected_policy)):
+        raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
     if (read_json(run, "calendar-input.json") != calendar_record
             or read_bytes(run, calendar_record["work_path"]) != calendar_content):
@@ -574,10 +584,13 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
             or not re.fullmatch(r"\d+/\d+", raw["data_coverage"])
             or not isinstance(raw.get("scan_stats"), dict)):
         raise EvidenceInvalid("RESULT_INVALID", "Required freshness and data-source disclosures are incomplete")
+    profile = read_json(run, "request.json")["profile"]
+    scene_policy_path = run / "source" / SCENE_POLICY_RELATIVE
+    providers = policy_manifest(profile, scene_policy_path=scene_policy_path)["execution"]["provider_names"]
     for lineage in raw["source_lineage"]:
         if (not isinstance(lineage, list) or len(lineage) != 2
                 or not isinstance(lineage[0], str) or not lineage[0]
-                or lineage[1] not in policy_manifest(read_json(run, "request.json")["profile"])["execution"]["provider_names"]):
+                or lineage[1] not in providers):
             raise EvidenceInvalid("RESULT_INVALID", "Data-source lineage differs from public policy")
     try:
         benchmark_date = datetime.fromisoformat(freshness["benchmark_last_bar"]).date()
@@ -651,9 +664,9 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
                         "redline": raw.get("redline", []),
                         "account_origin": "independent USD paper account, initially 100000"},
     }
-    if read_json(run, "request.json")["profile"] == REQUIRED_PROFILE:
+    if profile == REQUIRED_PROFILE:
         from .llm.required_proof import verify_required_model
-        summary["model"] = verify_required_model(run, result, admission)
+        summary["model"] = verify_required_model(run, result, admission, scene_policy_path=scene_policy_path)
         summary["action_summary"] = raw["action_summary"]
         summary["execution_decisions"] = raw["execution_decisions"]
         summary["disclosures"].update(model_mode="enabled", model_required=True)

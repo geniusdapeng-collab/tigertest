@@ -15,9 +15,10 @@ from ..search.models import CleanDocument, RawDocument
 from ..tech_chain.agents import SentimentRow, RiskAlert
 from ..redline import LLMUnavailable
 from ..redline.execution import REQUIRED_MODEL_STAGES, RequiredModelFailed
+from ..redline.model_diagnostics import validate_model_diagnostic
 from ..tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
 from .deepseek_required import (
-    MODEL, RELEASE, SEARCH_MODE, sanitize_url, validate_schema,
+    MODEL, RELEASE, SEARCH_MODE, retryable_search_failure, sanitize_url, validate_schema,
     DeepSeekRequiredClient,
 )
 from .model_budget import (
@@ -76,10 +77,10 @@ def _same_watch_facts(actual, observed) -> bool:
     return True
 
 
-def verify_required_model(run, result: dict, admission: dict) -> dict:
+def verify_required_model(run, result: dict, admission: dict, *, scene_policy_path=None) -> dict:
     """No saved success flag is authoritative: walk bound stage IO again."""
     try:
-        return _verify(run, result, admission)
+        return _verify(run, result, admission, scene_policy_path=scene_policy_path)
     except EvidenceInvalid:
         raise
     except (KeyError, ValueError, TypeError, IndexError, LLMUnavailable,
@@ -87,7 +88,7 @@ def verify_required_model(run, result: dict, admission: dict) -> dict:
         _fail()
 
 
-def _verify(run, result, admission):
+def _verify(run, result, admission, *, scene_policy_path=None):
     clock = admission["clock"]
     run_date, market_timezone = clock["run_date"], clock["market_timezone"]
     if (type(run_date) is not str or date.fromisoformat(run_date).isoformat() != run_date
@@ -98,6 +99,7 @@ def _verify(run, result, admission):
     by_stage = {row["stage"]: row for row in events if row["kind"] == "end"}
     counts = {stage: 0 for stage in REQUIRED_MODEL_STAGES}
     response_ids, call_ids, searches = [], set(), []
+    chat_schema_retries = 0
     native_docs, decision_output, decision_inputs, decision_value = {}, None, None, None
     semantic_values, clean_expected, score_expected, collected_expected = {}, [], [], []
     def snapshot(row, role):
@@ -146,6 +148,7 @@ def _verify(run, result, admission):
                 expected_queries = [query + " as of " + admission["clock"]["run_date"]
                                     for query in {**CHAIN_TOPICS, **SECTOR_TOPICS}.values()]
                 query = request["request"]["query"]
+                retries = proof.get("retry_diagnostics", [])
                 if (call["method"] != "model.deepseek.search" or query not in expected_queries
                         or request["schema"] != "tiger.deepseek-search-request.v1"
                         or proof["schema"] != "tiger.deepseek-search.v1"
@@ -155,8 +158,13 @@ def _verify(run, result, admission):
                         or proof["query_sha256"] != request["query_sha256"]
                         or proof["search_mode"] != SEARCH_MODE
                         or proof["response_sha256"] != _hash({"results": proof["results"]})
+                        or type(retries) is not list or len(retries) > 1
+                        or any(not retryable_search_failure(item) for item in retries)
+                        or type(proof["result_count"]) is not int
+                        or type(proof["usable_result_count"]) is not int
                         or proof["usable_result_count"] != len(proof["results"])
-                        or not 0 < proof["usable_result_count"] <= proof["result_count"] <= 4):
+                        or not 0 <= proof["usable_result_count"] <= proof["result_count"] <= 4
+                        or bool(proof["result_count"]) != bool(proof["usable_result_count"])):
                     _fail()
                 searches.append(query)
                 for doc in proof["results"]:
@@ -179,6 +187,12 @@ def _verify(run, result, admission):
                 continue
             if call["method"] != "model.deepseek.chat":
                 _fail()
+            retries = proof.get("retry_diagnostics", [])
+            if (type(retries) is not list or chat_schema_retries + len(retries) > 1
+                    or any(validate_model_diagnostic(item)["code"] != "OUTPUT_SCHEMA_MISMATCH"
+                           or "schema_keyword" not in item for item in retries)):
+                _fail()
+            chat_schema_retries += len(retries)
             if stage == "clean.llm_semantic":
                 selected_ids = ids[chat_index * 12:(chat_index + 1) * 12]
                 expected_schema = clean_schema(selected_ids)
@@ -234,7 +248,7 @@ def _verify(run, result, admission):
                         sort_keys=True, separators=(",", ":"), allow_nan=False)
                     + "\nJSON field guidance:\n{}"},
             ]
-            thinking = scene_config(KERNEL_SCENE_MAP[stage])["thinking"]
+            thinking = scene_config(KERNEL_SCENE_MAP[stage], scene_policy_path)["thinking"]
             thinking_mode = thinking["type"]
             reasoning_effort = thinking.get("effort")
             request_core = {"model": MODEL, "messages": expected_messages,

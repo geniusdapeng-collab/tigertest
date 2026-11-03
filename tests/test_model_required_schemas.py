@@ -174,6 +174,14 @@ def test_no_candidates_allows_only_empty_decisions_with_real_explanation():
         validate_schema(value, schema)
 
 
+@pytest.mark.parametrize("text", [" Waiting", "Waiting ", "等待　", "\ufeff等待"])
+def test_decision_text_must_satisfy_the_website_plain_text_contract(text):
+    schema, value = examples()["decision"]
+    value["decisions"][0]["why_now"] = text
+    with pytest.raises(LLMUnavailable):
+        validate_schema(value, schema)
+
+
 @pytest.mark.parametrize("action", ["HOLD", "WATCH", "SELL"])
 def test_top_action_has_no_legacy_or_publisher_alias(action):
     schema, value = examples()["decision"]

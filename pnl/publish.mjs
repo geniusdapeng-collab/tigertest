@@ -2,6 +2,28 @@ import { readFile, stat } from 'node:fs/promises';
 import { isCliEntry } from './lib/cli.mjs';
 import { digest, validateRecord, validateResearch } from './lib/schema.mjs';
 
+export class PublicationHttpError extends Error {
+  constructor(status, remoteCode) {
+    super(`Publisher failed (${status} ${remoteCode})`);
+    this.status = status;
+  }
+}
+
+export function publicationReceiptMatches(receipt, record) {
+  if (receipt?.schemaVersion !== 1 || receipt.idempotencyKey !== record.idempotencyKey
+      || receipt.asOf !== record.asOf || typeof receipt.replayed !== 'boolean') return false;
+  const { sequence, acceptedAt, previousHash, payloadHash, hash } = receipt;
+  return Number.isSafeInteger(sequence) && sequence > 0
+    && typeof acceptedAt === 'string' && Number.isFinite(Date.parse(acceptedAt))
+    && typeof previousHash === 'string' && /^[a-f0-9]{64}$/.test(previousHash)
+    && payloadHash === digest(record)
+    && hash === digest({ sequence, acceptedAt, previousHash, payloadHash, record });
+}
+
+function invalidReceipt() {
+  return Object.assign(new Error('Read-back receipt did not match the submitted payload'), { code: 'PUBLICATION_RECEIPT_INVALID' });
+}
+
 export async function publishRecord({ baseUrl, token, record, research = false, allowLocalHttp = false, fetcher = fetch }) {
   (research ? validateResearch : validateRecord)(record);
   if (typeof token !== 'string' || token.length < 32 || token.length > 512 || /\s/.test(token)) throw new Error('TIGER_PNL_WRITE_TOKEN must contain 32-512 whitespace-free characters');
@@ -10,14 +32,29 @@ export async function publishRecord({ baseUrl, token, record, research = false, 
   if (url.protocol !== 'https:' && !(allowLocalHttp && url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) throw new Error('HTTPS is required; --allow-local-http permits loopback tests only');
   const request = async (path, options) => {
     const response = await fetcher(new URL(path, url), { ...options, redirect: 'error', signal: AbortSignal.timeout(20_000), headers: { Authorization: `Bearer ${token}`, ...options.headers } });
-    const body = await response.json();
-    if (!response.ok) throw new Error(`Publisher failed (${response.status} ${body.error?.code ?? 'UNKNOWN_ERROR'})`);
-    return body;
+    if (!response.ok) {
+      // An upstream proxy can reject the request with HTML or an empty body.
+      // Keep the authoritative HTTP status even without a Tiger error envelope.
+      let remoteCode = 'UNKNOWN_ERROR';
+      if (response.headers.get('content-type')?.startsWith('application/json')) {
+        const body = await response.json().catch(() => null);
+        if (typeof body?.error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(body.error.code)) remoteCode = body.error.code;
+      } else {
+        await response.body?.cancel();
+      }
+      throw new PublicationHttpError(response.status, remoteCode);
+    }
+    try { return await response.json(); }
+    catch (cause) {
+      if (!(cause instanceof SyntaxError)) throw cause;
+      throw invalidReceipt();
+    }
   };
   const key = record.idempotencyKey;
   const posted = await request(research ? '/api/v1/research' : '/api/v1/records', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(record) });
   const verified = await request(`${research ? '/api/v1/research/receipts/' : '/api/v1/receipts/'}${encodeURIComponent(key)}`, { method: 'GET' });
-  if (posted.receipt?.idempotencyKey !== key || posted.receipt?.payloadHash !== digest(record) || verified.receipt?.hash !== posted.receipt.hash || verified.receipt?.payloadHash !== digest(record) || verified.receipt?.idempotencyKey !== key) throw new Error('Read-back receipt did not match the submitted payload');
+  if (!publicationReceiptMatches(posted?.receipt, record) || !publicationReceiptMatches(verified?.receipt, record)
+      || verified.receipt.hash !== posted.receipt.hash) throw invalidReceipt();
   return verified.receipt;
 }
 async function main() {

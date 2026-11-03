@@ -24,7 +24,7 @@ from .agent_evidence import (
     read_bytes, read_json, safe_path, strict_json,
 )
 from .agent_runtime import (
-    ACCOUNT, DEPENDENCIES, KEY_RE, PROFILE, SUPPORTED_PROFILES, RUN_RE, SOURCE_ROOT,
+    ACCOUNT, DEPENDENCIES, KEY_RE, PROFILE, SUPPORTED_PROFILES, RUN_RE, SOURCE_ROOT, SCENE_POLICY_RELATIVE,
     committed_pointer, freeze_source, frozen_clock, pointer_read, policy_manifest,
     run_environment, stage_account, stage_calendar, verify_run,
 )
@@ -284,9 +284,10 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
             })
             clock = frozen_clock()
             parent = pointer_read(state)
-            policy = policy_manifest(request["profile"])
-            atomic_json(run, "policy.json", policy, exclusive=True)
             freeze_source(run, source)
+            policy = policy_manifest(request["profile"],
+                                     scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
+            atomic_json(run, "policy.json", policy, exclusive=True)
             stage_account(state, run, parent)
             stage_calendar(run)
             atomic_json(run, "admission.json", {

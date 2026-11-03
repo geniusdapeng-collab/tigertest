@@ -305,13 +305,99 @@ def test_chat_redacts_key_and_credential_links_before_persistence(configured, mo
     assert KEY not in serialized and "private-jwt" not in serialized
 
 
-@pytest.mark.parametrize("payload", [{}, {"results": []}, {"results": [
+def test_required_chat_retries_one_schema_mismatch_per_run(configured, monkeypatch):
+    first_invalid = chat_response({"score": 12, "reason": KEY}, id="invalid-first")
+    valid = chat_response(id="valid-second")
+    next_invalid = chat_response({"score": 12, "reason": "another"}, id="invalid-third")
+    responses = iter([first_invalid, valid, next_invalid])
+    sent = []
+
+    def post(url, **kwargs):
+        sent.append((url, kwargs["data"]))
+        return Response(next(responses))
+
+    monkeypatch.setattr(requests, "post", post)
+    client = DeepSeekRequiredClient(configured)
+    assert client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)["score"] == 7
+    assert sent[0] == sent[1]
+    proof = configured.calls[0]["output"]
+    assert proof["response_id"] == "valid-second"
+    assert proof["retry_diagnostics"] == [{
+        "schema": "tiger.model-failure.v1", "provider": "deepseek",
+        "code": "OUTPUT_SCHEMA_MISMATCH", "schema_path": "/score", "schema_keyword": "maximum",
+    }]
+    assert KEY not in json.dumps(configured.calls)
+    assert "invalid-first" not in json.dumps(configured.calls)
+    with pytest.raises(LLMUnavailable, match="OUTPUT_SCHEMA_MISMATCH"):
+        client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)
+    assert len(sent) == 3
+    assert len(client.receipts) == 1
+
+
+@pytest.mark.parametrize("payload", [{}, {"results": [
     {"url": "https://example.com/?token=x", "title": "unsafe", "content": "body"}]}])
 def test_search_without_usable_evidence_fails(configured, monkeypatch, payload):
     monkeypatch.setattr(requests, "post", lambda *a, **k: Response(payload))
     client = DeepSeekRequiredClient(configured)
     with pytest.raises(LLMUnavailable):
         client.search("public evidence")
+    assert not client.search_receipts
+
+
+def test_native_search_records_zero_hit_topic(configured, monkeypatch):
+    configured._active.spec.name = "search.collect"
+    response = Response({"results": []})
+    monkeypatch.setattr(requests, "post", lambda *a, **k: response)
+    client = DeepSeekRequiredClient(configured)
+    assert client.search("a narrowly defined public topic") == []
+    proof = configured.calls[0]["output"]
+    assert proof["result_count"] == proof["usable_result_count"] == 0
+    assert len(client.search_receipts) == 1
+
+
+@pytest.mark.parametrize("first_status", [408, 429, 503])
+def test_native_search_retries_transient_http_once_with_keyless_proof(
+        configured, monkeypatch, first_status):
+    configured._active.spec.name = "search.collect"
+    transient = Response({"error": KEY}, status=first_status)
+    valid = Response({"results": [{
+        "url": "https://example.com/real-document", "title": "Public evidence",
+        "content": "A factual observation from the original source.",
+    }]})
+    pending = iter([transient, valid])
+    monkeypatch.setattr(requests, "post", lambda *a, **k: next(pending))
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda _: None)
+    client = DeepSeekRequiredClient(configured)
+    assert len(client.search("public evidence")) == 1
+    proof = configured.calls[0]["output"]
+    assert [item["http_status"] for item in proof["retry_diagnostics"]] == [first_status]
+    assert proof["transport_response_sha256"] == hashlib.sha256(valid.body).hexdigest()
+    assert transient.closed and valid.closed
+    assert client.describe()["remote_requests"] == 2
+    assert KEY not in json.dumps(configured.calls)
+
+
+def test_native_search_never_retries_auth_failure_or_exhausted_retry(
+        configured, monkeypatch):
+    configured._active.spec.name = "search.collect"
+    responses = []
+    def post(*a, **k):
+        response = Response(status=status)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda _: None)
+    status = 401
+    client = DeepSeekRequiredClient(configured)
+    with pytest.raises(LLMUnavailable, match="HTTP_401"):
+        client.search("public evidence")
+    assert len(responses) == 1
+    status = 503
+    with pytest.raises(LLMUnavailable, match="HTTP_503"):
+        client.search("public evidence")
+    assert len(responses) == 3
+    assert all(response.closed for response in responses)
     assert not client.search_receipts
 
 

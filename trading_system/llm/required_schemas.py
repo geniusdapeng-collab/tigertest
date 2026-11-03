@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 PLAIN_TEXT_PATTERN = r"^(?!\s*$)[^<>\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]+$"
+PUBLIC_TEXT_PATTERN = r"^(?![\s\ufeff])(?!.*[\s\ufeff]$)" + PLAIN_TEXT_PATTERN[1:]
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,14}$"
 TICKER_PATTERN = r"^[A-Z0-9][A-Z0-9.\-]{0,14}$"
 _ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
@@ -34,9 +35,9 @@ def _object(**properties) -> dict:
             "additionalProperties": False}
 
 
-def _text(maximum: int) -> dict:
+def _text(maximum: int, *, public: bool = False) -> dict:
     return {"type": "string", "minLength": 1, "maxLength": maximum,
-            "pattern": PLAIN_TEXT_PATTERN}
+            "pattern": PUBLIC_TEXT_PATTERN if public else PLAIN_TEXT_PATTERN}
 
 
 def _enum(values: list[str]) -> dict:
@@ -114,9 +115,10 @@ def decision_schema(symbols, doc_ids, market_ids) -> dict:
         raise ValueError("MODEL_SCHEMA_MARKET_EVIDENCE_REQUIRED")
     symbol = _enum(candidates) if candidates else {"type": "string", "pattern": r"(?!)"}
     decision = _object(
-        symbol=symbol, action=_enum(["buy", "watch"]), action_summary=_text(300),
-        why_this=_text(1200), why_now=_text(1200), entry_condition=_text(1200),
-        invalidation=_text(1200), risk_note=_text(1200),
+        symbol=symbol, action=_enum(["buy", "watch"]), action_summary=_text(300, public=True),
+        why_this=_text(1200, public=True), why_now=_text(1200, public=True),
+        entry_condition=_text(1200, public=True), invalidation=_text(1200, public=True),
+        risk_note=_text(1200, public=True),
         source_ids=_array(_enum([*docs, *markets]), 1, 9, unique=True),
     )
     # A buy must carry at least its own market snapshot and one article. The
@@ -125,5 +127,5 @@ def decision_schema(symbols, doc_ids, market_ids) -> dict:
         {"properties": {"action": {"const": "buy"}, "source_ids": {"minItems": 2}}},
         {"properties": {"action": {"const": "watch"}}},
     ]}]
-    return _object(action=_enum(["BUY", "WAIT", "AVOID"]), action_summary=_text(1200),
+    return _object(action=_enum(["BUY", "WAIT", "AVOID"]), action_summary=_text(1200, public=True),
                    decisions=_array(decision, 0, len(candidates), unique=True))
