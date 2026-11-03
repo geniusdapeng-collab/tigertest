@@ -43,6 +43,7 @@ REQUIRED_ACCOUNT_FILES = frozenset({
     "governance_events.jsonl",
 })
 DEPENDENCIES = ("pandas", "numpy", "yfinance", "requests", "PyYAML", "tokenizers")
+SCENE_POLICY_RELATIVE = "governance/bundles/trading/model-policy.yml"
 
 
 def policy_manifest(profile: str = PROFILE) -> dict:
@@ -159,7 +160,7 @@ def dependency_identity() -> dict:
 
 
 def executable_files(root: Path) -> list[str]:
-    paths = {"main.py", "requirements.txt"}
+    paths = {"main.py", "requirements.txt", SCENE_POLICY_RELATIVE}
     for file in (root / "trading_system").rglob("*"):
         if file.is_symlink():
             raise EvidenceInvalid("RESULT_INVALID", "Source symlinks are not supported")
