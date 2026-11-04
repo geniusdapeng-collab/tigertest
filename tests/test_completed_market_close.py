@@ -12,6 +12,7 @@ from trading_system.data_models import StockCandidate
 from trading_system.llm.required_proof import verify_required_model
 from trading_system.market_close import completed_session, macro_limits, next_scheduled_close, verify_close_evidence
 from trading_system.pipeline import ProviderDataError, UniverseScannerAgent, _single_with_fallback
+from trading_system.security_roster import verify_observed_roster
 from trading_system.redline.execution import (ExecutionContext, StrictDataStale,
                                                StrictObservationError)
 from test_model_required_workflow import required_fixture
@@ -106,6 +107,11 @@ def test_model_daily_uses_one_completed_session_and_same_spy_chart(tmp_path, mon
         frame = context["market_data"]["stock_ohlcv"]["AAA"]
         context["watchlist"] = [StockCandidate("AAA", price=float(frame["Close"].iloc[-1]))]
         context["scan_stats"]["selected"] = 1
+        # This fixture replaces the normal shortlist to isolate the market
+        # evidence path. Keep its accompanying scanner rows consistent.
+        for row in context["scan_decisions"].values():
+            row.pop("selection", None)
+        context["scan_decisions"]["AAA"] = {"hard_filter": "pass", "selection": "baseline"}
         return context["watchlist"]
 
     monkeypatch.setattr(UniverseScannerAgent, "execute", observed_watch)
@@ -134,7 +140,16 @@ def test_model_daily_uses_one_completed_session_and_same_spy_chart(tmp_path, mon
     assert [call["method"] for call in chart["io_calls"]] == ["file.write_text"]
     assert "已完成收盘交易日" in chart["value"]["html"]["text"]
     verify_close_evidence(root, admission, freshness)
-    plans = result["raw"]["execution_decisions"]
+    raw = result["raw"]
+    roster = raw["security_roster"]
+    assert roster["basis"] == "reviewed_pool_observed_now"
+    assert roster["symbols"] == {"AAA": "us:AAA", "BBB": "us:BBB", "CCC": "us:CCC"}
+    assert stage["value"]["security_roster"] == roster
+    verify_observed_roster(root, raw, date(2026, 11, 24), execution.admitted_at)
+    with pytest.raises(EvidenceInvalid, match="security roster differs"):
+        verify_observed_roster(root, {**raw, "security_roster": {**roster, "symbols": {"BBB": "us:AAA"}}},
+                               date(2026, 11, 24), execution.admitted_at)
+    plans = raw["execution_decisions"]
     assert [plan["valid_for"] for plan in plans] == ["2026-11-27T13:00:00-05:00"]
     assert verify_required_model(root, result, admission) == result["raw"]["model"]
     assert denied == []

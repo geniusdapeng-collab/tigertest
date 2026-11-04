@@ -113,7 +113,8 @@ class DailyStageSpec:
     allow_passthrough: bool = False
 
 
-def daily_stage_specs(model_required: bool = False) -> tuple[DailyStageSpec, ...]:
+def daily_stage_specs(model_required: bool = False, *,
+                      authoritative_paper: bool = False) -> tuple[DailyStageSpec, ...]:
     """The sole strict daily order: 3 setup + 20 registered pipeline + 16 tail."""
     from . import DEFERRED_STEPS, STEP_REGISTRY
     setup = (
@@ -123,11 +124,13 @@ def daily_stage_specs(model_required: bool = False) -> tuple[DailyStageSpec, ...
     )
     pipeline = tuple(DailyStageSpec(s.name, s.driver, s.owner, s.driver == "llm" and not model_required)
                      for s in STEP_REGISTRY if s.name not in DEFERRED_STEPS)
+    paper = (("paper.step", "simulator"), ("paper.persist", "simulator"))
+    journal = (("journal.log", "journal"), ("journal.settle", "journal"),
+               ("journal.stats", "journal"))
     tail = tuple(DailyStageSpec(name, "rules", owner) for name, owner in (
         ("accounting.validate", "main"), ("report.initial", "report"),
-        ("journal.log", "journal"), ("journal.settle", "journal"),
-        ("journal.stats", "journal"), ("paper.step", "simulator"),
-        ("paper.persist", "simulator"), ("governance.initialize", "governance_bridge"),
+        *(paper + journal if authoritative_paper else journal + paper),
+        ("governance.initialize", "governance_bridge"),
         ("review.daily", "review.chief"), ("governance.emit", "governance_bridge"),
         ("governance.verify", "governance_bridge"), ("report.final_json", "report"),
         ("report.plan", "triggers"), ("report.markdown", "report"),
@@ -136,8 +139,9 @@ def daily_stage_specs(model_required: bool = False) -> tuple[DailyStageSpec, ...
     return setup + pipeline + tail
 
 
-def daily_stage_contract(model_required: bool = False) -> list[dict]:
-    return [asdict(spec) for spec in daily_stage_specs(model_required)]
+def daily_stage_contract(model_required: bool = False, *, authoritative_paper: bool = False) -> list[dict]:
+    return [asdict(spec) for spec in daily_stage_specs(
+        model_required, authoritative_paper=authoritative_paper)]
 
 
 class EvidenceStore(Protocol):
@@ -211,7 +215,8 @@ class StageScope:
 
 class ExecutionContext:
     def __init__(self, *, run_id: str, run_date: date, paths: RuntimePaths,
-                 policy: ExecutionPolicy, store: EvidenceStore, admitted_at: datetime | None = None):
+                 policy: ExecutionPolicy, store: EvidenceStore, admitted_at: datetime | None = None,
+                 authoritative_paper: bool = False, account_version_before: str | None = None):
         if not isinstance(run_id, str) or not run_id:
             raise ExecutionContractError("run_id is required")
         if not isinstance(run_date, date) or isinstance(run_date, datetime):
@@ -220,6 +225,10 @@ class ExecutionContext:
         self.paths, self.policy, self.store = paths, policy, store
         self.model_required = policy.policy_id == REQUIRED_POLICY_ID
         self.admitted_at = admitted_at
+        self.authoritative_paper = authoritative_paper
+        self.account_version_before = account_version_before
+        if authoritative_paper and (not self.model_required or admitted_at is None):
+            raise ExecutionContractError("Authoritative paper requires the admitted model workflow")
         self.completed_session_close = None
         if self.model_required and admitted_at is not None:
             from ..market_close import completed_session
@@ -229,7 +238,7 @@ class ExecutionContext:
             if admitted_at.astimezone(ZoneInfo(policy.market_timezone)).date() != run_date:
                 raise ExecutionContractError("Admission timestamp differs from the frozen market date")
         self.signal_benchmark_chart = None
-        self._specs = daily_stage_specs(self.model_required)
+        self._specs = daily_stage_specs(self.model_required, authoritative_paper=authoritative_paper)
         self._cursor = 0
         self._sequence = 0
         self._owner_thread = get_ident()

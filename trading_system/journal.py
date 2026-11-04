@@ -207,10 +207,25 @@ class Journal:
 
     # ------------------------------------------------------------
 
-    def stats(self) -> dict:
+    def project_paper(self, state: dict) -> tuple[int, int]:
+        """Persist the paper-account projection, keeping old hypotheses separate."""
+        from .paper_ledger import project_journal
+        previous = {row["signal_id"]: row for row in self.records
+                    if row.get("accounting_basis") == "paper_execution" and row.get("signal_id")}
+        records = project_journal(self.records, state)
+        facts = [row for row in records if row.get("accounting_basis") == "paper_execution"]
+        added = sum(row["signal_id"] not in previous for row in facts)
+        settled = sum(row["status"] == "closed"
+                      and previous.get(row["signal_id"], {}).get("status") != "closed" for row in facts)
+        self.records = records
+        self.save()
+        return added, settled
+
+    def stats(self, *, paper_only: bool = False) -> dict:
         require_usd_records(self.records, scope=f"信号日记 {self.path}")
-        closed = [r for r in self.records if r["status"] == "closed" and r.get("r") is not None]
-        open_n = sum(1 for r in self.records if r["status"] == "open")
+        records = [r for r in self.records if r.get("accounting_basis") == "paper_execution"] if paper_only else self.records
+        closed = [r for r in records if r["status"] == "closed" and r.get("r") is not None]
+        open_n = sum(1 for r in records if r["status"] == "open")
         rs = [r["r"] for r in closed]
         wins = [r for r in rs if r > 0]
         losses = [r for r in rs if r <= 0]
@@ -235,4 +250,7 @@ class Journal:
             "last20": agg(rs[-20:]),
             "last50": agg(rs[-50:]),
             "by_template": {k: agg(v) for k, v in sorted(by_template.items())},
+            **({"accounting_basis": "paper_execution",
+                "legacy_hypotheses": len(self.records) - len(records),
+                "pending": sum(r["status"] == "pending" for r in records)} if paper_only else {}),
         }

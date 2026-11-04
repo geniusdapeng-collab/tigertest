@@ -19,7 +19,11 @@ from ..search.credibility import evidence_for
 from ..search.models import CleanDocument, RawDocument
 from ..tech_chain.agents import RiskAlert, SentimentRow
 from ..tech_chain.universe import TECH_SUBCHAINS
-from .company_evidence import COMPANY_EVIDENCE_CONTRACT, collect_candidate_evidence
+from .company_evidence import (COMPANY_EVIDENCE_CONTRACT, SEARCH_COUNT, candidate_evidence,
+                               candidate_searches, collect_candidate_evidence)
+from .sec_identity import (SEC_COMPANY_CONTRACT, SEC_VERIFY_METHOD, SecTransport,
+                           confirm_filings, sec_verification_input)
+from ..redline.model_diagnostics import RequiredModelUnavailable
 from .deepseek_required import MODEL, RELEASE, SEARCH_MODE, sanitize_url, validate_schema
 from .required_schemas import (clean_schema, sentiment_schema, risk_schema,
                                narrative_schema, decision_schema)
@@ -165,9 +169,9 @@ def market_asof(market_data: dict, symbols: list[str], assessment: dict) -> dict
         _fail("Mandatory model market timestamps differ from frozen data freshness")
 
 
-def _ids(docs) -> list[str]:
+def _ids(docs, *, allow_empty=False) -> list[str]:
     values = [_fields(_fields(d).get("raw", _fields(d)))["doc_id"] for d in docs]
-    if not values or len(set(values)) != len(values):
+    if (not values and not allow_empty) or len(set(values)) != len(values):
         _fail("Mandatory model needs nonempty unique evidence documents")
     return values
 
@@ -178,8 +182,8 @@ def _fields(value) -> dict:
     return value["fields"] if value.get("__type__") == "dataclass" else value
 
 
-def _docs(docs, *, legacy: bool = False, project_annotations: bool = False) -> list[dict]:
-    _ids(docs)
+def _docs(docs, *, legacy: bool = False, project_annotations: bool = False, allow_empty=False) -> list[dict]:
+    _ids(docs, allow_empty=allow_empty)
     result = []
     for doc in docs:
         doc = _fields(doc)
@@ -211,8 +215,15 @@ def chat_arguments(stage: str, inputs: dict, schema: dict, assessment: dict) -> 
     if "assessment" in inputs:
         _fail("Mandatory model assessment may only come from frozen execution")
     task = TASKS[stage]
+    if stage in {"tech.sentiment", "tech.risk", "sector.narrative"} and inputs.get("documents") == []:
+        task = ("本次无通过时点与来源校验的可计分文档。按给定 schema 完成所有要求的对象，"
+                "引用为空、风险告警为空，有评分的项目使用 schema 的中性固定值。"
+                "原因应明确写明证据不足，勿推断情绪、公司指引或没有风险。")
     if stage == "decision.debate" and "company_evidence" in inputs:
         task += COMPANY_EVIDENCE_TASK
+        if inputs["company_evidence"]["contract"] == SEC_COMPANY_CONTRACT:
+            task += ("sec_filing来自独立SEC提交记录和正式原文；核对其报告期和申报时间。"
+                     "verification_unavailable表示原文核验不可用，搜索摘要不能代替。")
     return {"system": SYSTEM, "user": task, "schema_hint": {}, "schema": schema,
             "public_payload": normalize({"assessment": assessment, **inputs})}
 
@@ -256,7 +267,7 @@ def plan_clean_documents(docs, plan):
 
 def plan_analysis_documents(docs, other_inputs, schema, plan) -> dict:
     """If necessary, synthesize from every previously verified full-article annotation."""
-    full = {**other_inputs, "documents": _docs(docs)}
+    full = {**other_inputs, "documents": _docs(docs, allow_empty=True)}
     if _window_fits(plan, full, schema):
         return full
     projected = {**other_inputs, "documents": _docs(docs, project_annotations=True),
@@ -332,25 +343,45 @@ def clean(llm, docs: list[RawDocument]) -> list[CleanDocument]:
 
 def sentiment(llm, docs: list[CleanDocument]) -> dict[str, SentimentRow]:
     chains = list(TECH_SUBCHAINS)
-    out = _call_analysis(llm, "tech.sentiment", docs, {"chains": chains}, sentiment_schema(chains, _ids(docs)))
+    out = _call_analysis(llm, "tech.sentiment", docs, {"chains": chains}, sentiment_schema(chains, _ids(docs, allow_empty=True), allow_empty=True))
     _coverage(out["chains"], "chain_id", chains)
     return {row["chain_id"]: SentimentRow(chain_id=row["chain_id"], heat=row["heat"],
         sentiment_score=row["sentiment_score"], narrative_change=row["narrative_change"],
-        key_drivers=row["key_drivers"], degraded=False) for row in out["chains"]}
+        key_drivers=row["key_drivers"], degraded=not docs) for row in out["chains"]}
 
 
 def risk(llm, docs: list[CleanDocument]) -> list[RiskAlert]:
     out = _call_analysis(llm, "tech.risk", docs, {"chains": list(TECH_SUBCHAINS)},
-                risk_schema(list(TECH_SUBCHAINS), _ids(docs)))
+                risk_schema(list(TECH_SUBCHAINS), _ids(docs, allow_empty=True), allow_empty=True))
     return [RiskAlert(**row) for row in out["alerts"]]
 
 
 def narrative(llm, docs: list[CleanDocument], etfs: list[str]) -> dict:
-    out = _call_analysis(llm, "sector.narrative", docs, {"etfs": etfs}, narrative_schema(etfs, _ids(docs)))
+    out = _call_analysis(llm, "sector.narrative", docs, {"etfs": etfs}, narrative_schema(etfs, _ids(docs, allow_empty=True), allow_empty=True))
     _coverage(out["sectors"], "etf", etfs)
     return {row["etf"]: {"score": row["narrative_score"], "bias": row["eps_revision_bias"],
         "tone": row["guidance_tone"], "evidence": "; ".join(row["evidence"]),
         "evidence_ids": row["evidence_ids"]} for row in out["sectors"]}
+
+
+def _direct_company_evidence(llm, approved):
+    execution = llm.execution
+    run_date, cutoff = execution.run_date, execution.admitted_at
+    transport = SecTransport()
+    outcomes, documents = {}, {}
+    for symbol, query in candidate_searches(approved, run_date).items():
+        try:
+            rows = llm.search(query, count=SEARCH_COUNT, need_content=True)
+        except RequiredModelUnavailable as exc:
+            outcome, filings = candidate_evidence(symbol, [], run_date, cutoff, failure=exc.diagnostic)
+        else:
+            request = sec_verification_input(symbol, rows, run_date, cutoff)
+            response = (execution.call_io(SEC_VERIFY_METHOD, request, lambda: transport.observe(request))
+                        if request["filings"] else {"filings": []})
+            outcome, filings = confirm_filings(request, rows, response, run_date, cutoff)
+        outcomes[symbol] = outcome
+        documents.update((filing["id"], filing) for filing in filings)
+    return outcomes, documents
 
 
 def decision(llm, context: dict, docs: list[CleanDocument], account_usd: float) -> dict:
@@ -362,8 +393,11 @@ def decision(llm, context: dict, docs: list[CleanDocument], account_usd: float) 
     market_by_symbol = {snapshot["symbol"]: snapshot for snapshot in market}
     market_by_id = {snapshot["id"]: snapshot for snapshot in market}
     original_action = context.get("action")
-    company_outcomes, company_documents = collect_candidate_evidence(llm, list(approved))
-    company_evidence = {"contract": COMPANY_EVIDENCE_CONTRACT, "candidates": company_outcomes}
+    direct_edgar = getattr(llm.execution, "admitted_at", None) is not None
+    collector = _direct_company_evidence if direct_edgar else collect_candidate_evidence
+    company_outcomes, company_documents = collector(llm, list(approved))
+    company_evidence = {"contract": SEC_COMPANY_CONTRACT if direct_edgar else COMPANY_EVIDENCE_CONTRACT,
+                        "candidates": company_outcomes}
     out = _call_analysis(llm, "decision.debate", docs,
         {"approved_picks": [asdict(pick) for pick in approved.values()],
          "watch_candidates": [asdict(candidate) for candidate in watch],

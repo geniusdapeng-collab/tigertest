@@ -581,6 +581,8 @@ def engine(run: Path) -> int:
             admitted_at=datetime.fromisoformat(admission["clock"]["admitted_at_utc"]),
             paths=paths, policy=ExecutionPolicy(**policy_args),
             store=EvidenceStore(run, run.name),
+            authoritative_paper=bool(policy.get("paper_ledger_contract")),
+            account_version_before=(admission["parent"] or {}).get("version_sha256"),
         )
         main_file = run / "source" / "main.py"
         spec = importlib.util.spec_from_file_location("tiger_frozen_main", main_file)

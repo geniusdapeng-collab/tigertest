@@ -234,6 +234,21 @@ class TestTechChain:
         # 全部维度在 → 无降级
         assert "tech.sentiment" not in mem.degraded_components
 
+    def test_fusion_missing_risk_documents_does_not_gain_score(self):
+        from trading_system.tech_chain.agents import ChainMonitorRow
+        from trading_system.tech_chain.fusion import TechChainFusionAgent
+
+        monitor = [ChainMonitorRow(chain_id="memory", chain_mom20=0.02)]
+        fusion = TechChainFusionAgent()
+        missing = fusion.execute(monitor, [], {}, [], risk_evidence_available=False)
+        checked = fusion.execute(monitor, [], {}, [], risk_evidence_available=True)
+        unknown_memory = next(row for row in missing if row.chain_id == "memory")
+        checked_memory = next(row for row in checked if row.chain_id == "memory")
+        assert unknown_memory.risk_level is None
+        assert unknown_memory.prosperity == 6 and "tech.risk" in unknown_memory.degraded_components
+        assert checked_memory.risk_level == 0 and checked_memory.prosperity > 6
+        assert all(row.prosperity is None and row.bonus_hint == 1 for row in missing if row.chain_id != "memory")
+
     def test_fusion_degraded_passthrough(self):
         """LLM 环节透传时：fusion 剔除该维度再归一化，且如实披露降级。"""
         from trading_system.tech_chain.agents import ChainMonitorRow

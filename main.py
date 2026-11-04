@@ -155,7 +155,7 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
     from trading_system.governance_bridge import GovernanceBridge
     from trading_system.journal import Journal
     from trading_system.ledger_io import read_json_strict, write_text_atomic
-    from trading_system.pipeline import _single_with_fallback
+    from trading_system.pipeline import ProviderDataError, _single_with_fallback
     from trading_system.providers import get_provider
     from trading_system.providers.base import is_synthetic
     from trading_system.redline.execution import (EvidenceWriteError, ExecutionContractError,
@@ -251,11 +251,100 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
                                    lambda: to_markdown(result, str(paths.reports_dir), strict=True))
         stage.output({"json": read_file(json_path), "markdown": read_file(md_path)})
 
+    def paper_transition():
+        from trading_system.paper_ledger import PaperObservations
+
+        bar_cache = {}
+        references = {}
+        observations = None
+        if execution.authoritative_paper:
+            def load_paper_frame(ticker):
+                def observed():
+                    try:
+                        return _single_with_fallback(settle_provider, "ohlcv", ticker, days=400)
+                    except ProviderDataError:
+                        return None
+
+                return execution.call_io("paper.market_history", {"ticker": ticker, "days": 400}, observed)
+
+            observations = PaperObservations(execution.admitted_at, load_paper_frame)
+            stages = {item["stage"]: item for item in execution.summary()}
+            references = {
+                "market_ref": stages["data.prepare"]["output_ref"],
+                "approval_ref": stages["layer4.risk"]["output_ref"],
+                "approval_input_ref": stages["layer4.risk"]["input_ref"],
+                "decision_ref": stages["decision.debate"]["output_ref"],
+                "account_version_before": execution.account_version_before,
+            }
+
+        def get_bar(ticker):
+            if ticker in bar_cache:
+                return bar_cache[ticker]
+            bar = None
+            try:
+                frame = _single_with_fallback(settle_provider, "ohlcv", ticker, days=400)
+                if frame is not None and len(frame):
+                    # The frozen market date is the accounting cutoff. Source dates
+                    # remain attached to the actual bar and are never relabelled.
+                    frame = frame[frame.index.date <= execution.run_date]
+                    if len(frame):
+                        row = frame.iloc[-1]
+                        adv = (float((frame["Close"] * frame["Volume"]).tail(20).mean())
+                               if "Volume" in frame.columns else 0.0)
+                        bar = Bar(open=float(row["Open"]), high=float(row["High"]),
+                                  low=float(row["Low"]), close=float(row["Close"]),
+                                  adv=adv, date=str(frame.index[-1].date()))
+            except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+                raise
+            except Exception as error:
+                log.warning("Strict paper bar unavailable for %s (%s); transition deferred",
+                            ticker, type(error).__name__)
+            bar_cache[ticker] = bar
+            return bar
+
+        with execution.step("paper.step", {"state": sim.state, "result": result,
+                                           "run_date": execution.run_date, "references": references}) as stage:
+            if observations is not None:
+                observations.earnings_dates = {
+                    ticker.upper(): day for ticker, day
+                    in read_json(paths.calendar_override_path).get("earnings", {}).items()
+                }
+                sim_out = sim.step(result.trade_date, result, get_bar, paper=observations,
+                                   run_id=execution.run_id, references=references, persist=False)
+            else:
+                sim_out = sim.step(result.trade_date, result, get_bar)
+            stage.output({"transition": sim_out, "state": sim.state,
+                          "bars": observations.selected if observations is not None else bar_cache})
+
+        with execution.step("paper.persist", {"state": sim.state, "path": paths.sim_path}) as stage:
+            execution.call_io("paper.save", {"state": sim.state, "path": paths.sim_path}, sim.save)
+            sim_readback = read_json(paths.sim_path)
+            if sim_readback != sim.state:
+                raise OSError("Paper ledger readback differs")
+            result.raw["accounting"]["status"] = "updated"
+            if execution.authoritative_paper:
+                result.raw["accounting"]["paper_execution"] = {
+                    "contract": sim.state["paper_contract"], "events": sim_out["events"],
+                    "observation_status": sim_out["observation_status"],
+                }
+            sim_stats = sim.stats()
+            stage.output({"state": sim_readback, "stats": sim_stats,
+                          "accounting": result.raw["accounting"]})
+
+        return sim_out, sim_stats
+
+    if execution.authoritative_paper:
+        sim_out, sim_stats = paper_transition()
+
     with execution.step("journal.log", {"records": j.records, "result": result,
                                          "account_usd": args.account}) as stage:
-        added = execution.call_io("journal.log_picks", {"records": j.records, "picks": result.picks,
-                                  "trade_date": result.trade_date, "account_usd": args.account},
-                                  lambda: j.log_picks(result, args.account))
+        if execution.authoritative_paper:
+            added, settled = execution.call_io("journal.project_paper", {"state": sim.state},
+                                              lambda: j.project_paper(sim.state))
+        else:
+            added = execution.call_io("journal.log_picks", {"records": j.records, "picks": result.picks,
+                                      "trade_date": result.trade_date, "account_usd": args.account},
+                                      lambda: j.log_picks(result, args.account))
         actual = read_json(paths.journal_path)
         if actual != j.records:
             raise OSError("Journal log readback differs")
@@ -263,59 +352,24 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
 
     with execution.step("journal.settle", {"records": j.records, "as_of_date": execution.run_date,
                                             "provider": settle_provider.name}) as stage:
-        settled = j.settle(settle_provider, as_of_date=execution.run_date)
+        if execution.authoritative_paper:
+            j.last_failed = sorted({sim.state["paper_signals"][event["signal_id"]]["ticker"]
+                                    for event in sim_out["observation_status"]["missing"]})
+        else:
+            settled = j.settle(settle_provider, as_of_date=execution.run_date)
         actual = read_json(paths.journal_path)
         if actual != j.records:
             raise OSError("Journal settlement readback differs")
         stage.output({"settled": settled, "records": actual, "missing_tickers": j.last_failed})
 
     with execution.step("journal.stats", {"records": j.records}) as stage:
-        stats = j.stats()
+        stats = j.stats(paper_only=execution.authoritative_paper)
         if j.last_failed:
             stats["settle_failed"] = list(j.last_failed)
         stage.output(stats)
 
-    bar_cache = {}
-
-    def get_bar(ticker):
-        if ticker in bar_cache:
-            return bar_cache[ticker]
-        bar = None
-        try:
-            frame = _single_with_fallback(settle_provider, "ohlcv", ticker, days=400)
-            if frame is not None and len(frame):
-                # The frozen market date is the accounting cutoff. Source dates
-                # remain attached to the actual bar and are never relabelled.
-                frame = frame[frame.index.date <= execution.run_date]
-                if len(frame):
-                    row = frame.iloc[-1]
-                    adv = (float((frame["Close"] * frame["Volume"]).tail(20).mean())
-                           if "Volume" in frame.columns else 0.0)
-                    bar = Bar(open=float(row["Open"]), high=float(row["High"]),
-                              low=float(row["Low"]), close=float(row["Close"]),
-                              adv=adv, date=str(frame.index[-1].date()))
-        except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
-            raise
-        except Exception as error:
-            log.warning("Strict paper bar unavailable for %s (%s); transition deferred",
-                        ticker, type(error).__name__)
-        bar_cache[ticker] = bar
-        return bar
-
-    with execution.step("paper.step", {"state": sim.state, "result": result,
-                                       "run_date": execution.run_date}) as stage:
-        sim_out = sim.step(result.trade_date, result, get_bar)
-        stage.output({"transition": sim_out, "state": sim.state, "bars": bar_cache})
-
-    with execution.step("paper.persist", {"state": sim.state, "path": paths.sim_path}) as stage:
-        execution.call_io("paper.save", {"state": sim.state, "path": paths.sim_path}, sim.save)
-        sim_readback = read_json(paths.sim_path)
-        if sim_readback != sim.state:
-            raise OSError("Paper ledger readback differs")
-        result.raw["accounting"]["status"] = "updated"
-        sim_stats = sim.stats()
-        stage.output({"state": sim_readback, "stats": sim_stats,
-                      "accounting": result.raw["accounting"]})
+    if not execution.authoritative_paper:
+        sim_out, sim_stats = paper_transition()
 
     with execution.step("governance.initialize", {"path": paths.governance_path}) as stage:
         before_governance = read_file(paths.governance_path)
@@ -330,6 +384,8 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
                             proposals_dir=str(paths.proposals_dir), bridge=bridge, strict=True,
                             samples_path=str(paths.calibration_path), execution=execution)
         review_out = chief.daily(result.trade_date)
+        if execution.authoritative_paper:
+            result.raw["calibration"] = {**review_out["calibration"], "basis": "after_paper_execution"}
         for trace in result.raw.get("redline", []):
             if trace["step"] == "review.daily":
                 trace.update(status="executed", ms=review_out["ms"], note="")
@@ -357,6 +413,11 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
         governance = {"path": bridge.path, "count": n_events, "ok": ok, "errors": errors,
                       "events": governance_records}
         stage.output(governance)
+
+    if execution.model_required:
+        from trading_system.research_audit import report_audit
+
+        result.raw["research_audit"] = report_audit(paths.work_dir.parent)
 
     with execution.step("report.final_json", {"result": result}) as stage:
         json_path = execution.call_io("report.to_json", {"result": result, "out_dir": paths.reports_dir},

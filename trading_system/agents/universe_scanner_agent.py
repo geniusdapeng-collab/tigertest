@@ -50,26 +50,37 @@ class UniverseScannerAgent(BaseAgent):
 
         passed: list[dict] = []
         rejected = {"price": 0, "adv": 0, "history": 0, "atr": 0, "nodata": 0}
+        audit = {} if context.get("capture_scan_decisions") else None
 
         for ticker in self.universe:
             df = stock_data.get(ticker)
             if df is None or len(df) < config.SCAN_MIN_HISTORY_DAYS * 0.6:
                 rejected["nodata"] += 1
+                if audit is not None:
+                    audit[ticker] = {"hard_filter": "no_data" if df is None else "short_history"}
                 continue
             close = df["Close"]
             price = last(close)
             if price < min_price:
                 rejected["price"] += 1
+                if audit is not None:
+                    audit[ticker] = {"hard_filter": "price"}
                 continue
             adv = float((close * df["Volume"]).tail(20).mean())
             if adv < min_adv:
                 rejected["adv"] += 1
+                if audit is not None:
+                    audit[ticker] = {"hard_filter": "adv"}
                 continue
             a14 = last(atr(df, 14))
             atr_pct = a14 / price if price > 0 else 9.9
             if atr_pct > config.SCAN_MAX_ATR_PCT:
                 rejected["atr"] += 1
+                if audit is not None:
+                    audit[ticker] = {"hard_filter": "atr"}
                 continue
+            if audit is not None:
+                audit[ticker] = {"hard_filter": "pass"}
 
             # ---- 量化初排 ----
             rs = rs_line(close, spy_close)
@@ -130,6 +141,9 @@ class UniverseScannerAgent(BaseAgent):
         # Keep the existing shortlist for observation and options history.
         # An entry setup outside it earns the same full TSS and risk checks.
         baseline_selected = len(top)
+        if audit is not None:
+            for row in top:
+                audit[row["ticker"]]["selection"] = "baseline"
         checked = unavailable = 0
         if self.include_entry_setups:
             chosen = {row["ticker"] for row in top}
@@ -141,9 +155,15 @@ class UniverseScannerAgent(BaseAgent):
                 template = TSSAgent.entry_template_for(stock_data[ticker])
                 if template is None:
                     unavailable += 1
+                    if audit is not None:
+                        audit[ticker]["selection"] = "shape_missing"
                 elif template:
                     top.append(row)
                     chosen.add(ticker)
+                    if audit is not None:
+                        audit[ticker]["selection"] = "supplement"
+                elif audit is not None:
+                    audit[ticker]["selection"] = "no_entry_setup"
 
         candidates: list[StockCandidate] = []
         for row in top:
@@ -174,6 +194,8 @@ class UniverseScannerAgent(BaseAgent):
                 "baseline_selected": baseline_selected, "unavailable": unavailable,
             }
         context["watchlist"] = candidates
+        if audit is not None:
+            context["scan_decisions"] = audit
         self.log.info("扫描完成: 池 %d → 通过过滤 %d → 候选 %d；Top10=%s",
                       len(self.universe), len(passed), len(candidates),
                       context["scan_stats"]["top10"])

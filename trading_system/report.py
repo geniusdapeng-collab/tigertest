@@ -193,7 +193,7 @@ def company_evidence_note(raw: dict) -> str:
         return ""
     from .llm.company_evidence import COMPANY_EVIDENCE_CONTRACT
 
-    if company.get("contract") != COMPANY_EVIDENCE_CONTRACT:
+    if company.get("contract") not in {COMPANY_EVIDENCE_CONTRACT, "sec-submission-original/v2"}:
         return ""
     candidates = company.get("candidates")
     unavailable = "公司证据检查记录不完整。"
@@ -203,7 +203,7 @@ def company_evidence_note(raw: dict) -> str:
         return "公司证据检查显示，本轮没有标的通过数值风控，未启动按标的检索。"
 
     labels = {"no_results": "检索零命中", "no_eligible_filing": "未取得合格文件",
-              "search_unavailable": "检索不可用"}
+              "search_unavailable": "检索不可用", "verification_unavailable": "原文核验不可用"}
     counts = dict.fromkeys(("filing_verified", *labels), 0)
     for outcome in candidates.values():
         status = outcome.get("status") if isinstance(outcome, dict) else None
@@ -254,6 +254,45 @@ def model_source_html(source: dict, *, markdown: bool = False) -> str:
     if sanitize_url(url) == url:
         title = f'<a href="{escape(url)}" rel="noreferrer">{title}</a>'
     return f"{title}（{published}）"
+
+
+def research_audit_tables(raw: dict) -> list[tuple[str, tuple, list]]:
+    audit = raw.get("research_audit")
+    if not audit:
+        return []
+    funnel = audit["funnel"]
+    labels = {"market_data": "行情可用", "hard_filter": "基础硬筛", "entry_setup": "A/B/C 形态",
+              "numeric_risk": "逐股数值资格", "portfolio": "组合批准", "company": "公司证据", "model": "模型终审"}
+    status = {"passed": "通过", "rejected": "拒绝", "unknown": "未知", "not_applicable": "不适用"}
+    option_status = {"available": "可用", "missing": "缺失", "not_applicable": "不适用"}
+    rows = []
+    for item in funnel["rows"]:
+        cells = [item["ticker"], item["security_id"], item["entry_template"] or "—",
+                 option_status[item["options_evidence"]]]
+        for gate in labels:
+            detail = item["gates"][gate]
+            text = status[detail["status"]]
+            if detail["reasons"]:
+                text += "（" + "、".join(detail["reasons"]) + "）"
+            cells.append(text)
+        rows.append([*cells, item["model_action"] or "—", "、".join(item["company_source_ids"]) or "—"])
+    return [
+        ("逐关覆盖", ("关口", "分母", "通过", "拒绝", "未知", "不适用", "重叠原因"),
+         [[labels[gate], counts["denominator"], counts["passed"], counts["rejected"],
+           counts["unknown"], counts["not_applicable"], "、".join(
+               f"{reason} × {count}" for reason, count in counts["overlapping_reasons"].items()) or "—"]
+          for gate, counts in funnel["gates"].items()]),
+        ("逐股明细", ("股票", "证券标识", "形态", "期权证据", *labels.values(), "模型动作", "公司证据编号"), rows),
+        ("阶段证据", ("阶段", "执行", "尝试", "返回", "失败", "毫秒", "证据状态", "缺口", "证据 SHA-256"),
+         [[row["stage"], row["execution"], row["io_attempted"], row["io_returned"], row["io_failed"],
+           row["elapsed_ms"] if row["elapsed_ms"] is not None else "—",
+           row["evidence_status"], "、".join(row["gaps"]) or "—", row["output_ref"]["sha256"]]
+          for row in audit["stages"]]),
+        ("复盘规则证据", ("规则", "分母", "已查", "证据不足", "不适用", "已查命中"),
+         [[code, row["denominator"], row["checked"], row["insufficient_evidence"], row["not_applicable"],
+           row["violations"] if row["violations"] is not None else "—"]
+          for code, row in audit["rule_coverage"].items()]),
+    ]
 
 
 def render_markdown(r: PipelineResult) -> str:
@@ -385,6 +424,17 @@ def render_markdown(r: PipelineResult) -> str:
         lines.append("")
 
     # ---- TSS 精评 ----
+    audit_tables = research_audit_tables(r.raw)
+    if audit_tables:
+        lines.extend(["### 候选漏斗与证据覆盖", "",
+                      "日报中的阶段证据截至治理链校验。最终回执补齐日报生成和封存阶段。", ""])
+        for title, columns, rows in audit_tables:
+            lines.extend([f"<details><summary>{title}</summary>", "",
+                          "| " + " | ".join(columns) + " |",
+                          "| " + " | ".join("---" for _ in columns) + " |"])
+            for cells in rows:
+                lines.append("| " + " | ".join(_markdown_text(str(cell)) for cell in cells) + " |")
+            lines.extend(["", "</details>", ""])
     lines.append("## 六、TSS 精评（第三道门）")
     lines.append("")
     lines.append("| 标的 | TSS_final | 结构 | 动能 | 期权 | 模板 | 关键位 | 产业链 |")
@@ -541,8 +591,10 @@ def render_markdown(r: PipelineResult) -> str:
                              for b, v in tg.items()) or "—"
             deg = ",".join(s.get("degraded_components", [])) or "—"
             pros = s.get("prosperity")
+            risk = s.get("risk_level", 0)
+            risk_label = f"{risk:.0f}" if risk is not None else "证据不足"
             lines.append(f"| {s.get('chain_id')} | {pros if pros is not None else '—'} "
-                         f"| {s.get('risk_level', 0):.0f} | ×{s.get('bonus_hint', 1.0)} "
+                         f"| {risk_label} | ×{s.get('bonus_hint', 1.0)} "
                          f"| {s.get('leading_link') or '—'} | {trans} | {deg} |")
         lines.append("")
         alerts_all = [a for s in tech for a in s.get("alerts", [])]

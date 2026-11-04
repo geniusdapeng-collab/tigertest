@@ -39,7 +39,7 @@ model-required 的纯固定 policy 声明 `deepseek-flash` / `DeepSeek-V4.1-Flas
 
 严格入口的 Yahoo 日线下载显式保留交易所时区（`ignore_tz=False`），先把供应商原始带时区索引和值写入证据，再由现有观察边界投影到冻结的纽约日期。韩、台与美股混合取数时不能先丢失时区，也不能事后把无时区日期统一猜成 UTC、纽约时间或直接放行次日；真正越过纽约日期的观测仍然拒绝。日线日期标签不是实时成交时间，也不证明该交易日已经收盘。普通 Yahoo 入口保留原来的默认行为。参数语义见 [yfinance 官方下载文档](https://ranaroussi.github.io/yfinance/reference/yfinance.functions.html)。
 
-profile 的字段、允许源、阶段注册表和策略语义必须视为版本化合同。当前验证器将保存的 policy 与其理解的 v1 定义精确比较。源码变化可以作为历史来源披露；这不表示任何未来 policy 都能验证旧回执。改变阶段或 policy 时必须采用新 profile，并保留匹配的历史验证器或设计明确的账户迁移；不能在原标识下悄悄改变定义，也不能承诺尚未实现的跨版本兼容。
+profile 的请求字段、允许源、阶段注册表和策略语义是版本化合同。对外保持 `us-public-model-required-paper-v1` 的四字段请求，内部版本由冻结源码及 policy 标明。新的 `tiger.paper-execution.v1` 使用独立纸面账务合同和阶段顺序。旧回执按与冻结源码匹配的旧合同、原顺序和原字节验证。旧日记单列为历史假设，只有具备冻结批准、纸面成交和结算事件的记录进入校准。新研究使用独立状态目录。已升级纸面账拒绝由旧执行入口写入。
 
 ## 执行顺序和证据
 
@@ -52,8 +52,8 @@ daily.preflight → state.reset → pipeline.prepare
 → tech.fusion → sector.narrative → layer1.mrs → layer2.sector → layer2b.chain
 → layer0.scan → layer3.tss → layer4.risk → decision.debate
 → iteration.calibration → report.emit
-→ accounting.validate → report.initial → journal.log → journal.settle
-→ journal.stats → paper.step → paper.persist → governance.initialize
+→ accounting.validate → report.initial → paper.step → paper.persist
+→ journal.log → journal.settle → journal.stats → governance.initialize
 → review.daily → governance.emit → governance.verify → report.final_json
 → report.plan → report.markdown → report.html → daily.result
 ```
@@ -64,7 +64,9 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 
 最终判断前只为数值风控已经批准的股票补查公司层证据。每个批准标的发起一条定向 SEC 检索，结果最多四条。本契约使用过去 90 个自然日内有可核对发行人交易代码的 SEC EDGAR 正式文件，按冻结接单时点限制已公开信息。只有日粒度的发布时间必须早于接单市场日。第三方报道和宏观材料可以辅助理解，不能充当模型输出中的买入来源。最终模型仍可否决任何已批准标的。
 
-`model.search_count` 保留 14 个主题检索的原口径。每个批准标的的定向检索结果独立记入 `disclosures.company_evidence`，分别显示有合格文件、零命中、命中但无合格文件或检索不可用。未取得合格文件时仍完成模型观察判断，且该标的无法产生买入指令。这些状态仅描述本轮受控 SEC 检索，不能作为市场上不存在公司资料的断言。
+`model.search_count` 保留 14 个主题检索的原口径。上游交叉核验按发行人或证券标识、事件、报告期或有效时点分组，归并同稿和同来源。同一公司不同报告期不互为佐证。未具备时点及身份的资料单列，证据为空的语义阶段仍要求真实模型返回有效的证据不足结果。
+
+每个批准标的的定向检索结果独立记入 `disclosures.company_evidence`。新合同 `sec-submission-original/v2` 通过 SEC 申报元数据和原文核对发行人、受理时间及申报号。直接 SEC 访问需要可信启动环境的 `TIGER_SEC_CONTACT` 邮箱。缺少联络标识、源端拒绝或原文不可用时明确记录核验不可用，候选仅可观察。历史文件继续按原合同核验。 [SEC EDGAR 官方接口](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
 
 独立验证器从事件和子 I/O 快照重算全部请求/schema/安全响应哈希、响应身份和 usage，重建完整模型输入文档及数值上下文，逐字段核对清洗/舆情/风险/叙事实际输出与 parsed 模型答案，并核对下游消费。最终模型选择只允许缩小原风险批准集合；人读计划中的价格/股数/止损/仓位/风险绑定原 TradePick。任何对应缺失或规则代写均为 `MODEL_REQUIRED_FAILED`，在账户指针提交之前失败。成功仅为 `completed`，不能发布 completed_degraded。原始远端响应不落盘，仅保存摘要；安全响应和模型 JSON 可重算，属于本地协作进程完整性证据，不是远端签名证明。
 
@@ -73,6 +75,10 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 严格报告目前不包含白皮书 PDF 附件；「核心交易理念」明确显示未附 PDF，不生成活动下载链接，也不从源码仓、工作目录或旧报告中猜测补入附件。该边界沿用现有冻结源码、报告文件清单与回执合同，不增加未记录的附件读取。普通日报、研究报告及 JSON 转 HTML 工具只在实际 HTML 输出目录内有可读、路径安全且通过 PDF 基础结构检查的同名白皮书时显示下载，并使用实测字节数；未附或校验失败均在页面披露。基础检查覆盖 PDF 文件头、末尾 EOF 与交叉引用位置，不等于完整 PDF 内容或交易结论审核。网站导出保留页面声明的本地 PDF 及 HTML 原始字节，核验复制后的摘要；声明的附件缺失、不可读、结构无效、路径越界、含符号链接或多市场同 URL 对应不同内容时失败，不宣布站点生成成功。
 
 `events.jsonl` 为顺序追加记录，每条绑定 run_id、序号、步骤编号、输入/输出引用、前一事件摘要和前一步输出。验证器重新计算哈希、顺序、状态与引用，并检查完整业务结果和报告。保存的 `verified=true` 标记或文件存在均不能替代这些检查。
+
+严格模型日报的 `raw.research_audit` 从封存的扫描、精评、风控、公司证据、模型和复盘阶段重建。逐股记录标识、形态、期权证据、组合限额、来源与模型动作。逐关汇总分别给出分母、通过、拒绝、未知和不适用，重叠原因单列。报告生成前的阶段表截止治理链校验，独立回执从同一证据流补齐报告生成和封存阶段，分别列出子调用尝试、返回和失败。子调用返回只证明收到了记录，数据缺失和证据降级另行计数。
+
+复盘中每条规则只报告实际覆盖的分母和已查命中。缺少来源快照时标记 `insufficient_evidence`，没有适用成交时标记 `not_applicable`。已查为零时命中值为空。逐笔复核记录可沿信号标识、纸面事件和阶段输出摘要追溯。
 
 子 I/O 还必须符合写入端的语义合同：方法名非空且不含换行；原错误快照保留 error_type、固定脱敏 message 和布尔 outcome_observed 三个字段。新的 model-required 模型 I/O 可另附闭合的安全 diagnostic，内容限固定错误码、HTTP 状态或受控 schema 路径/关键字；不保存原响应、推理内容、凭据或任意异常正文。未及时观察到结果的 false 标志可以合法记录，不能被当成字符串或数字。即使重新计算所有文件摘要和事件链，错误字段类型、未知或不合法的诊断字段及非法方法名仍会被拒绝；原有无诊断证据不追补原因。
 

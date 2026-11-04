@@ -252,7 +252,8 @@ class ReviewChief:
                 {"journal_records": records, "journal_path": self.journal_path,
                  "samples_path": self.samples_path},
                 lambda: CalibrationLayer(journal_path=self.journal_path,
-                                         samples_path=self.samples_path).run())
+                                         samples_path=self.samples_path).run(
+                    paper_only=bool(self.execution and self.execution.authoritative_paper)))
         except EvidenceWriteError:
             raise
         except Exception as exc:
@@ -268,7 +269,8 @@ class ReviewChief:
                 trade_date, "%Y-%m-%d").weekday() >= 5
         weekly_out = None
         if include_weekly:
-            weekly_out = weekly.weekly_checkup(records, cal)
+            weekly_out = weekly.weekly_checkup(
+                [row for row in records if row.get("accounting_basis") != "legacy_hypothesis"], cal)
 
         proposals = self._observe("review.proposals.read", {"path": self.proposals_dir},
             lambda: list_proposals(self.proposals_dir, strict=True)
@@ -295,6 +297,8 @@ class ReviewChief:
             + ([f"周度体检: {weekly_out['verdict']}"] if weekly_out else []),
             after={"memo": memo_path,
                    "violations": att["violation_counts"],
+                   "rule_coverage": {code: {key: value for key, value in detail.items() if key != "evidence"}
+                                     for code, detail in att["violation_coverage"].items()},
                    "calibration_n": cal.get("n", 0)},
         )
         return {"memo_path": memo_path, "attribution": att,
@@ -309,7 +313,7 @@ class ReviewChief:
     def weekly(self) -> dict:
         """周度体检（统计员），结论进治理事件。"""
         records = _read_journal(self.journal_path)
-        out = weekly.weekly_checkup(records)
+        out = weekly.weekly_checkup([row for row in records if row.get("accounting_basis") != "legacy_hypothesis"])
         self._emit(action="review.weekly",
                    object_id=f"周度体检_{datetime.now():%Y-%m-%d}",
                    basis=[f"结论: {out['verdict']}"] + out["reasons"],
@@ -429,12 +433,15 @@ class ReviewChief:
         lines.append("")
 
         # ---- 日度归因 ----
-        closed = [a for a in att["attributions"] if a["status"] == "closed"]
-        open_ = [a for a in att["attributions"] if a["status"] == "open"]
+        accounting = [a for a in att["attributions"] if a["accounting_basis"] != "legacy_hypothesis"]
+        closed = [a for a in accounting if a["status"] == "closed"]
+        open_ = [a for a in accounting if a["status"] in ("open", "pending")]
         lines.append("## 一、日度归因")
         lines.append("")
-        lines.append(f"- 台账 {len(att['attributions'])} 笔：已结算 {len(closed)}，"
+        lines.append(f"- 台账 {len(accounting)} 笔：已结算 {len(closed)}，"
                      f"未结算信号 {len(open_)}")
+        if len(accounting) < len(att["attributions"]):
+            lines.append(f"- 另存历史假设记录 {len(att['attributions']) - len(accounting)} 笔，单列展示。")
         if att["attributions"]:
             lines.append("")
             lines.append("| 信号日 | 标的 | 信号层（MRS区间/主线/链/模板） | "
@@ -458,15 +465,18 @@ class ReviewChief:
         lines.append("## 二、违规六条检测（附录D，命中必标记）")
         lines.append("")
         for code, label in VIOLATIONS.items():
-            n = att["violation_counts"][code]
-            lines.append(f"- {code} {label}: **{n}** 条" + (" ⚠️" if n else ""))
+            rule = att["violation_coverage"][code]
+            n = rule["violations"]
+            coverage = f"已检查 {rule['checked']}/{rule['denominator']}，证据不足 {rule['insufficient_evidence']}"
+            outcome = f"已查命中 **{n}** 条" if n is not None else "证据不足" if rule["denominator"] else "不适用"
+            lines.append(f"- {code} {label}　{outcome}，{coverage}" + (" ⚠️" if n else ""))
         if att["flagged"]:
             lines.append("")
             lines.append("命中明细: " + "；".join(
                 f"{f_['date']} {f_['ticker']} [{'、'.join(f_['labels'])}]"
                 for f_ in att["flagged"]))
-        else:
-            lines.append("- 本轮无违规命中。")
+        elif any(rule["checked"] for rule in att["violation_coverage"].values()):
+            lines.append("- 有证据的检查项未发现命中。")
         lines.append("")
 
         # ---- 校准状态 ----
