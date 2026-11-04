@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .. import config
 
 # 违规六条代码表（附录D 顺序固定，报告与治理事件共用同一口径）
@@ -58,6 +60,8 @@ def exit_type(rec: dict) -> str:
     status = rec.get("status")
     if status == "void":
         return "作废"
+    if status == "pending":
+        return "待成交"
     if status == "open":
         return "持仓中" if rec.get("entry") is not None else "待成交"
     note = rec.get("note") or ""
@@ -69,6 +73,11 @@ def exit_type(rec: dict) -> str:
 
 def _entered(rec: dict) -> bool:
     """是否真实入场（closed 或 open 且已有入场价）。"""
+    if rec.get("accounting_basis") == "legacy_hypothesis":
+        return False
+    if rec.get("accounting_basis") == "paper_execution":
+        return bool(rec.get("paper_event_ids", {}).get("filled") and rec.get("entry_date")
+                    and rec.get("status") in ("closed", "open") and rec.get("entry") is not None)
     return rec.get("status") in ("closed", "open") and rec.get("entry") is not None
 
 
@@ -88,12 +97,18 @@ def detect_violations(rec: dict, snapshot: dict | None = None) -> list[str]:
     mrs_star = rec.get("mrs_star")
     if mrs_star is not None and float(mrs_star) < config.MRS_GATE_BLOCK:
         hits.append("V1")
-    if not rec.get("sector") and not rec.get("chain"):
+    if snap.get("mainline_eligible") is False or (
+            "mainline_eligible" not in snap and not rec.get("sector") and not rec.get("chain")):
         hits.append("V2")
-    if snap.get("no_chase"):
+    paper = rec.get("accounting_basis") == "paper_execution"
+    if snap.get("no_chase") and (not paper or (
+            _finite(rec.get("entry_raw")) and _finite(snap.get("entry_ceiling"))
+            and rec["entry_raw"] > snap["entry_ceiling"])):
         hits.append("V3")
     if rec.get("ticker") in (snap.get("earnings") or []) \
-            and rec.get("mode") == "标准做多":
+            and rec.get("mode") == "标准做多" and (not paper or (
+                _finite(snap.get("earnings_size_factor")) and _finite(snap.get("earnings_size_limit"))
+                and snap["earnings_size_factor"] > snap["earnings_size_limit"])):
         hits.append("V4")
     r_live = rec.get("r_live")
     if rec.get("status") == "open" and r_live is not None and float(r_live) <= -1.0:
@@ -107,6 +122,45 @@ def detect_violations(rec: dict, snapshot: dict | None = None) -> list[str]:
     return hits
 
 
+def _finite(value) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _rule_inputs(rec, snap):
+    """Record the actual applicability and inputs without treating absence as a pass."""
+    if not _entered(rec):
+        return {code: ("not_applicable", []) for code in VIOLATIONS}
+    status = rec.get("status")
+    evidence_r = rec.get("r") if status == "closed" else rec.get("r_live")
+    paper = rec.get("accounting_basis") == "paper_execution"
+    def verdict(ok, *fields):
+        return ("checked", list(fields)) if ok else ("insufficient_evidence", [])
+    chase_fields = ["no_chase"]
+    chase_known = type(snap.get("no_chase")) is bool
+    if paper and snap.get("no_chase") is True:
+        chase_fields.extend(("entry_raw", "entry_ceiling"))
+        chase_known = _finite(rec.get("entry_raw")) and _finite(snap.get("entry_ceiling"))
+    earnings_fields = ["mode", "earnings"]
+    earnings = snap.get("earnings")
+    earnings_known = rec.get("mode") == "标准做多" and isinstance(earnings, list)
+    if paper and earnings_known and rec.get("ticker") in earnings:
+        earnings_fields.extend(("earnings_size_factor", "earnings_size_limit"))
+        earnings_known = _finite(snap.get("earnings_size_factor")) and _finite(snap.get("earnings_size_limit"))
+    return {
+        "V1": verdict(_finite(rec.get("mrs_star")), "mrs_star"),
+        "V2": verdict(type(snap.get("mainline_eligible")) is bool, "mainline_eligible"),
+        "V3": verdict(chase_known, *chase_fields),
+        "V4": (("not_applicable", ["mode"]) if rec.get("mode") and rec["mode"] != "标准做多"
+               else verdict(earnings_known, *earnings_fields)),
+        "V5": (("not_applicable", ["status"]) if status != "open"
+               else verdict(_finite(rec.get("r_live")), "r_live")),
+        "V6": verdict(_finite(evidence_r) and (evidence_r < config.PROFIT_PROTECT_R
+                     or type(rec.get("protected")) is bool),
+                     *(["r" if status == "closed" else "r_live", "protected"]
+                       if type(rec.get("protected")) is bool else ["r" if status == "closed" else "r_live"])),
+    }
+
+
 def attribute_record(rec: dict, snapshot: dict | None = None) -> dict:
     """单条归因记录：信号来源层 / 入场质量 / 出场类型 / 市场环境快照 / 违规标记。"""
     entry, entry_ref = rec.get("entry"), rec.get("entry_ref")
@@ -116,6 +170,7 @@ def attribute_record(rec: dict, snapshot: dict | None = None) -> dict:
     return {
         "date": rec.get("date"), "ticker": rec.get("ticker"),
         "status": rec.get("status"),
+        "accounting_basis": rec.get("accounting_basis"),
         # 信号来源层
         "signal_layer": {
             "mrs_band": mrs_band(rec.get("mrs_star")),
@@ -150,8 +205,24 @@ def attribute_journal(records: list[dict],
     返回 {attributions, violation_counts, flagged}。
     """
     snapshots = snapshots or {}
-    attributions = [attribute_record(rec, snapshots.get(rec.get("date")))
-                    for rec in records]
+    attributions = []
+    evidence = {code: [] for code in VIOLATIONS}
+    authoritative = any(rec.get("accounting_basis") == "paper_execution" for rec in records)
+    for rec in records:
+        snapshot = dict(snapshots.get(rec.get("date")) or {})
+        snapshot.update(rec.get("review_snapshot") or {})
+        assessed = _rule_inputs(rec, snapshot)
+        attribution = attribute_record(rec, snapshot)
+        if authoritative:
+            attribution["violations"] = [code for code in attribution["violations"] if assessed[code][0] == "checked"]
+            attribution["violation_labels"] = [VIOLATIONS[code] for code in attribution["violations"]]
+        attributions.append(attribution)
+        for code, (status, fields) in assessed.items():
+            item = {"signal_id": rec.get("signal_id"), "date": rec.get("date"),
+                    "ticker": rec.get("ticker"), "status": status, "fields": fields}
+            if rec.get("paper_event_ids") and status != "not_applicable":
+                item["paper_event_ids"] = rec["paper_event_ids"]
+            evidence[code].append(item)
     counts = {code: 0 for code in VIOLATIONS}
     flagged = []
     for a in attributions:
@@ -161,6 +232,17 @@ def attribute_journal(records: list[dict],
             flagged.append({"date": a["date"], "ticker": a["ticker"],
                             "violations": a["violations"],
                             "labels": a["violation_labels"]})
-    return {"attributions": attributions, "violation_counts": counts,
+    coverage = {}
+    for code, items in evidence.items():
+        checked = sum(item["status"] == "checked" for item in items)
+        missing = sum(item["status"] == "insufficient_evidence" for item in items)
+        coverage[code] = {"status": ("insufficient_evidence" if missing else
+                                     "checked" if checked else "not_applicable"),
+                          "denominator": checked + missing, "checked": checked,
+                          "insufficient_evidence": missing, "not_applicable": len(items) - checked - missing,
+                          "violations": sum(code in item["violations"] and detail["status"] == "checked"
+                                            for item, detail in zip(attributions, items)) if checked else None,
+                          "evidence": items}
+    return {"attributions": attributions, "violation_counts": counts, "violation_coverage": coverage,
             "flagged": flagged,
             "total_violations": sum(counts.values())}

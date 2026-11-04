@@ -31,6 +31,13 @@ def _scheduled_close(day: date) -> datetime | None:
     return None
 
 
+def scheduled_open(day: date) -> datetime | None:
+    """US cash opening for a verified trading session, including early-close days."""
+    if 2024 <= day.year <= 2028 and _scheduled_close(day) is not None:
+        return datetime.combine(day, time(9, 30), _EASTERN)
+    return None
+
+
 def next_scheduled_close(market_date: date) -> datetime:
     """Cash close of the first session strictly after the research date."""
     day = market_date + timedelta(days=1)

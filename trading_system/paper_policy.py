@@ -20,7 +20,7 @@ def _positive(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
-def freeze_entry_budget(result, pick) -> dict:
+def freeze_entry_budget(result, pick, *, execution_date: date | None = None) -> dict:
     from .simulator import friction_bps
     raw = result.raw
     limits = raw.get("entry_budget")
@@ -44,7 +44,7 @@ def freeze_entry_budget(result, pick) -> dict:
         raise ValueError("Activity signal has no valid signal-time ADV observation")
     signal_date = date.fromisoformat(result.trade_date)
     return {"schema": "tiger.pending-budget.v1", "known_at": signal_date.isoformat(),
-            "execution_date": next_trading_day(signal_date).isoformat(),
+            "execution_date": (execution_date or next_trading_day(signal_date)).isoformat(),
             "gross_cap": gross, "single_cap": config.MAX_SINGLE_POSITION_PCT,
             "risk_pct": config.RISK_R_PCT * ratio,
             "group_risk_pct": config.MAX_CHAIN_RISK_PCT,
@@ -89,7 +89,12 @@ def opening_allocation(state: dict, pending: dict, bar, bar_date: str,
     if type(pending.get("shares")) is not int or pending["shares"] <= 0:
         return refused("signal_quantity_invalid")
     try:
-        expected = next_trading_day(date.fromisoformat(pending["signal_date"])).isoformat()
+        signal_date = date.fromisoformat(pending["signal_date"])
+        if pending.get("signal_id"):
+            from .market_close import next_scheduled_close
+            expected = next_scheduled_close(signal_date).date().isoformat()
+        else:
+            expected = next_trading_day(signal_date).isoformat()
     except (KeyError, TypeError, ValueError):
         return refused("signal_date_invalid")
     if budget.get("execution_date") != expected:

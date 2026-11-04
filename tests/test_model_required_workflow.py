@@ -47,7 +47,7 @@ def _answer(stage, schema):
         props = props["chains"]["items"]["properties"]
         return {"chains": [{"chain_id": item, "heat": 5, "sentiment_score": 0,
             "narrative_change": "stable", "key_drivers": ["测试夹具：仅作契约验证"],
-            "evidence_ids": props["evidence_ids"]["items"]["enum"][:1]}
+            "evidence_ids": props["evidence_ids"]["items"].get("enum", [])[:1]}
             for item in props["chain_id"]["enum"]]}
     if stage == "tech.risk":
         return {"assessment": "测试夹具：所有链均已评估，没有有据风险；不代表真实研究。", "alerts": []}
@@ -56,7 +56,7 @@ def _answer(stage, schema):
         return {"sectors": [{"etf": item, "narrative_score": 5,
             "eps_revision_bias": "unknown", "guidance_tone": "unknown",
             "evidence": ["测试夹具：未作实际研究"],
-            "evidence_ids": props["evidence_ids"]["items"]["enum"][:1]}
+            "evidence_ids": props["evidence_ids"]["items"].get("enum", [])[:1]}
             for item in props["etf"]["enum"]]}
     props = props["decisions"]["items"]["properties"]
     return {"action": "WAIT", "action_summary": "测试夹具：等待，不构成真实交易研究。",
@@ -117,6 +117,17 @@ def test_all39_stages_require_model_proof_and_model_plan(tmp_path, monkeypatch):
     result = asdict(output.result)
     proof = verify_required_model(root, result, _admission(execution))
     assert proof == result["raw"]["model"]
+    from trading_system.research_audit import verify_audit
+    audit = result["raw"]["research_audit"]
+    verified_audit = verify_audit(root, audit)
+    assert len(verified_audit["stages"]) == 39
+    assert verified_audit["funnel"]["market_data"]["denominator"] == result["raw"]["scan_stats"]["universe_size"]
+    assert audit["stages"][-1]["stage"] == "governance.verify"
+    date_token = result["trade_date"].replace("-", "")
+    assert "逐股明细" in read_bytes(root, f"work/reports/日报_{date_token}.md").decode()
+    audit["funnel"]["rows"][0]["gates"]["model"]["status"] = "passed"
+    with pytest.raises(EvidenceInvalid, match="Research audit cannot be reconstructed"):
+        verify_audit(root, audit)
     assert proof["search_count"] == 14 and proof["call_count"] == 5
     assert result["action"] == "WAIT" and result["picks"] == []
     assert result["raw"]["activity_profile"] is None
@@ -322,3 +333,30 @@ def test_native_search_corroboration_counts_original_publishers_without_relaxing
     assert CrossValidator().validate(one)["corroborated"] == 0
     two = [doc("a", "https://www.reuters.com/a"), doc("b", "https://www.sec.gov/b")]
     assert CrossValidator().validate(two)["corroborated"] == 2
+
+
+def test_strict_point_in_time_unknown_future_docs_do_not_score(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    execution, root, args, _, denied, attempts = required_fixture(tmp_path, monkeypatch)
+    execution.admitted_at = datetime.fromisoformat("2026-10-20T11:00:00+00:00")
+    output = main._daily(args, "yahoo", execution=execution)
+    result = asdict(output.result)
+    admission = _admission(execution)
+    admission["clock"]["admitted_at_utc"] = execution.admitted_at.isoformat()
+    statuses = result["raw"]["cross_validation"]["event_identity"]["documents"]
+    assert statuses and {row["status"] for row in statuses.values()} == {"future_publication"}
+    assert stage_value(execution, root, "sector.narrative")["narrative"] == {}
+    assert stage_value(execution, root, "tech.risk") == []
+    assert result["raw"]["tech_signals"]
+    assert all(signal["risk_level"] is None and "tech.risk" in signal["degraded_components"]
+               for signal in result["raw"]["tech_signals"])
+    assert verify_required_model(root, result, admission) == result["raw"]["model"]
+    tampered = copy.deepcopy(result)
+    tampered["raw"]["tech_signals"][0]["risk_level"] = 0
+    with pytest.raises(EvidenceInvalid, match="evidence"):
+        verify_required_model(root, tampered, admission)
+    assert len([call for call in attempts if call[1] == "/chat/completions"]) == 5 and not denied
+    next(iter(statuses.values()))["status"] = "eligible"
+    with pytest.raises(EvidenceInvalid, match="evidence"):
+        verify_required_model(root, result, admission)

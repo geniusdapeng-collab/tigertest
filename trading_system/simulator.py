@@ -106,7 +106,9 @@ class SimEngine:
         write_json_atomic(self.path, self.state, indent=1)
 
     # ---------------------------------------------------------------- 主节拍
-    def step(self, trade_date: str, result, get_bar, max_new: int = 8) -> dict:
+    def step(self, trade_date: str, result, get_bar, max_new: int = 8, *,
+             paper=None, run_id: str | None = None, references: dict | None = None,
+             persist: bool = True) -> dict:
         """每日记账：先结算昨日信号（今日开盘价成交）→ 出场纪律 → 记净值
         → 登记今日新信号（明日成交）。
 
@@ -117,6 +119,8 @@ class SimEngine:
         require_usd_result(result, scope="模拟盘输入")
         require_usd_sim_state(self.state, scope=f"模拟盘账本 {self.path}")
         s = self.state
+        if paper is None and s.get("paper_contract"):
+            raise ValueError("Authoritative paper accounts require their execution contract")
         s["started"] = s["started"] or trade_date
         ops: list[str] = []
         # v6.5 来源留痕：每条成交/持仓记录数据来源（合成数据统一记 "demo"），
@@ -127,6 +131,23 @@ class SimEngine:
         if budgeted:
             from .activity import risk_group
             from .paper_policy import freeze_entry_budget, frozen_entry_friction, opening_allocation
+        facts = None
+        if paper is not None:
+            from .market_close import next_scheduled_close
+            from .paper_ledger import PaperFacts
+            if not budgeted or not run_id or not references:
+                raise ValueError("Authoritative paper execution requires frozen approvals and budgets")
+            if s["ops_log"] and s["ops_log"][-1]["date"] > trade_date:
+                raise ValueError("Paper session cannot precede the committed account")
+            facts = PaperFacts(s, run_id, references)
+            session = date.fromisoformat(trade_date)
+            opening_already_closed = s.get("paper_last_closed_open", "") >= trade_date
+            if paper.completed_session >= session:
+                from datetime import timedelta
+                through = session - timedelta(days=1)
+            else:
+                through = paper.completed_session
+            self._manage_completed(paper, through, ops, facts)
         source = source_label(getattr(result, "provider", ""))
         allow_new = (result.action != "AVOID" and
                      getattr(getattr(result, "mrs", None), "allow_new_positions", True))
@@ -151,6 +172,16 @@ class SimEngine:
                 bar_cache[ticker] = observed
             return bar_cache[ticker]
 
+        def open_bar(ticker):
+            return paper.opening(ticker, session) if paper is not None else dated_bar(ticker)
+
+        def refuse(pending, reason, *, kind="rejected", bar=None, record_check=True):
+            if record_check:
+                fill_checks.append({"ticker": pending["ticker"], "date": trade_date,
+                                    "shares": 0, "reason": reason})
+            if facts is not None:
+                facts.emit(pending.get("signal_id"), kind, trade_date, reason=reason, bar=bar)
+
         # ---------- 1. 昨日信号成交（T+1 开盘价，无未来函数） ----------
         still_pending = []
         for p in s["pending"]:
@@ -161,21 +192,37 @@ class SimEngine:
             if not p.get("signal_date") or p["signal_date"] >= trade_date:
                 still_pending.append(p)          # 当日信号次日才成交（同日重跑幂等）
                 continue
+            if paper is not None:
+                signal = facts.signals.get(p.get("signal_id"))
+                if signal is None:
+                    refuse(p, "legacy_signal_unbound")
+                    ops.append(f"⏸️ {p['ticker']} 历史信号缺执行证据，释放待成交预算")
+                    continue
+                expected = signal["planned_open_session"]
+                if trade_date > expected:
+                    refuse(p, "SIGNAL_EXPIRED", kind="expired")
+                    ops.append(f"⏸️ {p['ticker']} 已错过指定开盘，信号过期")
+                    continue
+                if trade_date < expected or opening_already_closed or not paper.opening_ready(session):
+                    still_pending.append(p)
+                    continue
             if budgeted:
                 if not isinstance(p.get("entry_budget"), dict):
-                    fill_checks.append({"ticker": p["ticker"], "date": trade_date,
-                                        "shares": 0, "reason": "signal_budget_missing"})
+                    refuse(p, "signal_budget_missing")
                     ops.append(f"⏸️ {p['ticker']} 缺少原信号冻结预算，释放待成交预算")
                     continue
                 from .calendar import next_trading_day
                 expected = next_trading_day(date.fromisoformat(p["signal_date"])).isoformat()
-                if trade_date > expected:
+                if paper is None and trade_date > expected:
                     fill_checks.append({"ticker": p["ticker"], "date": trade_date,
                                         "shares": 0, "reason": "execution_window_missed"})
                     ops.append(f"⏸️ {p['ticker']} 已错过信号指定开盘，释放待成交预算")
                     continue
-            observed = dated_bar(p["ticker"])
+            observed = open_bar(p["ticker"])
             if observed is None:
+                if facts is not None:
+                    refuse(p, "BAR_UNAVAILABLE", kind="opening_unavailable")
+                    ops.append(f"⏸️ {p['ticker']} 指定开盘行情不可用，等待本会话证据")
                 still_pending.append(p)          # 无行情，顺延一日
                 continue
             bar, bar_date = observed
@@ -183,7 +230,13 @@ class SimEngine:
                 still_pending.append(p)          # 必须是信号之后的真实交易日
                 continue
             fill = round(bar.open, 2)
+            if facts is not None and p["entry_ref"] > 0 and abs(fill / p["entry_ref"] - 1) > 0.35:
+                refuse(p, "corporate_action_or_extreme_open_gap", bar=bar)
+                ops.append(f"⚠️ {p['ticker']} 开盘与信号价偏离超过 35%，待核对公司行动")
+                continue
             if fill <= p["stop_price"]:
+                if facts is not None:
+                    refuse(p, "opening_gap_through_stop", bar=bar)
                 ops.append(f"⚠️ {p['ticker']} 开盘价直接跌破止损 {p['stop_price']:.2f}，"
                            "风险模型失效，信号作废")
                 continue
@@ -195,17 +248,22 @@ class SimEngine:
             # （保守摩擦口径，防滑点断崖；ADV 未知时回落 v6.0 合并 10bp）
             bps = frozen_entry_friction(p) if budgeted else friction_bps(bar.adv)
             if bps is None:
-                fill_checks.append({"ticker": p["ticker"], "date": bar_date,
-                                    "shares": 0, "reason": "signal_budget_invalid"})
+                refuse(p, "signal_budget_invalid", bar=bar)
                 ops.append(f"⏸️ {p['ticker']} 信号时点成本证据无效，释放待成交预算")
                 continue
             fill_net = round(fill * (1 + bps / 10_000), 4)
             cost = shares * fill_net
             allocation = None
             if budgeted:
-                allocation = opening_allocation(s, p, bar, bar_date, dated_bar, fill_net)
+                allocation = opening_allocation(s, p, bar, bar_date, open_bar, fill_net)
                 fill_checks.append({"ticker": p["ticker"], "date": bar_date, **allocation})
                 if not allocation["shares"]:
+                    if facts is not None and allocation["reason"] == "opening_holdings_valuation_unavailable":
+                        refuse(p, "BAR_UNAVAILABLE", kind="opening_unavailable", record_check=False)
+                        still_pending.append(p)
+                        ops.append(f"⏸️ {p['ticker']} 缺少持仓开盘估值，等待本会话证据")
+                        continue
+                    refuse(p, allocation["reason"], bar=bar, record_check=False)
                     # Missing the one admitted opening is never repaired by
                     # inventing a later fill at an unrelated day's opening.
                     ops.append(f"⏸️ {p['ticker']} 公开模拟开盘拒绝：{allocation['reason']}")
@@ -216,6 +274,8 @@ class SimEngine:
                 shares = allocation["shares"]
                 cost = shares * fill_net
             if shares <= 0 or cost > s["cash"]:
+                if facts is not None:
+                    refuse(p, "opening_risk_or_cash_exhausted", bar=bar)
                 ops.append(f"⚠️ {p['ticker']} 开盘价漂移后风险/现金超限，放弃该信号")
                 continue
             # v6.0 总敞口执行（白皮书§4.4）：计划投入后敞口超 MRS* 上限则顺延
@@ -239,18 +299,137 @@ class SimEngine:
                 # v6.3 三栏台账：毛口径入场价与入场摩擦档位（出场摩擦按当时 ADV 重定档）
                 "entry_raw": fill, "friction_bps": bps,
                 "bars_held": 0,
+                **({"signal_id": p["signal_id"], "last_price": fill_net} if facts else {}),
                 **({"risk_group": allocation["risk_group"], "entry_budget": allocation["budget"],
                     "opening_allocation": allocation} if allocation else {}),
             })
+            if facts is not None:
+                facts.emit(p["signal_id"], "filled", bar_date, bar=bar, fill={
+                    "entry": fill_net, "entry_raw": fill, "shares": shares,
+                    "friction_cost": round(shares * (fill_net - fill), 2),
+                    "risk_usd": s["positions"][-1]["risk_usd"],
+                })
             ops.append(f"🟢 买入 {p['ticker']} {shares} 股 @ {fill:.2f}"
                        f"（开盘价成交，止损 {p['stop_price']:.2f}）")
         s["pending"] = still_pending
 
         # ---------- 2. 出场纪律 ----------
+        if paper is not None:
+            self._manage_completed(paper, paper.completed_session, ops, facts)
+            s["paper_last_closed_open"] = paper.completed_session.isoformat()
+        else:
+            self._manage_positions(dated_bar, ops, source, budgeted)
+
+        # ---------- 3. 记净值 ----------
+        equity = s["cash"]
+        marks: dict[str, float] = {}
+        for pos in s["positions"]:
+            px = pos.get("last_price", pos["entry_price"])
+            marks[pos["ticker"]] = px
+            equity += pos["shares"] * px
+        equity = round(equity, 2)
+        if not s["equity_curve"] or s["equity_curve"][-1]["date"] != trade_date:
+            s["equity_curve"].append({"date": trade_date, "equity": equity})
+        else:
+            s["equity_curve"][-1]["equity"] = equity
+
+        # ---------- 4. 登记今日新信号（明日开盘价成交） ----------
+        # v3 镜像修复（2026-08-30 真实运行暴露）：旧口径仅 BUY/LIGHT 日登记，
+        # 导致 HOLD（轻仓试探区）日 journal 落账 4 笔而 sim 按兵不动——两本账
+        # 不再镜像（白皮书 §15.2）。L4 闸门已把五态语义编码进 picks 本身，
+        # 故 HOLD/BUY/LIGHT 日只要存在放行 picks 即与 journal 同口径登记；
+        # 唯独 AVOID 是白皮书绝对禁止项（MRS*<4 不开新仓），防御性拒绝登记。
+        if result.picks and allow_new:
+            held = ({p["ticker"] for p in s["positions"]}
+                    | {p["ticker"] for p in s["pending"]})
+            added = 0
+            for pick in result.picks[:max_new]:
+                if pick.ticker in held:
+                    continue                      # 同名标的已有敞口，不重复登记
+                pending = {
+                    "ticker": pick.ticker, "shares": pick.shares,
+                    "stop_price": pick.stop_price, "risk_usd": pick.risk_usd,
+                    "chain": pick.chain, "sector": pick.sector,
+                    "signal_date": trade_date,
+                    "time_stop_days": getattr(pick, "time_stop_days", 0) or 0,
+                    "source": source,
+                    "note": f"{pick.entry_template or '标准'}｜质量 {pick.tss_final}/10",
+                    **({"entry_ref": pick.entry_price,
+                        "entry_budget": freeze_entry_budget(result, pick, execution_date=(
+                            next_scheduled_close(session).date() if facts else None)),
+                        "risk_group": risk_group(pick.chain, pick.sector)} if budgeted else {}),
+                }
+                if facts is not None:
+                    sid = facts.register(pending, result, pick, trade_date, paper.earnings_dates)
+                    if sid is None:
+                        continue
+                    pending["signal_id"] = sid
+                s["pending"].append(pending)
+                held.add(pick.ticker)
+                added += 1
+            if added:
+                ops.append(f"📋 新信号 {added} 只登记在册，"
+                           "明日开盘价成交（无未来函数）")
+        if not ops:
+            ops.append("😴 今日按兵不动——纪律优先，空仓也是一种仓位")
+
+        entry = {"date": trade_date, "ops": ops, "equity": equity, "source": source}
+        if s["ops_log"] and s["ops_log"][-1]["date"] == trade_date:
+            s["ops_log"][-1] = entry               # 同日重跑幂等覆盖
+        else:
+            s["ops_log"].append(entry)
+        if persist:
+            self.save()
+        result = {"equity": equity, "ops": ops, "marks": marks,
+                  **({"fill_checks": fill_checks} if budgeted else {})}
+        if facts is not None:
+            open_status = "available_window" if paper.opening_ready(session) else "SESSION_NOT_OPEN"
+            if opening_already_closed:
+                open_status = "SESSION_ALREADY_SEALED"
+            result.update(events=facts.new, observation_status={
+                "open": open_status,
+                "completed": "complete" if paper.completed_session == session else "SESSION_NOT_COMPLETE",
+                "latest_completed_session": paper.completed_session.isoformat(),
+                "missing": list(facts.missing.values()),
+            })
+        return result
+
+    def _manage_completed(self, paper, through, ops, facts):
+        from datetime import timedelta
+        from .paper_ledger import required_sessions
+
+        while self.state["positions"]:
+            observed = {}
+            for pos in self.state["positions"]:
+                ticker = pos["ticker"]
+                pos.setdefault("last_price", pos["entry_price"])
+                if not pos.get("signal_id") and "bars_held" not in pos and self.state["equity_curve"]:
+                    prior = min(through.isoformat(), self.state["equity_curve"][-1]["date"])
+                    if prior >= pos["entry_date"]:
+                        pos.setdefault("last_bar_date", prior)
+                        pos["bars_held"] = _trading_days(
+                            pos["entry_date"], pos["last_bar_date"], self.state["equity_curve"])
+                after = (date.fromisoformat(pos["last_bar_date"]) if pos.get("last_bar_date")
+                         else date.fromisoformat(pos["entry_date"]) - timedelta(days=1))
+                session = next(required_sessions(after, through), None)
+                if session is None:
+                    continue
+                value = paper.completed(ticker, session)
+                if value is None:
+                    facts.emit(pos.get("signal_id"), "completed_unavailable", session.isoformat(),
+                               reason="BAR_UNAVAILABLE")
+                    continue
+                observed[ticker] = value
+            if not observed:
+                return
+            self._manage_positions(observed.get, ops, None, True, facts=facts)
+
+    def _manage_positions(self, dated_bar, ops, source, budgeted, *, facts=None):
+        s = self.state
         kept = []
         for pos in s["positions"]:
             last_bar_date = pos.get("last_bar_date")
-            if last_bar_date is None and "bars_held" not in pos and s["equity_curve"]:
+            if facts is None and last_bar_date is None and "bars_held" not in pos and s["equity_curve"]:
                 # 旧台账的保守水位只迁移一次，避免后续记账日不断向前推水位，
                 # 导致早晨取得的昨日 K 永远被误判为已经处理。
                 last_bar_date = max(e["date"] for e in s["equity_curve"])
@@ -284,6 +463,8 @@ class SimEngine:
                 exit_price, reason = act.exit_price, act.reason
             elif act.action == "protect":
                 pos["stop"] = pos["entry_price"]
+                if facts is not None:
+                    facts.emit(pos.get("signal_id"), "protected", bar_date, reason="profit_protection", bar=bar)
                 ops.append(f"🛡️ {pos['ticker']} 浮盈达 2R，止损上移至成本线 {pos['stop']:.2f}")
             if exit_price is not None:
                 # v6.3：卖出净价 = 毛价 × (1 − 单边摩擦)；出场 ADV 未知时沿用入场档位
@@ -300,7 +481,7 @@ class SimEngine:
                 friction = max(0.0, round(gross_pnl - pnl, 2))   # 摩擦永不为负
                 gross_r = round(gross_pnl / max(pos["risk_usd"], 1e-9), 2)
                 s["cash"] = round(s["cash"] + proceeds, 2)
-                s["closed"].append({
+                closed = {
                     "ticker": pos["ticker"], "entry_date": pos["entry_date"],
                     "exit_date": bar_date, "entry": pos["entry_price"],
                     "exit": exit_price, "shares": pos["shares"],
@@ -308,11 +489,15 @@ class SimEngine:
                     "days": days,
                     "gross_pnl": gross_pnl, "gross_r": gross_r,
                     "friction_cost": friction, "net_r": r_mult,
-                    "source": source,
+                    "source": pos.get("source", "legacy") if facts is not None else source,
+                    **({"signal_id": pos["signal_id"]} if facts is not None and "signal_id" in pos else {}),
                     **({"entry_raw": entry_raw, "exit_raw": exit_raw,
                         "entry_friction_cost": (pos["entry_price"] - entry_raw) * pos["shares"],
                         "exit_friction_cost": (exit_raw - exit_price) * pos["shares"]} if budgeted else {}),
-                })
+                }
+                s["closed"].append(closed)
+                if facts is not None:
+                    facts.emit(pos.get("signal_id"), "closed", bar_date, reason=reason, bar=bar, close=closed)
                 ops.append(f"🔴 卖出 {pos['ticker']} {pos['shares']} 股 @ {exit_price:.2f}"
                            f"（{reason}，{'盈' if pnl >= 0 else '亏'} ${abs(pnl):,.0f}，{r_mult}R）")
             else:
@@ -320,61 +505,6 @@ class SimEngine:
                 pos.update(last_bar_date=bar_date, bars_held=days, last_price=bar.close)
                 kept.append(pos)
         s["positions"] = kept
-
-        # ---------- 3. 记净值 ----------
-        equity = s["cash"]
-        marks: dict[str, float] = {}
-        for pos in s["positions"]:
-            px = pos.get("last_price", pos["entry_price"])
-            marks[pos["ticker"]] = px
-            equity += pos["shares"] * px
-        equity = round(equity, 2)
-        if not s["equity_curve"] or s["equity_curve"][-1]["date"] != trade_date:
-            s["equity_curve"].append({"date": trade_date, "equity": equity})
-        else:
-            s["equity_curve"][-1]["equity"] = equity
-
-        # ---------- 4. 登记今日新信号（明日开盘价成交） ----------
-        # v3 镜像修复（2026-08-30 真实运行暴露）：旧口径仅 BUY/LIGHT 日登记，
-        # 导致 HOLD（轻仓试探区）日 journal 落账 4 笔而 sim 按兵不动——两本账
-        # 不再镜像（白皮书 §15.2）。L4 闸门已把五态语义编码进 picks 本身，
-        # 故 HOLD/BUY/LIGHT 日只要存在放行 picks 即与 journal 同口径登记；
-        # 唯独 AVOID 是白皮书绝对禁止项（MRS*<4 不开新仓），防御性拒绝登记。
-        if result.picks and allow_new:
-            held = ({p["ticker"] for p in s["positions"]}
-                    | {p["ticker"] for p in s["pending"]})
-            added = 0
-            for pick in result.picks[:max_new]:
-                if pick.ticker in held:
-                    continue                      # 同名标的已有敞口，不重复登记
-                s["pending"].append({
-                    "ticker": pick.ticker, "shares": pick.shares,
-                    "stop_price": pick.stop_price, "risk_usd": pick.risk_usd,
-                    "chain": pick.chain, "sector": pick.sector,
-                    "signal_date": trade_date,
-                    "time_stop_days": getattr(pick, "time_stop_days", 0) or 0,
-                    "source": source,
-                    "note": f"{pick.entry_template or '标准'}｜质量 {pick.tss_final}/10",
-                    **({"entry_ref": pick.entry_price,
-                        "entry_budget": freeze_entry_budget(result, pick),
-                        "risk_group": risk_group(pick.chain, pick.sector)} if budgeted else {}),
-                })
-                held.add(pick.ticker)
-                added += 1
-            if added:
-                ops.append(f"📋 新信号 {added} 只登记在册，"
-                           "明日开盘价成交（无未来函数）")
-        if not ops:
-            ops.append("😴 今日按兵不动——纪律优先，空仓也是一种仓位")
-
-        entry = {"date": trade_date, "ops": ops, "equity": equity, "source": source}
-        if s["ops_log"] and s["ops_log"][-1]["date"] == trade_date:
-            s["ops_log"][-1] = entry               # 同日重跑幂等覆盖
-        else:
-            s["ops_log"].append(entry)
-        self.save()
-        return {"equity": equity, "ops": ops, "marks": marks,
-                **({"fill_checks": fill_checks} if budgeted else {})}
 
     # ---------------------------------------------------------------- 统计
     def stats(self) -> dict:

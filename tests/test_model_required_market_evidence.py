@@ -282,6 +282,11 @@ def _watch_run(tmp_path, monkeypatch, *, avoid=False):
                                        adv_usd=200000000.0, atr_pct=.02)
         context["watchlist"] = [candidate]
         context["scan_stats"]["selected"] = 1
+        # This fixture replaces the normal shortlist to isolate the market
+        # evidence path. Keep its accompanying scanner rows consistent.
+        for row in context["scan_decisions"].values():
+            row.pop("selection", None)
+        context["scan_decisions"]["AAA"] = {"hard_filter": "pass", "selection": "baseline"}
         return context["watchlist"]
     monkeypatch.setattr(pipeline.UniverseScannerAgent, "execute", one_fixture_candidate)
     if avoid:

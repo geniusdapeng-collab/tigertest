@@ -10,9 +10,11 @@ import pytest
 
 import main
 from trading_system import pipeline
+from trading_system.activity import rejection_report
 from trading_system.agent_evidence import EvidenceInvalid, read_bytes, read_json, verify_events
 from trading_system.data_models import TradePick
-from trading_system.llm.company_evidence import COMPANY_EVIDENCE_CONTRACT, candidate_searches
+from trading_system.llm.company_evidence import candidate_searches
+from trading_system.llm.sec_identity import SEC_COMPANY_CONTRACT as COMPANY_EVIDENCE_CONTRACT, SecTransport
 from trading_system.llm.deepseek_required import DeepSeekRequiredClient
 from trading_system.llm.required_proof import verify_required_model
 from trading_system.market_close import verify_close_evidence
@@ -66,7 +68,9 @@ def _fixture(tmp_path, monkeypatch, *, source="valid", model_buy=False, aligned_
         original_risk(agent, context)
         assert not context["picks"]
         pick = TradePick("AAA", 8.2, 6.0, "C", 95.0, 91.0, 70, .0665, 280.0, time_stop_days=5)
-        context.update(picks=[pick], action="HOLD", pick_rationale={"AAA": {
+        diagnostics = context["rejections"]["candidates"]
+        next(row for row in diagnostics if row["ticker"] == "AAA").update(status="accepted", reasons=[])
+        context.update(picks=[pick], action="HOLD", rejections=rejection_report(diagnostics), pick_rationale={"AAA": {
             "entry_setup": {"template": "C", "no_chase": False, "entry_ceiling": None},
             "signal_adv_usd": 100000000, "size_ratio": .35,
         }})
@@ -108,6 +112,14 @@ def _fixture(tmp_path, monkeypatch, *, source="valid", model_buy=False, aligned_
         payload = {"results": [] if source == "empty" else [item]}
         return payload, _hash(payload)
 
+    def sec_observe(_transport, request):
+        from test_sec_identity import frozen_responses
+
+        result = frozen_responses()
+        result["filings"][0]["id"] = request["filings"][0]["id"]
+        return result
+
+    monkeypatch.setattr(SecTransport, "observe", sec_observe)
     monkeypatch.setattr(DeepSeekRequiredClient, "_post_json", provider)
     return execution, root, args, admission, denied, attempts, candidate_requests, observed
 
@@ -130,10 +142,17 @@ def test_company_search_coverage_stays_separate_from_model_buy(tmp_path, monkeyp
                                     "count": 4, "need_content": True}]
     assert attempts.count(("search.collect", "/v1/tools/search")) == 14
     assert result["raw"]["model"]["search_count"] == 14
-    assert result["raw"]["debate"]["company_evidence"] == {
-        "contract": COMPANY_EVIDENCE_CONTRACT,
-        "candidates": {"AAA": {"status": expected_status,
-                               "source_ids": [observed["source_id"]] if source == "valid" else []}}}
+    evidence = result["raw"]["debate"]["company_evidence"]
+    assert evidence["contract"] == COMPANY_EVIDENCE_CONTRACT and set(evidence["candidates"]) == {"AAA"}
+    outcome = evidence["candidates"]["AAA"]
+    assert outcome["status"] == expected_status
+    assert outcome["source_ids"] == ([observed["source_id"]] if source == "valid" else [])
+    if source == "valid":
+        filed, = outcome["filing_evidence"]
+        assert filed["source_id"] == observed["source_id"] and filed["cik"] == "0000000123"
+        assert len(filed["original_sha256"]) == len(filed["submissions_sha256"]) == 64
+    else:
+        assert "filing_evidence" not in outcome
     assert verify_events(root, execution.run_id, daily_stage_contract(True))["stage_count"] == 39
     assert verify_required_model(root, result, admission, company_evidence_contract=COMPANY_EVIDENCE_CONTRACT) == result["raw"]["model"]
 

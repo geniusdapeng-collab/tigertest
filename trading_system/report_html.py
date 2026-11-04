@@ -23,7 +23,7 @@ from .data_models import PipelineResult
 from .redline import STEP_REGISTRY
 from .report import (
     _accounting_note, _execution_blocked, _freshness_note, _market_currency,
-    _market_name, _universe_note, company_evidence_note,
+    _market_name, _universe_note, company_evidence_note, research_audit_tables,
     model_instruction_fields, model_instructions, model_source_html,
 )
 
@@ -2567,6 +2567,16 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     P.append(f"<div style='margin-top:8px;font-size:14.5px'>{_esc(r.market_view)}</div>")
     if company_note:
         P.append(f"<p class='sub'>{_esc(company_note)}</p>")
+    audit_tables = research_audit_tables(raw)
+    if audit_tables:
+        P.append("<p class='sub'>阶段证据截至治理链校验。最终回执补齐日报生成和封存阶段。</p>")
+        for title, columns, rows in audit_tables:
+            P.append(f"<details><summary>{_esc(title)}</summary><table><thead><tr>"
+                     + "".join(f"<th scope='col'>{_esc(col)}</th>" for col in columns)
+                     + "</tr></thead><tbody>")
+            for cells in rows:
+                P.append("<tr>" + "".join(f"<td>{_esc(cell)}</td>" for cell in cells) + "</tr>")
+            P.append("</tbody></table></details>")
     P.append(f"</div><div style='flex:0 0 auto;opacity:0.95'>{_pulse_svg()}</div>")
     # —— 数据源公示：配置主源 + 本轮实际拉取血缘，真实可审计 ——
     prov_zh = _PROVIDER_ZH.get(r.provider, _esc(r.provider))

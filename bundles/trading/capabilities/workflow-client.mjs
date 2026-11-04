@@ -19,7 +19,7 @@ const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
 const EXIT_CODES = new Map([
   ...["INVALID_REQUEST", "INPUT_TOO_LARGE"].map((s) => [s, 2]),
   ...["READ_ONLY", "LIVE_FORBIDDEN", "UNAUTHORIZED"].map((s) => [s, 3]),
-  ...["IDEMPOTENCY_CONFLICT", "ACCOUNT_BUSY"].map((s) => [s, 5]),
+  ...["IDEMPOTENCY_CONFLICT", "ACCOUNT_BUSY", "ACCOUNT_VERSION_CONFLICT"].map((s) => [s, 5]),
   ...["DATA_UNAVAILABLE", "DATA_STALE", "SOURCE_SYNTHETIC", "CURRENCY_BLOCKED"].map((s) => [s, 6]),
   ...["RUNNER_FAILED", "RESULT_INVALID", "EVIDENCE_MISSING", "EVIDENCE_HASH_MISMATCH", "ARTIFACT_WRITE_FAILED", "RUN_NOT_FOUND"].map((s) => [s, 7]),
   ...["STEP_ORDER_VIOLATION", "STEP_FAILED", "RUN_INCOMPLETE", "MODEL_REQUIRED_FAILED"].map((s) => [s, 8]),
@@ -313,7 +313,7 @@ export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_COD
 
 export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
-  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"]) {
+  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT"]) {
     if (typeof env[key] === "string") result[key] = env[key];
   }
   return { ...result, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1" };

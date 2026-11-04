@@ -28,6 +28,8 @@ from .agent_evidence import (
 )
 from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_PROFILE,
                                 REQUIRED_POLICY_ID)
+from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
+from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
 
 PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
@@ -46,8 +48,14 @@ DEPENDENCIES = ("pandas", "numpy", "yfinance", "requests", "PyYAML", "tokenizers
 SCENE_POLICY_RELATIVE = "governance/bundles/trading/model-policy.yml"
 SOURCE_CONTENT_CONTRACT = "native-complete/v1"
 LEGACY_SOURCE_CONTENT_CONTRACT = "legacy-excerpts/v1"
+EVENT_EVIDENCE_RELATIVE = "trading_system/search/event_identity.py"
+EVENT_EVIDENCE_CONTRACT = "point-in-time-event/v1"
 COMPANY_EVIDENCE_RELATIVE = "trading_system/llm/company_evidence.py"
 COMPANY_EVIDENCE_CONTRACT = "sec-cover-search/v1"
+SEC_COMPANY_RELATIVE = "trading_system/llm/sec_identity.py"
+SEC_COMPANY_CONTRACT = "sec-submission-original/v2"
+PAPER_LEDGER_RELATIVE = "trading_system/paper_ledger.py"
+PAPER_LEDGER_CONTRACT = "tiger.paper-execution.v1"
 # The last deployed contract used 4,000/1,600-character excerpts. Recognize it
 # only from its already frozen source bytes, not a missing marker in new runs.
 LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
@@ -55,7 +63,10 @@ LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa
 
 def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None,
                     source_content_contract: str = SOURCE_CONTENT_CONTRACT,
-                    company_evidence_contract: str = COMPANY_EVIDENCE_CONTRACT) -> dict:
+                    company_evidence_contract: str = SEC_COMPANY_CONTRACT,
+                    event_contract: str = EVENT_EVIDENCE_CONTRACT,
+                    risk_evidence_contract: str = RISK_EVIDENCE_CONTRACT,
+                    authoritative_paper: bool = True) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     required = profile == REQUIRED_PROFILE
@@ -76,7 +87,7 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         "search_cleanup_budget_seconds": 15.0,
         "business_deadline_seconds": DEADLINE_SECONDS,
         "access_challenges": "refuse",
-        "stages": daily_stage_contract(required),
+        "stages": daily_stage_contract(required, authoritative_paper=required and authoritative_paper),
         "limitations": [
             "Public market data with a local paper account; no broker orders.",
             "Inner semantic models are disabled; legal passthrough is disclosed.",
@@ -86,6 +97,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         ],
     }
     if required:
+        if authoritative_paper:
+            value["paper_ledger_contract"] = PAPER_LEDGER_CONTRACT
         from yaml import YAMLError
         from .llm.scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config, validate_coverage
         path = scene_policy_path or SOURCE_ROOT / SCENE_POLICY_RELATIVE
@@ -114,10 +127,18 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             value["model_contract"]["source_content_contract"] = source_content_contract
         elif source_content_contract != LEGACY_SOURCE_CONTENT_CONTRACT:
             raise EvidenceInvalid("RESULT_INVALID", "Unknown source content contract")
-        if company_evidence_contract == COMPANY_EVIDENCE_CONTRACT:
+        if company_evidence_contract in {COMPANY_EVIDENCE_CONTRACT, SEC_COMPANY_CONTRACT}:
             value["model_contract"]["company_evidence_contract"] = company_evidence_contract
         elif company_evidence_contract:
             raise EvidenceInvalid("RESULT_INVALID", "Unknown company evidence contract")
+        if event_contract == EVENT_EVIDENCE_CONTRACT:
+            value["model_contract"]["event_contract"] = event_contract
+        elif event_contract:
+            raise EvidenceInvalid("RESULT_INVALID", "Unknown event evidence contract")
+        if risk_evidence_contract == RISK_EVIDENCE_CONTRACT:
+            value["model_contract"]["risk_evidence_contract"] = risk_evidence_contract
+        elif risk_evidence_contract:
+            raise EvidenceInvalid("RESULT_INVALID", "Unknown risk evidence contract")
         value["limitations"][1] = "All five semantic stages require actual DeepSeek Flash calls; failure stops publication."
         value["limitations"] += [
             "deepseek-flash is a provider alias observed as V4.1-Flash-1017, not an immutable version ID.",
@@ -276,7 +297,7 @@ def run_environment(work: Path, *, model_required: bool = False) -> dict[str, st
     # Trusted startup configuration only. Business requests cannot supply keys,
     # provider URLs or model overrides. The selected required adapter validates
     # the exact fixed backend/origin/model before using any credential.
-    for key in ("LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"):
+    for key in ("LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT"):
         if model_required and key in os.environ:
             env[key] = os.environ[key]
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
@@ -506,11 +527,17 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     source_content_contract = (LEGACY_SOURCE_CONTENT_CONTRACT if required_source
                                and required_source["sha256"] == LEGACY_REQUIRED_SOURCE_SHA256
                                else SOURCE_CONTENT_CONTRACT)
-    company_evidence_contract = (COMPANY_EVIDENCE_CONTRACT
-                                 if any(ref["path"] == COMPANY_EVIDENCE_RELATIVE for ref in source["files"])
-                                 else "")
+    frozen_files = {ref["path"] for ref in source["files"]}
+    company_evidence_contract = (SEC_COMPANY_CONTRACT if SEC_COMPANY_RELATIVE in frozen_files else
+                                 COMPANY_EVIDENCE_CONTRACT if COMPANY_EVIDENCE_RELATIVE in frozen_files else "")
+    event_contract = (EVENT_EVIDENCE_CONTRACT
+                      if any(ref["path"] == EVENT_EVIDENCE_RELATIVE for ref in source["files"]) else "")
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
+                                      event_contract=event_contract,
+                                      risk_evidence_contract=RISK_EVIDENCE_CONTRACT
+                                      if RISK_EVIDENCE_RELATIVE in frozen_files else "",
                                       company_evidence_contract=company_evidence_contract,
+                                      authoritative_paper=any(ref["path"] == PAPER_LEDGER_RELATIVE for ref in source["files"]),
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
@@ -637,6 +664,10 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
             if benchmark_date != expected_date:
                 raise EvidenceInvalid("RESULT_INVALID", "Benchmark differs from the completed market session")
             verify_close_evidence(run, admission, freshness)
+            if any(ref["path"] == "trading_system/security_roster.py" for ref in manifest["files"]):
+                from .security_roster import verify_observed_roster
+                verify_observed_roster(run, raw, benchmark_date,
+                                       datetime.fromisoformat(admission["clock"]["admitted_at_utc"]))
     if freshness["benchmark_lag_days"] != (expected_date - benchmark_date).days:
         raise EvidenceInvalid("RESULT_INVALID", "Benchmark lag and frozen market date disagree")
     from .currency import require_usd_sim_state
@@ -705,10 +736,20 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
     }
     if profile == REQUIRED_PROFILE:
         from .llm.required_proof import verify_required_model
-        model_contract = read_json(run, "policy.json")["model_contract"]
+        from .research_audit import SOURCE_PATH as RESEARCH_AUDIT_SOURCE, verify_audit
+
+        if any(ref["path"] == RESEARCH_AUDIT_SOURCE for ref in read_json(run, "source-manifest.json")["files"]):
+            summary["disclosures"]["research_audit"] = verify_audit(run, raw.get("research_audit"))
+        policy = read_json(run, "policy.json")
+        if policy.get("paper_ledger_contract") == PAPER_LEDGER_CONTRACT:
+            from .paper_proof import verify_paper_execution
+            summary["disclosures"]["paper_execution"] = verify_paper_execution(run, admission, result, sim)
+        model_contract = policy["model_contract"]
         summary["model"] = verify_required_model(run, result, admission, scene_policy_path=scene_policy_path,
             source_content_contract=model_contract.get("source_content_contract", LEGACY_SOURCE_CONTENT_CONTRACT),
-            company_evidence_contract=model_contract.get("company_evidence_contract", ""))
+            company_evidence_contract=model_contract.get("company_evidence_contract", ""),
+            event_contract=model_contract.get("event_contract", ""),
+            risk_evidence_contract=model_contract.get("risk_evidence_contract", ""))
         if model_contract.get("company_evidence_contract"):
             summary["disclosures"]["company_evidence"] = raw["debate"]["company_evidence"]
         summary["action_summary"] = raw["action_summary"]
@@ -880,9 +921,13 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         if ((deadline is not None and time.monotonic() >= deadline)
                 or datetime.now(timezone.utc) >= datetime.fromisoformat(admission["clock"]["deadline_at_utc"])):
             raise TimeoutError("Business deadline elapsed before account publication")
+    def check_account_parent():
+        if pointer_read(state) != admission["parent"]:
+            code = "ACCOUNT_VERSION_CONFLICT" if policy.get("paper_ledger_contract") else "RESULT_INVALID"
+            raise EvidenceInvalid(code, "Account parent changed before publication")
+
     before_publish()
-    if pointer_read(state) != admission["parent"]:
-        raise EvidenceInvalid("RESULT_INVALID", "Account changed before publication")
+    check_account_parent()
     engine = read_json(run, "engine-result.json")
     if engine.get("run_id") != run.name or engine.get("success") is not True:
         raise EvidenceInvalid("RUN_INCOMPLETE", "Engine result is not successful")
@@ -916,8 +961,7 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         receipt[name] = file_ref(run, path, schema)
     atomic_json(run, "receipt.json", receipt, exclusive=True)
     prepared = verify_run(state, run.name, require_committed=False, current_source=None)
-    if pointer_read(state) != admission["parent"]:
-        raise EvidenceInvalid("RESULT_INVALID", "Account parent changed at publication")
+    check_account_parent()
     before_publish()
     durable = True
     try:

@@ -40,6 +40,7 @@ from .tech_chain.agents import (
     ChainRiskAgent, ChainSentimentAgent, CycleLinkageAgent, TechChainMonitorAgent,
 )
 from .tech_chain.fusion import TechChainFusionAgent, signals_to_bonus_map
+from .tech_chain.risk_evidence import risk_coverage
 from .tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
 from .universe import load_universe
 
@@ -500,6 +501,11 @@ def run_pipeline(
 
         # ================= 搜索与清洗（系统的命脉环节） =================
         required = execution is not None and execution.model_required
+        security_roster = None
+        if required and execution.completed_session_close is not None:
+            from .security_roster import observed_roster
+            security_roster = observed_roster(
+                universe, execution.completed_session_close.date(), execution.admitted_at)
         if required:
             from .llm.deepseek_required import DeepSeekRequiredClient
             from .llm import required as semantic
@@ -525,6 +531,7 @@ def run_pipeline(
         prepared.output({"trade_date": trade_date, "provider": provider.name,
                          "synthetic": demo_mode, "market": spec.to_dict(),
                          "universe": universe, "universe_source": universe_source,
+                         **({"security_roster": security_roster} if security_roster else {}),
                          "benchmark_labels": benchmark_labels, "scan_filters": spec.scan_filters(),
                          "market_grad": market_grad, "ah_topics_enabled": ah_enabled,
                          "calendar": event_calendar.to_dict() if event_calendar else None,
@@ -578,9 +585,15 @@ def run_pipeline(
     # ≥2 个不同源（且至少一个 ≤T2）佐证；未达标标记 corroborated=False——
     # 不删除（透传纪律），但叙事/舆情打分输入只使用 corroborated=True 的集合；
     # 被降级文档在决策侧仅作背景参考（tech.risk / decision.debate 仍可见全集）。
-    with tracer.step("clean.cross_validate", {"documents": cleaned}) as stage:
+    from .search.event_identity import EVENT_CONTRACT, validate_events
+    event_cutoff = execution.admitted_at if required else None
+    event_symbols = security_roster["symbols"] if security_roster else {ticker: "us:" + ticker for ticker in universe}
+    with tracer.step("clean.cross_validate", {"documents": cleaned,
+                     **({"event_contract": EVENT_CONTRACT, "security_ids": event_symbols}
+                        if event_cutoff is not None else {})}) as stage:
         from .search.credibility import CrossValidator, scoring_docs
-        cv_stats = CrossValidator().validate(cleaned)
+        cv_stats = (validate_events(cleaned, event_cutoff, security_ids=event_symbols) if event_cutoff is not None
+                    else CrossValidator().validate(cleaned))
         score_docs = scoring_docs(cleaned)
         logger.info("clean.cross_validate: 总 %d 篇｜关键事件 %d｜通过 %d｜降级 %d"
                     "（LLM标注缺失 %d｜缺发布时间 %d）",
@@ -805,6 +818,7 @@ def run_pipeline(
                     len(stock_data), len(all_tickers), len(sector_etfs))
 
         stage.output({"market_data": market_data, "universe": universe, "all_tickers": all_tickers,
+                      **({"security_roster": security_roster} if security_roster else {}),
                       "prefilter": prefilter_note, "lineage": list(_LINEAGE), "data_issues": list(_DATA_ISSUES)})
 
     # ================= 科技股产业链专项子集群 =================
@@ -848,14 +862,17 @@ def run_pipeline(
                      **({"assessment": assessment} if required else {})}) as stage:
         tech_sentiment = semantic.sentiment(llm, score_docs) if required else ChainSentimentAgent(llm).execute(score_docs, tracer)
         stage.output(tech_sentiment)
-    with tracer.step("tech.risk", {"documents": cleaned,
+    risk_docs = score_docs if event_cutoff is not None else cleaned
+    risk_input = {"risk_coverage": risk_coverage(len(risk_docs))} if event_cutoff is not None else {}
+    with tracer.step("tech.risk", {"documents": risk_docs, **risk_input,
                      **({"assessment": assessment} if required else {})}) as stage:
-        tech_alerts = semantic.risk(llm, cleaned) if required else ChainRiskAgent(llm).execute(cleaned, tracer)
+        tech_alerts = semantic.risk(llm, risk_docs) if required else ChainRiskAgent(llm).execute(risk_docs, tracer)
         stage.output(tech_alerts)
     with tracer.step("tech.fusion", {"monitor": tech_monitor, "linkage": tech_linkage,
-                     "sentiment": tech_sentiment, "alerts": tech_alerts}) as stage:
+                     "sentiment": tech_sentiment, "alerts": tech_alerts, **risk_input}) as stage:
         tech_signals = TechChainFusionAgent().execute(
-            tech_monitor, tech_linkage, tech_sentiment, tech_alerts, tracer)
+            tech_monitor, tech_linkage, tech_sentiment, tech_alerts, tracer,
+            risk_evidence_available=event_cutoff is None or bool(risk_docs))
         logger.info("tech.fusion: %s",
                     [(s.chain_id, s.prosperity, s.risk_level, s.bonus_hint) for s in tech_signals])
 
@@ -866,7 +883,7 @@ def run_pipeline(
     with tracer.step("sector.narrative", {"documents": score_docs, "sector_symbols": spec.sector_symbols,
                      **({"assessment": assessment} if required else {})}) as stage:
         narr_res = semantic.narrative(llm, score_docs, spec.sector_symbols) if required else NarrativeAgent(llm).execute(score_docs, spec.sector_symbols, tracer)
-        if not isinstance(narr_res, Passthrough):
+        if not isinstance(narr_res, Passthrough) and (event_cutoff is None or score_docs):
             narrative_llm = narr_res
 
         stage.output({"raw_result": narr_res, "narrative": narrative_llm})
@@ -900,6 +917,8 @@ def run_pipeline(
     active = execution is not None and execution.policy.policy_id == ACTIVE_POLICY_ID
     if execution is not None:
         context.update(paper_execution_budgeted=True, portfolio_state=portfolio_state)
+    if required:
+        context["capture_scan_decisions"] = True
     if active:
         context.update(activity_profile=ACTIVE_PROFILE)
 
@@ -918,8 +937,12 @@ def run_pipeline(
                      **({"include_entry_setups": True} if required else {})}) as stage:
         scanner = UniverseScannerAgent(provider, universe, top_n=top_n,
                                        include_entry_setups=required)
+        scan_started = time.perf_counter()
         candidates = scanner.execute(context)
-        stage.output({"candidates": candidates, "scan_stats": context["scan_stats"]})
+        stage.output({"candidates": candidates, "scan_stats": context["scan_stats"],
+                      **({"scan_decisions": context["scan_decisions"],
+                          "scan_elapsed_ms": round((time.perf_counter() - scan_started) * 1000, 1)}
+                         if required else {})})
     with tracer.step("layer3.tss", {"watchlist": candidates, "market_data": market_data,
                      "chain_map": context.get("chain_map", {}), "sector_map": context.get("sector_map", {}),
                      "tech_bonus_map": context["tech_bonus_map"], "tech_signal_map": context["tech_signal_map"],
@@ -1001,15 +1024,21 @@ def run_pipeline(
                     samples_before = execution.call_io("calibration.samples.read",
                         {"path": execution.paths.calibration_path},
                         lambda: read_json_strict(execution.paths.calibration_path))
-                    calibration_summary = execution.call_io("calibration.run",
-                        {"journal": journal_input, "previous_samples": samples_before,
-                         "journal_path": execution.paths.journal_path,
-                         "samples_path": execution.paths.calibration_path},
-                        lambda: CalibrationLayer(journal_path=str(execution.paths.journal_path),
-                            samples_path=str(execution.paths.calibration_path)).run())
-                    execution.call_io("calibration.samples.readback",
-                        {"path": execution.paths.calibration_path},
-                        lambda: read_json_strict(execution.paths.calibration_path))
+                    if execution.authoritative_paper:
+                        calibration = CalibrationLayer()
+                        samples = calibration.collect_samples(journal_input, paper_only=True)
+                        calibration_summary = {**calibration.summarize(samples),
+                                               "basis": "before_paper_execution"}
+                    else:
+                        calibration_summary = execution.call_io("calibration.run",
+                            {"journal": journal_input, "previous_samples": samples_before,
+                             "journal_path": execution.paths.journal_path,
+                             "samples_path": execution.paths.calibration_path},
+                            lambda: CalibrationLayer(journal_path=str(execution.paths.journal_path),
+                                samples_path=str(execution.paths.calibration_path)).run())
+                        execution.call_io("calibration.samples.readback",
+                            {"path": execution.paths.calibration_path},
+                            lambda: read_json_strict(execution.paths.calibration_path))
                 else:
                     calibration_summary = CalibrationLayer().run()
         except Exception as exc:
@@ -1025,7 +1054,8 @@ def run_pipeline(
         stage.output(calibration_summary)
 
     with tracer.step("report.emit", {key: value for key, value in context.items()
-                     if key not in ("market_data", "market_spec", "event_calendar", "options_store")}) as stage:
+                     if key not in ("market_data", "market_spec", "event_calendar", "options_store",
+                                    "capture_scan_decisions", "scan_decisions")}) as stage:
         notes = context.get("notes", [])
         if tuned_note:
             notes = notes + [tuned_note]
@@ -1045,6 +1075,7 @@ def run_pipeline(
                 "elapsed_s": round(time.time() - started, 1),
                 "universe_mode": universe_mode,
                 "universe_source": universe_source,
+                **({"security_roster": security_roster} if security_roster else {}),
                 "account_usd": account_usd,
                 "account_currency": "USD",
                 "currency_policy": context["currency_policy"],
@@ -1052,7 +1083,8 @@ def run_pipeline(
                 "rejections": context.get("rejections", {}),
                 "activity_profile": ACTIVE_PROFILE if active else None,
                 "paper_execution_budgeted": execution is not None,
-                "paper_execution_version": "signal-budgeted-open-v1" if execution is not None else "legacy",
+                "paper_execution_version": ("tiger.paper-execution.v1" if execution and execution.authoritative_paper
+                                            else "signal-budgeted-open-v1" if execution else "legacy"),
                 "entry_budget": context.get("entry_budget"),
                 "source_lineage": list(_LINEAGE),
                 "provider_health": ({name: dict(health) for name, health in _HEALTH.items()}

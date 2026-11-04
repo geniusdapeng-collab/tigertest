@@ -54,6 +54,8 @@ def _array(items: dict, low: int, high: int, *, unique: bool = False) -> dict:
 
 
 def _evidence(doc_ids: list[str]) -> dict:
+    if not doc_ids:
+        return _array({"type": "string", "pattern": r"(?!)"}, 0, 0, unique=True)
     return _array(_enum(doc_ids), 1, 8, unique=True)
 
 
@@ -70,18 +72,21 @@ def clean_schema(doc_ids) -> dict:
     return _object(documents=_array(document, len(docs), len(docs), unique=True))
 
 
-def sentiment_schema(chain_ids, doc_ids) -> dict:
-    chains, docs = _ids(chain_ids, chains=True), _ids(doc_ids)
+def sentiment_schema(chain_ids, doc_ids, *, allow_empty=False) -> dict:
+    chains, docs = _ids(chain_ids, chains=True), _ids(doc_ids, allow_empty=allow_empty)
     chain = _object(
         chain_id=_enum(chains), heat=_number(0, 10), sentiment_score=_number(-1, 1),
         narrative_change=_enum(["improving", "stable", "deteriorating"]),
         key_drivers=_array(_text(600), 1, 5, unique=True), evidence_ids=_evidence(docs),
     )
+    if not docs:
+        chain["properties"].update(heat={"const": 5}, sentiment_score={"const": 0},
+                                   narrative_change={"const": "stable"})
     return _object(chains=_array(chain, len(chains), len(chains), unique=True))
 
 
-def risk_schema(chain_ids, doc_ids) -> dict:
-    chains, docs = _ids(chain_ids, chains=True), _ids(doc_ids)
+def risk_schema(chain_ids, doc_ids, *, allow_empty=False) -> dict:
+    chains, docs = _ids(chain_ids, chains=True), _ids(doc_ids, allow_empty=allow_empty)
     allowed = chains if "unknown" in chains else [*chains, "unknown"]
     alert = _object(
         severity=_number(1, 10), chain_id=_enum(allowed),
@@ -90,17 +95,21 @@ def risk_schema(chain_ids, doc_ids) -> dict:
         headline_zh=_text(400), transmission=_array(_text(300), 1, 6, unique=True),
         evidence_ids=_evidence(docs),
     )
-    return _object(assessment=_text(1000), alerts=_array(alert, 0, 20, unique=True))
+    return _object(assessment=_text(1000), alerts=_array(alert, 0, 20 if docs else 0, unique=True))
 
 
-def narrative_schema(etfs, doc_ids) -> dict:
-    sectors, docs = _ids(etfs, symbols=True), _ids(doc_ids)
+def narrative_schema(etfs, doc_ids, *, allow_empty=False) -> dict:
+    sectors, docs = _ids(etfs, symbols=True), _ids(doc_ids, allow_empty=allow_empty)
     sector = _object(
         etf=_enum(sectors), narrative_score=_number(0, 10),
         eps_revision_bias=_enum(["up", "flat", "down", "unknown"]),
         guidance_tone=_enum(["positive", "neutral", "negative", "unknown"]),
         evidence=_array(_text(600), 1, 3, unique=True), evidence_ids=_evidence(docs),
     )
+    if not docs:
+        sector["properties"].update(narrative_score={"const": 5},
+                                    eps_revision_bias={"const": "unknown"},
+                                    guidance_tone={"const": "unknown"})
     return _object(sectors=_array(sector, len(sectors), len(sectors), unique=True))
 
 

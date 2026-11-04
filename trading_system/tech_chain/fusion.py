@@ -32,7 +32,7 @@ class TechChainSignal:
     chain_id: str
     main_chain: str               # 映射到 chains.py 的主链
     prosperity: float | None      # 0..10（None=全部维度缺失）
-    risk_level: float             # 0..10（无预警=0）
+    risk_level: float | None      # 0..10（有证据且无预警=0，证据不足=None）
     alerts: list[dict] = field(default_factory=list)
     transmission: dict[str, dict[str, float]] = field(default_factory=dict)
     bonus_hint: float = 1.0       # 0.90..1.15，乘到 TSS chain_bonus 上
@@ -107,13 +107,14 @@ class TechChainFusionAgent:
                 linkage: list[GlobalLinkageRow],
                 sentiment: dict[str, SentimentRow] | Passthrough,
                 alerts: list[RiskAlert] | Passthrough,
-                tracer: ExecutionTracer | None = None) -> list[TechChainSignal]:
+                tracer: ExecutionTracer | None = None, *,
+                risk_evidence_available: bool = True) -> list[TechChainSignal]:
         sent_map: dict[str, SentimentRow] = {}
         sent_degraded = isinstance(sentiment, Passthrough)
         if not sent_degraded:
             sent_map = sentiment
         alert_list: list[RiskAlert] = []
-        risk_degraded = isinstance(alerts, Passthrough)
+        risk_degraded = isinstance(alerts, Passthrough) or not risk_evidence_available
         if not risk_degraded:
             alert_list = alerts
 
@@ -149,10 +150,11 @@ class TechChainFusionAgent:
             else:
                 degraded.append("tech.sentiment")
 
-            s_risk, risk_level = _risk_penalty(cid, alert_list)
+            risk_level = 0.0 if risk_evidence_available else None
             if risk_degraded:
                 degraded.append("tech.risk")
             else:
+                s_risk, risk_level = _risk_penalty(cid, alert_list)
                 parts["risk"] = (s_risk, W_RISK)
                 if risk_level > 0:
                     evidence.append(f"风险预警最高等级 {risk_level:.0f}/10")
@@ -168,7 +170,7 @@ class TechChainFusionAgent:
                 bonus = 1.0
             else:
                 bonus = 0.90 + (prosperity / 10.0) * 0.25
-            if risk_level >= 8.0:
+            if risk_level is not None and risk_level >= 8.0:
                 bonus = min(bonus, 1.00)
 
             signals.append(TechChainSignal(

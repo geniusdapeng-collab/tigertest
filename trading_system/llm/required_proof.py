@@ -12,7 +12,10 @@ from ..calendar import next_trading_day
 from ..cleaning.pipeline import _normalize_text, MAX_CONTENT, rule_base_clean
 from ..search.credibility import CrossValidator, scoring_docs, evidence_for
 from ..search.models import CleanDocument, RawDocument
-from ..tech_chain.agents import SentimentRow, RiskAlert
+from ..search.event_identity import EVENT_CONTRACT, validate_events
+from ..tech_chain.agents import ChainMonitorRow, GlobalLinkageRow, LinkMomentum, SentimentRow, RiskAlert
+from ..tech_chain.fusion import TechChainFusionAgent, signals_to_bonus_map
+from ..tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT, risk_coverage
 from ..redline import LLMUnavailable
 from ..redline.execution import REQUIRED_MODEL_STAGES, RequiredModelFailed
 from ..redline.model_diagnostics import validate_model_diagnostic
@@ -20,6 +23,8 @@ from ..tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
 from .company_evidence import (
     COMPANY_EVIDENCE_CONTRACT, SEARCH_COUNT, candidate_evidence, candidate_searches,
 )
+from .sec_identity import (SEC_COMPANY_CONTRACT, SEC_VERIFY_METHOD, confirm_filings,
+                           sec_verification_input)
 from .deepseek_required import (
     MODEL, RELEASE, SEARCH_MODE, retryable_search_failure, sanitize_model_text,
     sanitize_model_value, sanitize_url, validate_schema,
@@ -123,12 +128,14 @@ def _verify_search_rows(proof, request, count):
 
 
 def verify_required_model(run, result: dict, admission: dict, *, scene_policy_path=None,
-                          source_content_contract=None, company_evidence_contract=None) -> dict:
+                          source_content_contract=None, company_evidence_contract=None,
+                          event_contract=None, risk_evidence_contract=None) -> dict:
     """No saved success flag is authoritative: walk bound stage IO again."""
     try:
         return _verify(run, result, admission, scene_policy_path=scene_policy_path,
                        source_content_contract=source_content_contract,
-                       company_evidence_contract=company_evidence_contract)
+                       company_evidence_contract=company_evidence_contract, event_contract=event_contract,
+                       risk_evidence_contract=risk_evidence_contract)
     except EvidenceInvalid:
         raise
     except (KeyError, ValueError, TypeError, IndexError, LLMUnavailable,
@@ -137,7 +144,7 @@ def verify_required_model(run, result: dict, admission: dict, *, scene_policy_pa
 
 
 def _verify(run, result, admission, *, scene_policy_path=None, source_content_contract=None,
-            company_evidence_contract=None):
+            company_evidence_contract=None, event_contract=None, risk_evidence_contract=None):
     clock = admission["clock"]
     run_date, market_timezone = clock["run_date"], clock["market_timezone"]
     if (type(run_date) is not str or date.fromisoformat(run_date).isoformat() != run_date
@@ -163,17 +170,39 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
             or observed_contract != expected_contract[source_content_contract]):
         _fail()
     legacy = observed_contract is None
+    cross_end = by_stage["clean.cross_validate"]
+    cross_input = snapshot(cross_end, "input")
+    observed_event = cross_input.get("event_contract", "")
+    if (observed_event not in ("", EVENT_CONTRACT)
+            or event_contract is not None and observed_event != event_contract
+            or legacy and observed_event):
+        _fail()
+    event_enabled = bool(observed_event)
+    fusion_end = by_stage["tech.fusion"]
+    fusion = snapshot(fusion_end, "input")
+    observed_risk_evidence = fusion.get("risk_coverage", {}).get("contract", "")
+    if (observed_risk_evidence not in ("", RISK_EVIDENCE_CONTRACT)
+            or risk_evidence_contract is not None and observed_risk_evidence != risk_evidence_contract
+            or observed_risk_evidence and not event_enabled):
+        _fail()
+    event_scored_stages = {"tech.sentiment", "tech.risk", "sector.narrative"}
+    event_cutoff = datetime.fromisoformat(clock["admitted_at_utc"]) if event_enabled else None
+    if event_cutoff is not None and (event_cutoff.utcoffset() is None
+            or event_cutoff.astimezone(ZoneInfo(market_timezone)).date().isoformat() != run_date):
+        _fail()
     company_value = snapshot(by_stage["decision.debate"], "output")["value"].get("company_evidence")
     observed_company = company_value["contract"] if company_value is not None else ""
-    if (observed_company not in ("", COMPANY_EVIDENCE_CONTRACT)
+    if (observed_company not in ("", COMPANY_EVIDENCE_CONTRACT, SEC_COMPANY_CONTRACT)
             or company_evidence_contract is not None and observed_company != company_evidence_contract
             or legacy and observed_company):
         _fail()
     company_enabled = bool(observed_company)
+    direct_edgar = observed_company == SEC_COMPANY_CONTRACT
     company_outcomes, company_documents = {}, {}
     admitted_at = (datetime.fromisoformat(clock["admitted_at_utc"])
                    if company_enabled and "admitted_at_utc" in clock else None)
-    if admitted_at is not None and admitted_at.utcoffset() is None:
+    if (direct_edgar and admitted_at is None
+            or admitted_at is not None and admitted_at.utcoffset() is None):
         _fail()
     for stage in ("search.collect", *REQUIRED_MODEL_STAGES):
         end = by_stage[stage]
@@ -187,10 +216,13 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
         docs = inputs.get("documents", [])
         ids = [doc.get("raw", doc)["doc_id"] for doc in docs]
         if stage not in {"search.collect", "clean.llm_semantic"}:
-            expected_documents = score_expected if stage in {"tech.sentiment", "sector.narrative"} else clean_expected
+            scored = stage in (event_scored_stages if event_enabled else {"tech.sentiment", "sector.narrative"})
+            expected_documents = score_expected if scored else clean_expected
             if bound_inputs["documents"] != normalize(expected_documents):
                 _fail()
-        if stage != "search.collect" and (not ids or len(set(ids)) != len(ids) or not set(ids).issubset(native_docs)):
+        allow_empty = event_enabled and stage in event_scored_stages
+        if stage != "search.collect" and ((not ids and not allow_empty)
+                or len(set(ids)) != len(ids) or not set(ids).issubset(native_docs)):
             _fail()
         for doc in docs:
             source = doc.get("raw", doc)
@@ -231,9 +263,26 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                                 for pick in snapshot(by_stage["layer4.risk"], "output")["value"]["picks"]]
             company_queries = list(candidate_searches(approved_symbols, date.fromisoformat(run_date)).items())
         chat_index = 0
+        pending_sec = None
         for call in output["io_calls"]:
             method = call["method"]
-            if method not in {"model.deepseek.search", "model.deepseek.chat"}:
+            if method == SEC_VERIFY_METHOD:
+                if pending_sec is None or "output_ref" not in call or "error_ref" in call:
+                    _fail()
+                symbol, rows, expected_sec = pending_sec
+                sec_request = read_snapshot(run, call["input_ref"], run_id=run.name,
+                                            stage=stage, role="input")
+                if sec_request != expected_sec:
+                    _fail()
+                sec_response = read_snapshot(run, call["output_ref"], run_id=run.name,
+                                             stage=stage, role="output")
+                outcome, filings = confirm_filings(sec_request, rows, sec_response,
+                                                   date.fromisoformat(run_date), admitted_at)
+                company_outcomes[symbol] = outcome
+                company_documents.update((row["id"], row) for row in filings)
+                pending_sec = None
+                continue
+            if pending_sec is not None or method not in {"model.deepseek.search", "model.deepseek.chat"}:
                 _fail()
             request = read_snapshot(run, call["input_ref"], run_id=run.name, stage=stage, role="input")
             call_id = request["call_id"]
@@ -267,7 +316,15 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                 _fail()
             if company_search:
                 rows = _verify_search_rows(proof, request, SEARCH_COUNT)
-                outcome, filings = candidate_evidence(symbol, rows, date.fromisoformat(run_date), admitted_at)
+                if direct_edgar:
+                    expected_sec = sec_verification_input(symbol, rows, date.fromisoformat(run_date), admitted_at)
+                    if expected_sec["filings"]:
+                        pending_sec = (symbol, rows, expected_sec)
+                        continue
+                    outcome, filings = confirm_filings(expected_sec, rows, {"filings": []},
+                                                       date.fromisoformat(run_date), admitted_at)
+                else:
+                    outcome, filings = candidate_evidence(symbol, rows, date.fromisoformat(run_date), admitted_at)
                 company_outcomes[symbol] = outcome
                 company_documents.update((row["id"], row) for row in filings)
                 continue
@@ -302,13 +359,13 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                 batch, expected_payload, expected_schema = batches[chat_index]
                 selected_ids = [item["doc_id"] for item in batch]
             elif stage == "tech.sentiment":
-                selected_ids, expected_schema = ids, sentiment_schema(list(TECH_SUBCHAINS), ids)
+                selected_ids, expected_schema = ids, sentiment_schema(list(TECH_SUBCHAINS), ids, allow_empty=allow_empty)
                 expected_payload = {"chains": list(TECH_SUBCHAINS)}
             elif stage == "tech.risk":
-                selected_ids, expected_schema = ids, risk_schema(list(TECH_SUBCHAINS), ids)
+                selected_ids, expected_schema = ids, risk_schema(list(TECH_SUBCHAINS), ids, allow_empty=allow_empty)
                 expected_payload = {"chains": list(TECH_SUBCHAINS)}
             elif stage == "sector.narrative":
-                selected_ids, expected_schema = ids, narrative_schema(inputs["sector_symbols"], ids)
+                selected_ids, expected_schema = ids, narrative_schema(inputs["sector_symbols"], ids, allow_empty=allow_empty)
                 expected_payload = {"etfs": inputs["sector_symbols"]}
             else:
                 selected_ids = ids
@@ -332,7 +389,7 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                 market_by_id = {row["id"]: row for row in expected_market_evidence}
                 if company_enabled:
                     if (list(company_outcomes) != approved
-                            or company_value != {"contract": COMPANY_EVIDENCE_CONTRACT,
+                            or company_value != {"contract": observed_company,
                                                  "candidates": company_outcomes}):
                         _fail()
                     expected_schema = decision_schema(approved + watch, list(company_documents), list(market_by_id),
@@ -443,13 +500,14 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
             elif stage == "tech.sentiment":
                 rows, key, expected_ids = proof["parsed"]["chains"], "chain_id", list(TECH_SUBCHAINS)
                 semantic_values[stage] = normalize({row["chain_id"]: SentimentRow(
-                    **{name: value for name, value in row.items() if name != "evidence_ids"}, degraded=False) for row in rows})
+                    **{name: value for name, value in row.items() if name != "evidence_ids"}, degraded=event_enabled and not ids)
+                    for row in rows})
             elif stage == "sector.narrative":
                 rows, key, expected_ids = proof["parsed"]["sectors"], "etf", inputs["sector_symbols"]
                 narrative = {row["etf"]: {"score": row["narrative_score"], "bias": row["eps_revision_bias"],
                     "tone": row["guidance_tone"], "evidence": "; ".join(row["evidence"]),
                     "evidence_ids": row["evidence_ids"]} for row in rows}
-                semantic_values[stage] = {"raw_result": narrative, "narrative": narrative}
+                semantic_values[stage] = {"raw_result": narrative, "narrative": {} if event_enabled and not ids else narrative}
             elif stage == "decision.debate":
                 rows, key, expected_ids = proof["parsed"]["decisions"], "symbol", approved + watch
                 decision_output = proof["parsed"]
@@ -482,10 +540,19 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
         elif stage == "clean.llm_semantic":
             if output["value"] != normalize({"documents": clean_expected, "degraded_count": 0}):
                 _fail()
-            cross_end = by_stage["clean.cross_validate"]
-            if snapshot(cross_end, "input") != normalize({"documents": clean_expected}):
+            expected_input = {"documents": clean_expected}
+            if event_enabled:
+                prepared = snapshot(by_stage["pipeline.prepare"], "output")["value"]
+                event_symbols = prepared.get("security_roster", {}).get("symbols")
+                if event_symbols is None:
+                    event_symbols = {ticker: "us:" + ticker for ticker in prepared["universe"]}
+                expected_input.update(event_contract=EVENT_CONTRACT, security_ids=event_symbols)
+            if cross_input != normalize(expected_input):
                 _fail()
-            cv_stats = CrossValidator().validate(clean_expected)
+            cv_stats = (validate_events(clean_expected, event_cutoff, security_ids=event_symbols) if event_enabled
+                        else CrossValidator().validate(clean_expected))
+            if event_enabled and result["raw"]["cross_validation"] != cv_stats:
+                _fail()
             score_expected = scoring_docs(clean_expected)
             expected_cross = normalize({"documents": clean_expected, "scoring_documents": score_expected, "stats": cv_stats})
             if snapshot(cross_end, "output")["value"] != expected_cross:
@@ -495,7 +562,33 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                 _fail()
     if len(searches) != len(set(searches)) or set(searches) != set(expected_queries):
         _fail()
-    fusion = snapshot(by_stage["tech.fusion"], "input")
+    if observed_risk_evidence:
+        risk_available = bool(score_expected)
+        expected_coverage = risk_coverage(len(score_expected))
+        risk_input = snapshot(by_stage["tech.risk"], "input")
+        monitor = snapshot(by_stage["tech.monitor"], "output")["value"]
+        linkage = snapshot(by_stage["tech.cycle_linkage"], "output")["value"]
+        if (risk_input.get("risk_coverage") != expected_coverage or fusion.get("risk_coverage") != expected_coverage
+                or fusion["monitor"] != monitor or fusion["linkage"] != linkage):
+            _fail()
+        expected_monitor = [ChainMonitorRow(**{k: v for k, v in row.items() if k != "links"},
+            links=[LinkMomentum(**link) for link in row["links"]]) for row in _plain(monitor)]
+        signals = TechChainFusionAgent().execute(
+            expected_monitor, [GlobalLinkageRow(**row) for row in _plain(linkage)],
+            {key: SentimentRow(**row) for key, row in _plain(semantic_values["tech.sentiment"]).items()},
+            [RiskAlert(**row) for row in _plain(semantic_values["tech.risk"])],
+            risk_evidence_available=risk_available)
+        tss = snapshot(by_stage["layer3.tss"], "input")
+        numeric_risk = snapshot(by_stage["layer4.risk"], "input")
+        expected_signals = normalize({signal.main_chain: signal for signal in signals})
+        if (snapshot(fusion_end, "output")["value"] != normalize(signals)
+                or result["raw"]["tech_signals"] != [signal.to_dict() for signal in signals]
+                or tss["tech_bonus_map"] != signals_to_bonus_map(signals)
+                or tss["tech_signal_map"] != expected_signals
+                or numeric_risk["tech_signal_map"] != expected_signals):
+            _fail()
+    elif "risk_coverage" in fusion or "risk_coverage" in snapshot(by_stage["tech.risk"], "input"):
+        _fail()
     sector = snapshot(by_stage["layer2.sector"], "input")
     if (fusion["sentiment"] != semantic_values["tech.sentiment"]
             or fusion["alerts"] != semantic_values["tech.risk"]
