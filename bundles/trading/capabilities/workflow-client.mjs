@@ -313,7 +313,7 @@ export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_COD
 
 export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
-  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"]) {
+  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT"]) {
     if (typeof env[key] === "string") result[key] = env[key];
   }
   return { ...result, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1" };

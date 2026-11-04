@@ -38,18 +38,21 @@ function marketReceipt(action = "watch") {
 test("required profile is explicit and cannot take provider, credential or model overrides", () => {
   assert.equal(validateRequest("run", { ...REQUEST, profile: REQUIRED_PROFILE }).profile, REQUIRED_PROFILE);
   assert.equal(validateRequest("describe", { profile: REQUIRED_PROFILE }).profile, REQUIRED_PROFILE);
-  for (const key of ["LLM_API_KEY", "model", "provider", "model_mode", "search", "env"]) {
+  for (const key of ["LLM_API_KEY", "TIGER_SEC_CONTACT", "model", "provider", "model_mode", "search", "env"]) {
     assert.throws(() => validateRequest("run", { ...REQUEST, profile: REQUIRED_PROFILE, [key]: "override" }), { code: "INVALID_REQUEST" });
   }
 });
 
-test("trusted required startup keeps exactly four LLM settings and strips unrelated secrets", () => {
+test("trusted required startup keeps model settings and SEC contact while stripping unrelated secrets", () => {
   const env = { HOME: "/fixture-home", PATH: "/bin", LLM_BACKEND: "api", LLM_BASE_URL: "https://api.deepseek.com",
-    LLM_MODEL: "deepseek-flash", LLM_API_KEY: "fixture-only", OPENAI_API_KEY: "other-key", TIGER_PNL_API_TOKEN: "pnl-key", PYTHONPATH: "/untrusted" };
+    LLM_MODEL: "deepseek-flash", LLM_API_KEY: "fixture-only", TIGER_SEC_CONTACT: "research@example.test",
+    OPENAI_API_KEY: "other-key", TIGER_PNL_API_TOKEN: "pnl-key", PYTHONPATH: "/untrusted" };
   assert.equal(runtimeEnvironment(env).LLM_API_KEY, undefined);
+  assert.equal(runtimeEnvironment(env).TIGER_SEC_CONTACT, undefined);
   const required = runtimeEnvironment(env, true);
   assert.equal(required.LLM_API_KEY, "fixture-only");
   assert.equal(required.LLM_MODEL, "deepseek-flash");
+  assert.equal(required.TIGER_SEC_CONTACT, "research@example.test");
   assert.equal(required.OPENAI_API_KEY, undefined);
   assert.equal(required.TIGER_PNL_API_TOKEN, undefined);
   assert.equal(required.PYTHONPATH, undefined);
@@ -57,8 +60,10 @@ test("trusted required startup keeps exactly four LLM settings and strips unrela
 
 test("required startup environment is selected by the fixed profile and run operation", async t => {
   const fixture = await runnerFixture(t);
-  const old = Object.fromEntries(["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"].map(key => [key, process.env[key]]));
-  Object.assign(process.env, { LLM_BACKEND: "api", LLM_BASE_URL: "https://api.deepseek.com", LLM_MODEL: "deepseek-flash", LLM_API_KEY: "fixture-only" });
+  const settings = { LLM_BACKEND: "api", LLM_BASE_URL: "https://api.deepseek.com",
+    LLM_MODEL: "deepseek-flash", LLM_API_KEY: "fixture-only", TIGER_SEC_CONTACT: "research@example.test" };
+  const old = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]]));
+  Object.assign(process.env, settings);
   t.after(() => { for (const [key, value] of Object.entries(old)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   await invokeWorkflow("run", { ...REQUEST, profile: REQUIRED_PROFILE }, fixture.options);
   await invokeWorkflow("run", REQUEST, fixture.options);
@@ -67,6 +72,7 @@ test("required startup environment is selected by the fixed profile and run oper
   assert.equal(calls[0].envNames.includes("LLM_API_KEY"), true);
   assert.equal(calls[1].envNames.includes("LLM_API_KEY"), false);
   assert.equal(calls[2].envNames.includes("LLM_API_KEY"), false);
+  assert.deepEqual(calls.map(call => call.envNames.includes("TIGER_SEC_CONTACT")), [true, false, false]);
 });
 
 test("required receipt accepts only completed, exact fixed model and complete unique stage proof", () => {

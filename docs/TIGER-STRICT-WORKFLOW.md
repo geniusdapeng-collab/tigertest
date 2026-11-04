@@ -104,7 +104,7 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 
 状态查询先采样运行锁，再读取状态文件和账户提交链。写者完成最后的状态写入后才释放运行锁，同一个 run 不会重新启动。若采样时锁仍被持有，查询可以保守地多返回一次 running；不得把完成前的状态/指针快照与完成后的无锁状态拼成虚假的 interrupted。已发布的账户提交仍优先于可变状态文件。
 
-当前支持 macOS/Linux 所需的 POSIX 锁和目录写入语义，Python 最低 3.11。运行环境按允许列表构造，保留原 HOME；仅 model-required 的业务启动额外保留 LLM_BACKEND/LLM_BASE_URL/LLM_MODEL/LLM_API_KEY 四项，禁止通过请求覆写，其他 profile 不继承模型/provider 凭据；业务缓存和临时文件在 run 内。每次新业务进程在首次使用 yfinance 前设置实际缓存位置。第三方包身份记录解释器字节和安装元数据，未声称逐文件证明全部依赖供应链。
+当前支持 macOS/Linux 所需的 POSIX 锁和目录写入语义，Python 最低 3.11。运行环境按允许列表构造，保留原 HOME。仅 model-required 的业务启动额外保留 LLM_BACKEND、LLM_BASE_URL、LLM_MODEL、LLM_API_KEY 和用于 SEC 核验的 TIGER_SEC_CONTACT。请求不能覆写这些设置，其他 profile 不继承这些设置。业务缓存和临时文件在 run 内。每次新业务进程在首次使用 yfinance 前设置实际缓存位置。第三方包身份记录解释器字节和安装元数据，未声称逐文件证明全部依赖供应链。
 
 ## 时间、并发和错误
 
