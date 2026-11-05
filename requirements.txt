@@ -5,3 +5,4 @@ pytest>=8.0
 requests>=2.31
 PyYAML>=6.0
 tokenizers==0.23.3
+pypdf>=6.21.4

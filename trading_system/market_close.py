@@ -6,7 +6,7 @@ import math
 from zoneinfo import ZoneInfo
 
 from .calendar import is_trading_day
-from .redline.execution import StrictObservationError
+from .redline.execution import DAILY_MACRO_OBSERVATION_CONTRACT, StrictObservationError
 
 MARKET_CLOSE_CONTRACT = "us-cash-session-close/v1"
 SOURCE_PATH = "trading_system/market_close.py"
@@ -63,10 +63,15 @@ def completed_session(admitted_at: datetime) -> datetime:
     raise StrictObservationError("Frozen admission is outside the verified US cash session calendar")
 
 
-def close_metadata(close: datetime) -> dict:
-    return {"contract": MARKET_CLOSE_CONTRACT, "session": close.date().isoformat(),
+def close_metadata(close: datetime, *, macro_daily_labels=DAILY_MACRO_OBSERVATION_CONTRACT) -> dict:
+    if macro_daily_labels not in {None, DAILY_MACRO_OBSERVATION_CONTRACT}:
+        raise StrictObservationError("Unknown macro daily observation contract")
+    value = {"contract": MARKET_CLOSE_CONTRACT, "session": close.date().isoformat(),
             "close_at_utc": close.astimezone(timezone.utc).isoformat(),
             "bar_basis": "provider_daily_after_scheduled_close"}
+    if macro_daily_labels is not None:
+        value["macro_daily_labels"] = macro_daily_labels
+    return value
 
 
 def macro_limits(close: datetime, admitted_at: datetime) -> dict[str, date]:
@@ -128,10 +133,13 @@ def close_chart(frame: dict) -> list[list]:
             if _positive_finite(row[close_column])]
 
 
-def _snapshot_window(raw, cutoff: date, run_date: date, *, exact: bool):
+def _snapshot_window(raw, cutoff: date, run_date: date, *, exact: bool,
+                     macro_daily_labels=None):
     """Rebuild the admissible typed slice directly from an I/O snapshot."""
     if not isinstance(raw, dict) or raw.get("__type__") != ("dataframe" if exact else "series"):
         return None
+    if macro_daily_labels not in {None, DAILY_MACRO_OBSERVATION_CONTRACT}:
+        raise ValueError("Unknown macro daily observation contract")
     labels, values = [], []
     previous = date.min
     close_index = None
@@ -145,7 +153,14 @@ def _snapshot_window(raw, cutoff: date, run_date: date, *, exact: bool):
         if label["__type__"] != "Timestamp":
             raise ValueError("Non-daily observation index")
         stamp = datetime.fromisoformat(label["value"])
-        if stamp.tzinfo is not None:
+        if not exact and macro_daily_labels == DAILY_MACRO_OBSERVATION_CONTRACT:
+            # Independent reconstruction deliberately does not call the runtime
+            # projector. Source midnight establishes a daily calendar label;
+            # retain that date and never borrow the previous NY date from UTC.
+            if stamp.time() != time(0):
+                raise ValueError("Macro source observation is not a daily session label")
+            stamp = stamp.replace(tzinfo=None)
+        elif stamp.tzinfo is not None:
             stamp = stamp.astimezone(_EASTERN).replace(tzinfo=None)
         day = stamp.date()
         if stamp.time() != time(0) or not previous < day <= run_date:
@@ -194,7 +209,8 @@ def verify_close_evidence(run, admission: dict, freshness: dict) -> None:
         bound = snapshot("data.prepare", prepared["input_ref"], "input")
         stage = snapshot("data.prepare", prepared["output_ref"], "output")
         data = stage["value"]["market_data"]
-        meta = close_metadata(close)
+        macro_daily_labels = bound.get("market_close", {}).get("macro_daily_labels")
+        meta = close_metadata(close, macro_daily_labels=macro_daily_labels)
         if (bound["market_close"] != meta or data["freshness"] != freshness
                 or freshness["benchmark_last_bar"] != meta["session"]
                 or type(freshness["benchmark_lag_days"]) is not int or freshness["benchmark_lag_days"]):
@@ -251,7 +267,7 @@ def verify_close_evidence(run, admission: dict, freshness: dict) -> None:
             for symbol in symbols:
                 for key, frame, limit, exact in expected.get((method, symbol), ()):
                     if (key not in observed and _snapshot_window(results.get(symbol), limit,
-                            run_date, exact=exact) == frame):
+                            run_date, exact=exact, macro_daily_labels=macro_daily_labels) == frame):
                         observed.add(key)
         if observed != {key for entries in expected.values() for key, *_ in entries}:
             raise ValueError("Market frames differ from their frozen provider observations")

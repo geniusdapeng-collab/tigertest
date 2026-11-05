@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime
 import importlib.metadata
 import json
 import os
@@ -285,8 +286,15 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
             clock = frozen_clock()
             parent = pointer_read(state)
             freeze_source(run, source)
+            intelligence_input = None
+            from .redline.execution import INTELLIGENCE_PROFILE
+            if request["profile"] == INTELLIGENCE_PROFILE:
+                from .intelligence_workflow import stage_input_packet
+                intelligence_input = stage_input_packet(run,
+                    as_of=datetime.fromisoformat(clock["admitted_at_utc"]))
             policy = policy_manifest(request["profile"],
-                                     scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
+                                     scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
+                                     intelligence_input=intelligence_input)
             atomic_json(run, "policy.json", policy, exclusive=True)
             stage_account(state, run, parent)
             stage_calendar(run)

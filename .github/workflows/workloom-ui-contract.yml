@@ -12,7 +12,8 @@ permissions:
 jobs:
   ui-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # Full evidence replay and the serial browser matrix need this hosted-runner budget.
+    timeout-minutes: 90
     env:
       WORKLOOM_DIR: governance
       NODE_ENV: test
@@ -121,6 +122,7 @@ jobs:
             bundles/trading/capabilities/repo.test.mjs \
             scripts/tiger-agent.test.mjs scripts/tiger-agent-mcp.test.mjs \
             scripts/tiger-agent-config.test.mjs \
+            scripts/tiger-intelligence.test.mjs scripts/tiger-intelligence-workflow.test.mjs \
             scripts/agent-capabilities.test.mjs governance/scripts/agent-capabilities.test.mjs
       - name: 三端逐一类型检查与生产构建
         run: |

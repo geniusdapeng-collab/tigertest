@@ -7,6 +7,7 @@ import { isAbsolute, resolve } from "node:path";
 export const ENGINE_ROOT = resolve(import.meta.dirname, "../../..");
 export const PROFILE = "us-public-paper-v1";
 export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
+export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
   frameBytes: 131072, requestMs: 60000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
@@ -275,6 +276,18 @@ export function validateEnvelope(envelope, operation, input = {}) {
         || Object.values(model.stage_counts).reduce((sum, count) => sum + count, 0) !== model.call_count
         || typeof envelope.summary.action_summary !== "string" || !envelope.summary.action_summary.trim()
         || !Array.isArray(envelope.summary.execution_decisions)) throw invalid();
+      if (model.search_mode === "provider_native_search" && model.search_count !== 14) throw invalid();
+      if (model.search_mode === "intelligence_source_registry") {
+        const intelligence = envelope.summary.disclosures.intelligence;
+        if (intelligence?.contract !== "tiger.intelligence-acquisition.v2"
+          || model.acquisition_contract !== intelligence.contract
+          || model.bundle_id !== intelligence.bundle?.bundle_id
+          || !/^bundle_[0-9a-f]{32}$/u.test(model.bundle_id ?? "")
+          || !/^[0-9a-f]{64}$/u.test(intelligence.bundle?.manifest_sha256 ?? "")
+          || !Number.isSafeInteger(model.source_requests) || model.source_requests < 0
+          || model.source_requests !== intelligence.bundle?.usage?.requests
+          || !Number.isSafeInteger(model.fetch_count) || model.fetch_count < 0) throw invalid();
+      }
       validateModelInstructions(envelope.summary);
     }
   } catch (cause) { throw new WorkflowError("RESULT_INVALID", "Python returned an invalid or unverified result envelope.", { runId: input.run_id, cause }); }
@@ -313,7 +326,10 @@ export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_COD
 
 export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
-  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT"]) {
+  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
+    "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
+    "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
+    "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT"]) {
     if (typeof env[key] === "string") result[key] = env[key];
   }
   return { ...result, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1" };
@@ -375,7 +391,7 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
         }, LIMITS.cleanupMs);
       }
       function onAbort() { stop(new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id })); }
-      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env, operation === "run" && input.profile === REQUIRED_PROFILE), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
+      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env, operation === "run" && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE].includes(input.profile)), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
       catch (cause) { finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })); return; }
       child.on("error", (cause) => finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })));
       child.stdout.on("data", (chunk) => {

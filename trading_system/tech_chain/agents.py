@@ -71,6 +71,13 @@ class SentimentRow:
 
 
 @dataclass
+class StructuredSentimentRow(SentimentRow):
+    """V2 preserves target citations/status without changing v1 snapshots."""
+    evidence_ids: list[str] = field(default_factory=list)
+    status: str = "insufficient_evidence"
+
+
+@dataclass
 class RiskAlert:
     severity: float              # 1..10
     chain_id: str

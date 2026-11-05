@@ -509,6 +509,8 @@ def run_pipeline(
         if required:
             from .llm.deepseek_required import DeepSeekRequiredClient
             from .llm import required as semantic
+            if getattr(execution, "intelligence", False):
+                from .llm import intelligence_required as semantic
             try:
                 llm = DeepSeekRequiredClient(execution)
                 assessment = semantic.assessment_context(execution)
@@ -537,12 +539,237 @@ def run_pipeline(
                          "calendar": event_calendar.to_dict() if event_calendar else None,
                          "model": llm.describe() if execution is not None else {"mode": "legacy"}})
 
+    def prepare_market(universe):
+        signal_close = execution.completed_session_close if required else None
+        session = signal_close.date() if signal_close is not None else None
+        macro_dates = macro_limits(signal_close, execution.admitted_at) if signal_close else {}
+        close_binding = close_metadata(signal_close) if signal_close else None
+
+        # ---------- 数据真实性与时效性闸门（v6.1，白皮书§12"地基不牢评分皆是沙上之塔"）----------
+        # S4：日历/指数名/板块清单全部按市场规格参数化（US 行为与现状完全一致）
+
+        def _freshness_gate(spy_df, tnx_s, vix_s, etfs: dict, stocks: dict) -> dict:
+            """硬依赖充足性 + 末根日期新鲜度 + 陈旧标的剔除。
+
+            - 指数行数不足 → 诚实失败（短数据照样能"算出分"，但口径全错）；
+            - 指数末根日期落后最近交易日 >3 天 → 诚实失败（基准数据陈旧）；
+            - 利率/波动率历史不足：US → 诚实失败（现状行为）；CN/HK → 记缺失
+              走"剔除再归一化"（D2，不可得维度不编造）；
+            - 板块覆盖率 < 2/3：US → 诚实失败；CN/HK → 按缺失披露继续（D2）；
+            - 个股末根日期落后指数末根 >5 天 → 判定停牌/源不完整，【剔除】并披露
+              （绝不把上一周的价格当"当前价格"参与评分）。
+            """
+            report: dict = {}
+            idx_name = bmk["index"]
+            if len(spy_df) < 260:
+                raise (StrictDataUnavailable if execution else RuntimeError)(
+                    f"[{spec.market_id}] {idx_name} 历史不足（{len(spy_df)} < 260 行）："
+                    "SMA200/252 日分位口径不成立，"
+                    "宁可中止也不产出带污点的评分（白皮书§1.3 诚实失败）")
+            tnx_ok = tnx_s is not None and len(tnx_s) >= 100
+            vix_ok = vix_s is not None and len(vix_s) >= 30
+            if spec.benchmark_hard_fail:
+                if not tnx_ok or not vix_ok:
+                    raise (StrictDataUnavailable if execution else RuntimeError)(
+                        f"[{spec.market_id}] {bmk['rate']}/{bmk['vol']} 历史不足"
+                        f"（{0 if tnx_s is None else len(tnx_s)}/"
+                        f"{0 if vix_s is None else len(vix_s)} 行），MRS 宏观/情绪维口径不成立")
+            else:
+                missing_bmk = [lbl for lbl, ok in ((bmk["rate"], tnx_ok), (bmk["vol"], vix_ok))
+                               if not ok]
+                if missing_bmk:
+                    report["benchmark_missing"] = missing_bmk   # 缺失维披露（再归一化）
+            expect = session or spec.prev_trading_day(trade_date)
+            spy_last = spy_df.index[-1].date()
+            lag = (expect - spy_last).days
+            report["benchmark_last_bar"] = str(spy_last)
+            report["benchmark_lag_days"] = lag
+            if execution is not None and lag < 0:
+                raise StrictObservationError("Benchmark is later than the expected market trading date")
+            if lag > 3:
+                raise (StrictDataStale if execution else RuntimeError)(
+                    f"[{spec.market_id}] 基准数据陈旧：{idx_name} 末根 {spy_last}，"
+                    f"最近交易日 {expect}（滞后 {lag} 天）——"
+                    "用陈旧数据产出'今日'评分是数据造假，立即中止（白皮书§12.3）")
+            if lag >= 1:
+                logger.warning("数据时效披露：%s 末根 %s（最近交易日 %s，滞后 %d 天）",
+                               idx_name, spy_last, expect, lag)
+            sector_list = spec.sector_symbols
+            need_etf = (len(sector_list) * 2 + 2) // 3     # ≥2/3
+            if len(etfs) < need_etf:
+                missing = [e for e in sector_list if e not in etfs]
+                if spec.sector_hard_fail:
+                    raise (StrictDataUnavailable if execution else RuntimeError)(
+                        f"[{spec.market_id}] 板块 ETF 覆盖率不足（{len(etfs)}/{len(sector_list)} < 2/3，"
+                        f"缺 {missing}）：SHS 主线判定地基不全，诚实失败")
+                report["sector_breadth_missing"] = (
+                    f"板块广度数据不足（{len(etfs)}/{len(sector_list)}，缺 {missing}）→ "
+                    "SHS 板块维度按缺失披露（D2：宁可缺失不可编造）")
+                logger.warning("[%s] %s", spec.market_id, report["sector_breadth_missing"])
+            stale = [t for t, df in stocks.items()
+                     if df is not None and len(df)
+                     and (spy_last - df.index[-1].date()).days > 5]
+            for t in stale:
+                del stocks[t]
+            if stale:
+                logger.warning("剔除 %d 只陈旧/停牌标的（末根滞后 %s 超 5 天）: %s%s",
+                               len(stale), idx_name, stale[:10], "..." if len(stale) > 10 else "")
+            report["stale_removed"] = stale
+            report["etf_coverage"] = f"{len(etfs)}/{len(sector_list)}"
+            return report
+
+        # ---------- 数据准备 ----------
+        days = 420
+        market_data: dict = {"benchmark_labels": benchmark_labels}
+        with tracer.step("data.prepare", {"universe": universe, "benchmarks": bmk,
+                         "sector_symbols": spec.sector_symbols, "days": days,
+                         "trade_date": trade_date, "scan_filters": spec.scan_filters(),
+                         **({"market_close": close_binding} if close_binding else {})}) as stage:
+            idx_sym = bmk["index"]
+            try:
+                spy = _single_with_fallback(provider, "ohlcv", idx_sym, days=days,
+                                             **({"close_cutoff": session} if session else {}))
+            except (EvidenceWriteError, ExecutionContractError, StrictObservationError, StrictDataStale):
+                raise
+            except Exception as exc:
+                # D2 诚实失败：该市场基准（指数）全断 → 当日中止，其余市场不受影响
+                raise (StrictDataUnavailable if execution else RuntimeError)(
+                    f"[{spec.market_id}] {idx_sym} 基准数据获取失败（含降级源），"
+                    f"该市场当日诚实失败，MRS 无法计算: {exc}") from exc
+            market_data["spy"] = spy
+            # 利率基准：US 硬依赖（现状行为）；CN/HK 缺失 → 记 None 走再归一化
+            try:
+                market_data["tnx"] = _single_with_fallback(
+                    provider, "rate_yield_for", bmk["rate"], days=days,
+                    **({"close_cutoff": macro_dates["tnx"]} if session else {}))
+            except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+                raise
+            except Exception as exc:
+                if spec.benchmark_hard_fail:
+                    raise (StrictDataUnavailable if execution else RuntimeError)(
+                        f"[{spec.market_id}] {bmk['rate']} 数据获取失败（含降级源），"
+                        f"MRS 无法计算: {exc}") from exc
+                logger.warning("[%s] 利率基准 %s 不可得（%s）→ 宏观维缺失再归一化",
+                               spec.market_id, bmk["rate"], str(exc))
+                market_data["tnx"] = None
+            # 波动率基准：同上
+            try:
+                market_data["vix"] = _single_with_fallback(
+                    provider, "vol_index_for", bmk["vol"], days=days,
+                    **({"close_cutoff": macro_dates["vix"]} if session else {}))
+            except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+                raise
+            except Exception as exc:
+                if spec.benchmark_hard_fail:
+                    raise (StrictDataUnavailable if execution else RuntimeError)(
+                        f"[{spec.market_id}] {bmk['vol']} 数据获取失败（含降级源），"
+                        f"MRS 无法计算: {exc}") from exc
+                logger.warning("[%s] 波动率基准 %s 不可得（%s）→ 情绪维缺失再归一化",
+                               spec.market_id, bmk["vol"], str(exc))
+                market_data["vix"] = None
+            try:
+                market_data["vix9d"] = (_single_with_fallback(
+                    provider, "vol_index_for", bmk["vol_short"], days=days,
+                    **({"close_cutoff": macro_dates["vix9d"]} if session else {}))
+                    if bmk.get("vol_short") else None)
+            except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+                raise
+            except Exception:
+                market_data["vix9d"] = None
+
+            sector_etfs = _batch_with_fallback(provider, spec.sector_symbols, days,
+                **({"label": "signal_etfs", "close_cutoff": session,
+                    "minimum": (len(spec.sector_symbols) * 2 + 2) // 3} if session else {}))
+            market_data["sector_etfs"] = sector_etfs
+
+            # full 模式两级拉取：先用 30 日短历史做流动性预筛，再对幸存者拉全历史
+            prefilter_note = ""
+            scan_filt = spec.scan_filters()
+            if len(universe) > config.FULL_PREFILTER_THRESHOLD:
+                logger.info("池规模 %d > %d，启动流动性预筛（%d 日短历史）",
+                            len(universe), config.FULL_PREFILTER_THRESHOLD,
+                            config.FULL_PREFILTER_DAYS)
+                light = _batch_with_fallback(provider, universe, config.FULL_PREFILTER_DAYS,
+                    **({"label": "signal_prefilter", "close_cutoff": session} if session else {}))
+                survivors: list[tuple[str, float]] = []
+                for t, df in light.items():
+                    if len(df) < 15:
+                        continue
+                    px = float(df["Close"].iloc[-1])
+                    adv = float((df["Close"] * df["Volume"]).tail(20).mean())
+                    if px >= scan_filt["min_price"] and adv >= scan_filt["min_adv"]:
+                        survivors.append((t, adv))
+                survivors.sort(key=lambda x: x[1], reverse=True)
+                kept = survivors[: config.FULL_HEAVY_CAP]
+                prefilter_note = (f"预筛 {len(universe)}→{len(light)}→流动性通过 "
+                                  f"{len(survivors)}→重量级拉取 {len(kept)}")
+                logger.info(prefilter_note)
+                universe = [t for t, _ in kept]
+
+            # 全市场股票数据（扫描 + 产业链 + 广度共用一份）
+            # S4：US 产业链为美股映射，仅 US 市场并入拉取；CN/HK 链覆盖率如实披露为 0
+            chain_tickers: set[str] = set()
+            if spec.market_id == "us":
+                from .chains import CHAINS
+                for c in CHAINS.values():
+                    for link in ("upstream", "midstream", "downstream"):
+                        chain_tickers.update(c[link]["tickers"])
+            all_tickers = sorted(set(universe) | chain_tickers)
+            stock_data = _batch_with_fallback(provider, all_tickers, days,
+                **({"label": "signal_stocks", "close_cutoff": session} if session else {}))
+            if session and not stock_data:
+                raise StrictDataUnavailable(f"缺少已完成交易日 {session} 的可用股票收盘数据")
+            market_data["stock_ohlcv"] = stock_data
+            # v6.1：真实性/时效性闸门——充足性、新鲜度、陈旧标的剔除（诚实失败优于脏数据）
+            freshness = _freshness_gate(spy, market_data["tnx"], market_data["vix"],
+                                        sector_etfs, stock_data)
+            if close_binding:
+                from .agent_evidence import normalize
+                freshness["market_close"] = {
+                    **close_binding,
+                    "etf_missing": sorted(set(spec.sector_symbols) - sector_etfs.keys()),
+                    "stock_missing": sorted(set(all_tickers) - stock_data.keys()),
+                    "macro_last_bars": {name: (values.index[-1].date().isoformat()
+                        if (values := market_data[name]) is not None else None) for name in macro_dates},
+                    "benchmark_chart": {"SPY": "signal_benchmark", "QQQ": "not_collected"},
+                }
+                execution.signal_benchmark_chart = close_chart(normalize(spy))
+            market_data["freshness"] = freshness
+            market_data["universe_closes"] = {t: df["Close"] for t, df in stock_data.items()}
+            logger.info("数据准备完成: 股票 %d/%d, 板块ETF %d",
+                        len(stock_data), len(all_tickers), len(sector_etfs))
+
+            stage.output({"market_data": market_data, "universe": universe, "all_tickers": all_tickers,
+                          **({"security_roster": security_roster} if security_roster else {}),
+                          "prefilter": prefilter_note, "lineage": list(_LINEAGE), "data_issues": list(_DATA_ISSUES)})
+
+        return (market_data, universe, all_tickers, stock_data, sector_etfs, spy,
+                scan_filt, prefilter_note, session, close_binding)
+
+    intelligence = bool(execution is not None and getattr(execution, "intelligence", False))
+    intelligence_state = None
+    if intelligence:
+        from .intelligence_workflow import build_frontier
+        (market_data, universe, all_tickers, stock_data, sector_etfs, spy,
+         scan_filt, prefilter_note, session, close_binding) = prepare_market(universe)
+        market_ref = dict(execution._previous_stage_ref)
+        with tracer.step("intelligence.frontier", {"market_snapshot_ref": market_ref,
+                "universe": universe, "portfolio_state": portfolio_state}) as frontier_stage:
+            frontier = build_frontier(market_data, universe, security_roster["symbols"],
+                as_of=execution.admitted_at, market_snapshot_ref=market_ref,
+                portfolio_state=portfolio_state, scan_filters=scan_filt, sector_symbols=spec.sector_symbols)
+            frontier_stage.output(frontier)
+
     with tracer.step("search.collect", {"chains": CHAIN_TOPICS, "sectors": SECTOR_TOPICS,
                      "ah": config.AH_TOPICS, "ah_enabled": ah_enabled, "limit_per_query": 4,
                      "deep": True, "source_allowlist": execution.policy.search_source_names if execution else None}) as stage:
         if required:
             all_topics = {**CHAIN_TOPICS, **SECTOR_TOPICS}
-            raw_docs = semantic.collect(llm, all_topics, trade_date)
+            if intelligence:
+                intelligence_state = semantic.Acquisition(llm, frontier, all_topics)
+                raw_docs = intelligence_state.collect()
+            else:
+                raw_docs = semantic.collect(llm, all_topics, trade_date)
             search_cleanup, batches = {"native_calls_completed": len(llm.search_receipts)}, []
         else:
             hub = SearchHub(demo=demo_mode, execution=execution) if execution else SearchHub(demo=demo_mode)
@@ -564,7 +791,8 @@ def run_pipeline(
                     "启用" if ah_enabled else "关闭")
 
         stage.output({"documents": raw_docs, "topics": all_topics,
-                      "batches": batches, "cleanup": search_cleanup})
+                      "batches": batches, "cleanup": search_cleanup,
+                      **({"acquisition": intelligence_state.snapshot()} if intelligence else {})})
 
     with tracer.step("clean.rule_base", {"documents": raw_docs,
                      **({"source_content_contract": semantic.SOURCE_CONTENT_CONTRACT} if required else {})}) as stage:
@@ -575,24 +803,29 @@ def run_pipeline(
 
     with tracer.step("clean.llm_semantic", {"documents": base_docs,
                      **({"assessment": assessment} if required else {})}) as stage:
-        cleaned = semantic.clean(llm, base_docs) if required else unwrap_cleaned(llm_semantic_clean(base_docs, llm, tracer))
+        cleaned = (semantic.clean(llm, base_docs, acquisition=intelligence_state) if intelligence else
+                   semantic.clean(llm, base_docs) if required else unwrap_cleaned(llm_semantic_clean(base_docs, llm, tracer)))
         degraded_n = sum(1 for c in cleaned if c.degraded)
         logger.info("clean.llm_semantic: %d 篇（语义缺失 %d）", len(cleaned), degraded_n)
 
-        stage.output({"documents": cleaned, "degraded_count": degraded_n})
+        stage.output({"documents": cleaned, "degraded_count": degraded_n,
+                      **({"acquisition": intelligence_state.snapshot()} if intelligence else {})})
 
     # S3 数据层：交叉验证（规则层调度，D9 不引入 LLM）。关键事件类文档需
     # ≥2 个不同源（且至少一个 ≤T2）佐证；未达标标记 corroborated=False——
     # 不删除（透传纪律），但叙事/舆情打分输入只使用 corroborated=True 的集合；
     # 被降级文档在决策侧仅作背景参考（tech.risk / decision.debate 仍可见全集）。
     from .search.event_identity import EVENT_CONTRACT, validate_events
+    if intelligence:
+        from .search.event_identity import STRUCTURED_EVENT_CONTRACT as EVENT_CONTRACT
     event_cutoff = execution.admitted_at if required else None
     event_symbols = security_roster["symbols"] if security_roster else {ticker: "us:" + ticker for ticker in universe}
     with tracer.step("clean.cross_validate", {"documents": cleaned,
                      **({"event_contract": EVENT_CONTRACT, "security_ids": event_symbols}
                         if event_cutoff is not None else {})}) as stage:
         from .search.credibility import CrossValidator, scoring_docs
-        cv_stats = (validate_events(cleaned, event_cutoff, security_ids=event_symbols) if event_cutoff is not None
+        cv_stats = (intelligence_state.validate(cleaned) if intelligence else
+                    validate_events(cleaned, event_cutoff, security_ids=event_symbols) if event_cutoff is not None
                     else CrossValidator().validate(cleaned))
         score_docs = scoring_docs(cleaned)
         logger.info("clean.cross_validate: 总 %d 篇｜关键事件 %d｜通过 %d｜降级 %d"
@@ -602,6 +835,12 @@ def run_pipeline(
                     cv_stats["llm_missing"], cv_stats["missing_published_at"])
 
         stage.output({"documents": cleaned, "scoring_documents": score_docs, "stats": cv_stats})
+
+    if intelligence:
+        with tracer.step("intelligence.freeze", {"frontier_hash": frontier["manifest_sha256"],
+                "documents": cleaned, "stats": cv_stats}) as frozen_stage:
+            intelligence_bundle = intelligence_state.freeze(cleaned, cv_stats)
+            frozen_stage.output(intelligence_bundle)
 
     # WFA 调优参数：默认【不加载】——tuned_params.json 属于上一轮生产残留，
     # 零基线纪律下每轮从零开始；仅当调用方显式 use_tuned=True 时才覆盖默认闸门。
@@ -618,208 +857,9 @@ def run_pipeline(
     logger.info("=== Pipeline 启动 market=%s provider=%s universe=%s(%d) ===",
                 spec.market_id, provider.name, universe_mode, len(universe))
 
-    signal_close = execution.completed_session_close if required else None
-    session = signal_close.date() if signal_close is not None else None
-    macro_dates = macro_limits(signal_close, execution.admitted_at) if signal_close else {}
-    close_binding = close_metadata(signal_close) if signal_close else None
-
-    # ---------- 数据真实性与时效性闸门（v6.1，白皮书§12"地基不牢评分皆是沙上之塔"）----------
-    # S4：日历/指数名/板块清单全部按市场规格参数化（US 行为与现状完全一致）
-
-    def _freshness_gate(spy_df, tnx_s, vix_s, etfs: dict, stocks: dict) -> dict:
-        """硬依赖充足性 + 末根日期新鲜度 + 陈旧标的剔除。
-
-        - 指数行数不足 → 诚实失败（短数据照样能"算出分"，但口径全错）；
-        - 指数末根日期落后最近交易日 >3 天 → 诚实失败（基准数据陈旧）；
-        - 利率/波动率历史不足：US → 诚实失败（现状行为）；CN/HK → 记缺失
-          走"剔除再归一化"（D2，不可得维度不编造）；
-        - 板块覆盖率 < 2/3：US → 诚实失败；CN/HK → 按缺失披露继续（D2）；
-        - 个股末根日期落后指数末根 >5 天 → 判定停牌/源不完整，【剔除】并披露
-          （绝不把上一周的价格当"当前价格"参与评分）。
-        """
-        report: dict = {}
-        idx_name = bmk["index"]
-        if len(spy_df) < 260:
-            raise (StrictDataUnavailable if execution else RuntimeError)(
-                f"[{spec.market_id}] {idx_name} 历史不足（{len(spy_df)} < 260 行）："
-                "SMA200/252 日分位口径不成立，"
-                "宁可中止也不产出带污点的评分（白皮书§1.3 诚实失败）")
-        tnx_ok = tnx_s is not None and len(tnx_s) >= 100
-        vix_ok = vix_s is not None and len(vix_s) >= 30
-        if spec.benchmark_hard_fail:
-            if not tnx_ok or not vix_ok:
-                raise (StrictDataUnavailable if execution else RuntimeError)(
-                    f"[{spec.market_id}] {bmk['rate']}/{bmk['vol']} 历史不足"
-                    f"（{0 if tnx_s is None else len(tnx_s)}/"
-                    f"{0 if vix_s is None else len(vix_s)} 行），MRS 宏观/情绪维口径不成立")
-        else:
-            missing_bmk = [lbl for lbl, ok in ((bmk["rate"], tnx_ok), (bmk["vol"], vix_ok))
-                           if not ok]
-            if missing_bmk:
-                report["benchmark_missing"] = missing_bmk   # 缺失维披露（再归一化）
-        expect = session or spec.prev_trading_day(trade_date)
-        spy_last = spy_df.index[-1].date()
-        lag = (expect - spy_last).days
-        report["benchmark_last_bar"] = str(spy_last)
-        report["benchmark_lag_days"] = lag
-        if execution is not None and lag < 0:
-            raise StrictObservationError("Benchmark is later than the expected market trading date")
-        if lag > 3:
-            raise (StrictDataStale if execution else RuntimeError)(
-                f"[{spec.market_id}] 基准数据陈旧：{idx_name} 末根 {spy_last}，"
-                f"最近交易日 {expect}（滞后 {lag} 天）——"
-                "用陈旧数据产出'今日'评分是数据造假，立即中止（白皮书§12.3）")
-        if lag >= 1:
-            logger.warning("数据时效披露：%s 末根 %s（最近交易日 %s，滞后 %d 天）",
-                           idx_name, spy_last, expect, lag)
-        sector_list = spec.sector_symbols
-        need_etf = (len(sector_list) * 2 + 2) // 3     # ≥2/3
-        if len(etfs) < need_etf:
-            missing = [e for e in sector_list if e not in etfs]
-            if spec.sector_hard_fail:
-                raise (StrictDataUnavailable if execution else RuntimeError)(
-                    f"[{spec.market_id}] 板块 ETF 覆盖率不足（{len(etfs)}/{len(sector_list)} < 2/3，"
-                    f"缺 {missing}）：SHS 主线判定地基不全，诚实失败")
-            report["sector_breadth_missing"] = (
-                f"板块广度数据不足（{len(etfs)}/{len(sector_list)}，缺 {missing}）→ "
-                "SHS 板块维度按缺失披露（D2：宁可缺失不可编造）")
-            logger.warning("[%s] %s", spec.market_id, report["sector_breadth_missing"])
-        stale = [t for t, df in stocks.items()
-                 if df is not None and len(df)
-                 and (spy_last - df.index[-1].date()).days > 5]
-        for t in stale:
-            del stocks[t]
-        if stale:
-            logger.warning("剔除 %d 只陈旧/停牌标的（末根滞后 %s 超 5 天）: %s%s",
-                           len(stale), idx_name, stale[:10], "..." if len(stale) > 10 else "")
-        report["stale_removed"] = stale
-        report["etf_coverage"] = f"{len(etfs)}/{len(sector_list)}"
-        return report
-
-    # ---------- 数据准备 ----------
-    days = 420
-    market_data: dict = {"benchmark_labels": benchmark_labels}
-    with tracer.step("data.prepare", {"universe": universe, "benchmarks": bmk,
-                     "sector_symbols": spec.sector_symbols, "days": days,
-                     "trade_date": trade_date, "scan_filters": spec.scan_filters(),
-                     **({"market_close": close_binding} if close_binding else {})}) as stage:
-        idx_sym = bmk["index"]
-        try:
-            spy = _single_with_fallback(provider, "ohlcv", idx_sym, days=days,
-                                         **({"close_cutoff": session} if session else {}))
-        except (EvidenceWriteError, ExecutionContractError, StrictObservationError, StrictDataStale):
-            raise
-        except Exception as exc:
-            # D2 诚实失败：该市场基准（指数）全断 → 当日中止，其余市场不受影响
-            raise (StrictDataUnavailable if execution else RuntimeError)(
-                f"[{spec.market_id}] {idx_sym} 基准数据获取失败（含降级源），"
-                f"该市场当日诚实失败，MRS 无法计算: {exc}") from exc
-        market_data["spy"] = spy
-        # 利率基准：US 硬依赖（现状行为）；CN/HK 缺失 → 记 None 走再归一化
-        try:
-            market_data["tnx"] = _single_with_fallback(
-                provider, "rate_yield_for", bmk["rate"], days=days,
-                **({"close_cutoff": macro_dates["tnx"]} if session else {}))
-        except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
-            raise
-        except Exception as exc:
-            if spec.benchmark_hard_fail:
-                raise (StrictDataUnavailable if execution else RuntimeError)(
-                    f"[{spec.market_id}] {bmk['rate']} 数据获取失败（含降级源），"
-                    f"MRS 无法计算: {exc}") from exc
-            logger.warning("[%s] 利率基准 %s 不可得（%s）→ 宏观维缺失再归一化",
-                           spec.market_id, bmk["rate"], str(exc))
-            market_data["tnx"] = None
-        # 波动率基准：同上
-        try:
-            market_data["vix"] = _single_with_fallback(
-                provider, "vol_index_for", bmk["vol"], days=days,
-                **({"close_cutoff": macro_dates["vix"]} if session else {}))
-        except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
-            raise
-        except Exception as exc:
-            if spec.benchmark_hard_fail:
-                raise (StrictDataUnavailable if execution else RuntimeError)(
-                    f"[{spec.market_id}] {bmk['vol']} 数据获取失败（含降级源），"
-                    f"MRS 无法计算: {exc}") from exc
-            logger.warning("[%s] 波动率基准 %s 不可得（%s）→ 情绪维缺失再归一化",
-                           spec.market_id, bmk["vol"], str(exc))
-            market_data["vix"] = None
-        try:
-            market_data["vix9d"] = (_single_with_fallback(
-                provider, "vol_index_for", bmk["vol_short"], days=days,
-                **({"close_cutoff": macro_dates["vix9d"]} if session else {}))
-                if bmk.get("vol_short") else None)
-        except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
-            raise
-        except Exception:
-            market_data["vix9d"] = None
-
-        sector_etfs = _batch_with_fallback(provider, spec.sector_symbols, days,
-            **({"label": "signal_etfs", "close_cutoff": session,
-                "minimum": (len(spec.sector_symbols) * 2 + 2) // 3} if session else {}))
-        market_data["sector_etfs"] = sector_etfs
-
-        # full 模式两级拉取：先用 30 日短历史做流动性预筛，再对幸存者拉全历史
-        prefilter_note = ""
-        scan_filt = spec.scan_filters()
-        if len(universe) > config.FULL_PREFILTER_THRESHOLD:
-            logger.info("池规模 %d > %d，启动流动性预筛（%d 日短历史）",
-                        len(universe), config.FULL_PREFILTER_THRESHOLD,
-                        config.FULL_PREFILTER_DAYS)
-            light = _batch_with_fallback(provider, universe, config.FULL_PREFILTER_DAYS,
-                **({"label": "signal_prefilter", "close_cutoff": session} if session else {}))
-            survivors: list[tuple[str, float]] = []
-            for t, df in light.items():
-                if len(df) < 15:
-                    continue
-                px = float(df["Close"].iloc[-1])
-                adv = float((df["Close"] * df["Volume"]).tail(20).mean())
-                if px >= scan_filt["min_price"] and adv >= scan_filt["min_adv"]:
-                    survivors.append((t, adv))
-            survivors.sort(key=lambda x: x[1], reverse=True)
-            kept = survivors[: config.FULL_HEAVY_CAP]
-            prefilter_note = (f"预筛 {len(universe)}→{len(light)}→流动性通过 "
-                              f"{len(survivors)}→重量级拉取 {len(kept)}")
-            logger.info(prefilter_note)
-            universe = [t for t, _ in kept]
-
-        # 全市场股票数据（扫描 + 产业链 + 广度共用一份）
-        # S4：US 产业链为美股映射，仅 US 市场并入拉取；CN/HK 链覆盖率如实披露为 0
-        chain_tickers: set[str] = set()
-        if spec.market_id == "us":
-            from .chains import CHAINS
-            for c in CHAINS.values():
-                for link in ("upstream", "midstream", "downstream"):
-                    chain_tickers.update(c[link]["tickers"])
-        all_tickers = sorted(set(universe) | chain_tickers)
-        stock_data = _batch_with_fallback(provider, all_tickers, days,
-            **({"label": "signal_stocks", "close_cutoff": session} if session else {}))
-        if session and not stock_data:
-            raise StrictDataUnavailable(f"缺少已完成交易日 {session} 的可用股票收盘数据")
-        market_data["stock_ohlcv"] = stock_data
-        # v6.1：真实性/时效性闸门——充足性、新鲜度、陈旧标的剔除（诚实失败优于脏数据）
-        freshness = _freshness_gate(spy, market_data["tnx"], market_data["vix"],
-                                    sector_etfs, stock_data)
-        if close_binding:
-            from .agent_evidence import normalize
-            freshness["market_close"] = {
-                **close_binding,
-                "etf_missing": sorted(set(spec.sector_symbols) - sector_etfs.keys()),
-                "stock_missing": sorted(set(all_tickers) - stock_data.keys()),
-                "macro_last_bars": {name: (values.index[-1].date().isoformat()
-                    if (values := market_data[name]) is not None else None) for name in macro_dates},
-                "benchmark_chart": {"SPY": "signal_benchmark", "QQQ": "not_collected"},
-            }
-            execution.signal_benchmark_chart = close_chart(normalize(spy))
-        market_data["freshness"] = freshness
-        market_data["universe_closes"] = {t: df["Close"] for t, df in stock_data.items()}
-        logger.info("数据准备完成: 股票 %d/%d, 板块ETF %d",
-                    len(stock_data), len(all_tickers), len(sector_etfs))
-
-        stage.output({"market_data": market_data, "universe": universe, "all_tickers": all_tickers,
-                      **({"security_roster": security_roster} if security_roster else {}),
-                      "prefilter": prefilter_note, "lineage": list(_LINEAGE), "data_issues": list(_DATA_ISSUES)})
+    if not intelligence:
+        (market_data, universe, all_tickers, stock_data, sector_etfs, spy,
+         scan_filt, prefilter_note, session, close_binding) = prepare_market(universe)
 
     # ================= 科技股产业链专项子集群 =================
     # （放在数据准备之后：monitor 复用已下载行情，仅全球联动标的单独拉取）
@@ -863,16 +903,20 @@ def run_pipeline(
         tech_sentiment = semantic.sentiment(llm, score_docs) if required else ChainSentimentAgent(llm).execute(score_docs, tracer)
         stage.output(tech_sentiment)
     risk_docs = score_docs if event_cutoff is not None else cleaned
-    risk_input = {"risk_coverage": risk_coverage(len(risk_docs))} if event_cutoff is not None else {}
+    risk_input = {"risk_coverage": risk_coverage(risk_docs if intelligence else len(risk_docs))} if event_cutoff is not None else {}
     with tracer.step("tech.risk", {"documents": risk_docs, **risk_input,
                      **({"assessment": assessment} if required else {})}) as stage:
         tech_alerts = semantic.risk(llm, risk_docs) if required else ChainRiskAgent(llm).execute(risk_docs, tracer)
         stage.output(tech_alerts)
+    if intelligence:
+        risk_input = {"risk_coverage": semantic.assessed_risk_coverage(llm, risk_docs)}
     with tracer.step("tech.fusion", {"monitor": tech_monitor, "linkage": tech_linkage,
                      "sentiment": tech_sentiment, "alerts": tech_alerts, **risk_input}) as stage:
         tech_signals = TechChainFusionAgent().execute(
             tech_monitor, tech_linkage, tech_sentiment, tech_alerts, tracer,
-            risk_evidence_available=event_cutoff is None or bool(risk_docs))
+            risk_evidence_available=event_cutoff is None or bool(risk_docs),
+            **({"risk_coverage_by_chain": semantic.assessed_risk_coverage(llm, risk_docs)["targets"]}
+               if intelligence else {}))
         logger.info("tech.fusion: %s",
                     [(s.chain_id, s.prosperity, s.risk_level, s.bonus_hint) for s in tech_signals])
 
@@ -883,7 +927,7 @@ def run_pipeline(
     with tracer.step("sector.narrative", {"documents": score_docs, "sector_symbols": spec.sector_symbols,
                      **({"assessment": assessment} if required else {})}) as stage:
         narr_res = semantic.narrative(llm, score_docs, spec.sector_symbols) if required else NarrativeAgent(llm).execute(score_docs, spec.sector_symbols, tracer)
-        if not isinstance(narr_res, Passthrough) and (event_cutoff is None or score_docs):
+        if not isinstance(narr_res, Passthrough) and (intelligence or event_cutoff is None or score_docs):
             narrative_llm = narr_res
 
         stage.output({"raw_result": narr_res, "narrative": narrative_llm})
@@ -939,6 +983,14 @@ def run_pipeline(
                                        include_entry_setups=required)
         scan_started = time.perf_counter()
         candidates = scanner.execute(context)
+        if intelligence:
+            from .intelligence_workflow import qualify_candidates
+            exclusions = qualify_candidates(context, frontier)
+            for row in exclusions:
+                audit_row = context["scan_decisions"][row["symbol"]]
+                audit_row["market_selection"] = audit_row.get("selection")
+                audit_row["selection"] = "research_missing"
+            candidates = context["watchlist"]
         stage.output({"candidates": candidates, "scan_stats": context["scan_stats"],
                       **({"scan_decisions": context["scan_decisions"],
                           "scan_elapsed_ms": round((time.perf_counter() - scan_started) * 1000, 1)}
@@ -1097,11 +1149,18 @@ def run_pipeline(
                 "data_coverage": f"{len(stock_data)}/{len(all_tickers)}",
                 "prefilter": prefilter_note,
                 "tech_signals": context.get("tech_signals", []),
-                "docs_collected": len(raw_docs),
+                "docs_collected": len(intelligence_state.documents) if intelligence else len(raw_docs),
                 "docs_cleaned": len(cleaned),
                 "docs_semantic_degraded": degraded_n,
                 # v6.3 S3：交叉验证统计与 AH 主题开关（数据层披露）
                 "cross_validation": cv_stats,
+                **({"intelligence": {**intelligence_state.disclosure(),
+                    "bundle": {key: intelligence_bundle[key] for key in
+                        ("bundle_id", "manifest_sha256", "state", "missing_required", "usage",
+                         "frozen_at", "frontier_manifest_hash")},
+                    "frontier": {key: frontier[key] for key in
+                        ("contract", "manifest_sha256", "symbols", "selection_reasons", "missing", "sector_gaps")},
+                    "exclusions": context.get("intelligence_exclusions", [])}} if intelligence else {}),
                 "ah_topics_enabled": ah_enabled,
                 # v6.3 S4：市场标识 / 合规校验记录 / 轻仓毕业状态（日报披露）
                 "market": spec.to_dict(),
