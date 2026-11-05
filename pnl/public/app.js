@@ -16,6 +16,7 @@
   let historyExpanded = false;
   let requestPending = false;
   let lastAttemptAt = 0;
+  let selectedStock = null;
 
   const byId = (id) => document.getElementById(id);
   const finite = (value) => typeof value === "number" && Number.isFinite(value);
@@ -90,7 +91,8 @@
   function sourceUrl(value) {
     try {
       const url = new URL(value);
-      return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+      return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !url.hash
+        && ![...url.searchParams.keys()].some((key) => /token|key|signature|authorization|credential|secret|password/i.test(key.replace(/[_-]/g, ""))) ? url.href : null;
     } catch { return null; }
   }
 
@@ -228,7 +230,14 @@
     byId("methodology-detail").textContent = "收益包含已记录的费用；最大回撤按剔除资金流影响后的收益净值计算。样本不足时不展示年化收益或胜率。";
     renderAllocation(latest);
     renderPositions(latest.positions);
-    renderTrades(latest.trades);
+    const seenTrades = new Set();
+    const reportedTrades = [];
+    for (const record of data.records.length ? data.records : [latest]) {
+      for (const trade of record.trades || []) {
+        if (!seenTrades.has(trade.id)) { seenTrades.add(trade.id); reportedTrades.push(trade); }
+      }
+    }
+    renderTrades(reportedTrades);
     renderHistory();
     renderChart();
     document.querySelectorAll("[data-range]").forEach((button) => { button.disabled = false; });
@@ -245,7 +254,7 @@
     bar.replaceChildren(svg);
     bar.setAttribute("aria-label", `股票持仓 ${percent(stockWeight * 100)}，现金 ${percent(cashWeight * 100)}`);
     let offset = 0;
-    for (const [weight, color] of [[stockWeight, "#fa6a32"], [cashWeight, "#abb59d"]]) {
+    for (const [weight, color] of [[stockWeight, "#9e8526"], [cashWeight, "#abb59d"]]) {
       if (weight <= 0) continue;
       const segmentWidth = Math.max(0, Math.min(weight, 1)) * 1000;
       svg.append(svgElement("rect", { x: offset, y: 0, width: segmentWidth, height: 5, fill: color }));
@@ -269,7 +278,7 @@
       const weight = element("span", "weight-cell");
       const track = svgElement("svg", { class: "weight-track", viewBox: "0 0 42 3", preserveAspectRatio: "none" });
       track.setAttribute("aria-hidden", "true");
-      track.append(svgElement("rect", { width: Math.min(42, Math.max(0, item.weight * 42)), height: 3, fill: "#fa6a32" }));
+      track.append(svgElement("rect", { width: Math.min(42, Math.max(0, item.weight * 42)), height: 3, fill: "#9e8526" }));
       weight.append(track, document.createTextNode(percent(item.weight * 100)));
       weightCell.append(weight);
       row.append(asset, element("td", "numeric", number(item.quantity)), price, element("td", "numeric", money(item.marketValue)), weightCell, element("td", `numeric${item.unrealizedPnl > 0 ? " is-positive" : item.unrealizedPnl < 0 ? " is-negative" : ""}`, `${item.unrealizedPnl > 0 ? "+" : ""}${money(item.unrealizedPnl)}`));
@@ -305,7 +314,8 @@
     const research = data.research?.latest;
     const stamp = byId("research-stamp");
     const qualified = modelQualified(research) && structuredDecisionsValid(research);
-    renderHistoricalResearch(data, qualified ? research : null);
+    renderHistoricalResearch(data);
+    renderDesk(data, qualified ? research : null);
     if (!qualified) {
       renderInstructionState(research ? "unqualified" : "pending",
         research ? "等待满足要求的模型指令" : "等待新一轮模型指令",
@@ -330,11 +340,12 @@
     }
     proof.append(identity, facts);
     stamp.hidden = false;
-    stamp.replaceChildren(element("span", "", `指令生成 ${dateTime(research.asOf)}`), element("span", "", `行情截至 ${dateOnly(research.dataAsOf)} · 本轮扫描 ${number(research.universeSize)} 只标的`));
+    stamp.replaceChildren(element("span", "", `研究生成 ${dateTime(research.asOf)}`), element("span", "", `行情截至 ${dateOnly(research.dataAsOf)} · 本轮扫描 ${number(research.universeSize)} 只标的`), element("span", "research-disclosure", "研究计算：paper 环境 · 真实执行与账户独立记账"));
     const summary = byId("instruction-summary");
     summary.hidden = false;
     summary.replaceChildren(element("p", "instruction-summary-label", allExpired ? "当时的总体指令" : "本轮总体指令"), element("p", "instruction-summary-text", research.summary));
     if (allExpired) summary.append(element("p", "instruction-summary-note", "以下指令已过其明确有效期，保留当时的判断用于复核；等待新的已核验模型指令。"));
+    renderQuicklist(research);
     renderExecutionDecisions(research);
   }
 
@@ -349,6 +360,10 @@
     const empty = element("div", `instruction-empty${kind === "error" ? " is-error" : ""}`);
     empty.append(element("strong", "", title), element("p", "", description));
     byId("decisions-list").replaceChildren(empty);
+    byId("stock-selector").hidden = true;
+    byId("stock-selector").replaceChildren();
+    byId("decision-quicklist").replaceChildren(element("p", "instruction-empty", description));
+    renderResearchMetrics(null);
   }
 
   function addInstructionReason(container, label, value, className = "") {
@@ -363,12 +378,20 @@
       const empty = element("div", "instruction-empty");
       empty.append(element("strong", "", "本轮没有新增单票落单指令"), element("p", "", "执行团队按上方总体指令行动。账户已有持仓与已回报成交，分别查看持仓记录和实际执行回报。"));
       list.replaceChildren(empty);
+      byId("stock-selector").hidden = true;
+      byId("stock-selector").replaceChildren();
       return;
     }
     const fragment = document.createDocumentFragment();
-    for (const item of research.executionDecisions) {
+    for (const [index, item] of research.executionDecisions.entries()) {
       const expired = expiredAt(item.valid_for);
       const article = element("article", `instruction-entry${expired ? " is-expired" : ""}`);
+      article.id = `stock-panel-${index}`;
+      article.setAttribute("role", "tabpanel");
+      article.setAttribute("aria-labelledby", `stock-tab-${index}`);
+      article.setAttribute("tabindex", "0");
+      article.dataset.panelGroup = "stock";
+      article.dataset.panel = item.symbol;
       const header = element("div", "instruction-entry-head");
       const identity = element("div", "instruction-symbol");
       identity.append(element("span", `action-badge action-${item.action}`, ACTION_NAMES[item.action]), element("h4", "", item.symbol));
@@ -427,14 +450,16 @@
       fragment.append(article);
     }
     list.replaceChildren(fragment);
+    renderStockSelector(research.executionDecisions);
   }
 
   function renderHistoricalResearch(data, qualifiedCurrent = null, connectionFailed = false) {
     const history = [...(data.research?.history || [])];
     if (data.research?.latest && !history.some((item) => item.runId === data.research.latest.runId)) history.unshift(data.research.latest);
-    const rows = history.filter((item) => item && item.runId !== qualifiedCurrent?.runId);
+    const rows = history.filter(Boolean);
     const container = byId("legacy-research");
     container.hidden = rows.length === 0;
+    byId("research-history-empty").hidden = rows.length > 0;
     byId("legacy-research-title").textContent = `历史指令与运行记录（${rows.length}）`;
     const body = byId("legacy-research-body");
     body.replaceChildren();
@@ -525,11 +550,11 @@
     tooltip.setAttribute("aria-hidden", "true");
     if (history.length > 1) {
       const path = history.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.asOf).toFixed(2)},${y(point.returnPct).toFixed(2)}`).join(" ");
-      svg.append(svgElement("path", { d: path, fill: "none", stroke: "#fa6a32", "stroke-width": 2.3, "stroke-linecap": "round", "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }));
+      svg.append(svgElement("path", { d: path, fill: "none", stroke: "#9e8526", "stroke-width": 2.3, "stroke-linecap": "round", "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }));
     }
     for (const point of history) {
       const dot = svgElement("g");
-      dot.append(svgElement("circle", { cx: x(point.asOf), cy: y(point.returnPct), r: history.length === 1 ? 6 : 3.5, fill: "#fa6a32", stroke: "#fffefa", "stroke-width": 2, "vector-effect": "non-scaling-stroke" }));
+      dot.append(svgElement("circle", { cx: x(point.asOf), cy: y(point.returnPct), r: history.length === 1 ? 6 : 3.5, fill: "#9e8526", stroke: "#fffefa", "stroke-width": 2, "vector-effect": "non-scaling-stroke" }));
       dot.append(svgElement("circle", { cx: x(point.asOf), cy: y(point.returnPct), r: 14, fill: "transparent" }));
       const label = `${dateOnly(point.asOf)} · 净资产 ${money(point.nav)} · 累计收益 ${percent(point.returnPct, true)}`;
       dot.append(svgElement("title", {}, label));
@@ -565,6 +590,8 @@
   async function loadDashboard() {
     if (requestPending) return;
     requestPending = true;
+    byId("refresh-dashboard").disabled = true;
+    byId("refresh-dashboard").textContent = "读取中…";
     lastAttemptAt = Date.now();
     byId("performance").setAttribute("aria-busy", "true");
     const retry = document.querySelector(".retry-button");
@@ -579,17 +606,157 @@
       byId("connection-notice").hidden = true;
       if (data.status === "active") renderActive(data); else renderAwaiting();
       renderResearch(data);
+      byId("last-read").textContent = `最近读取 ${dateTime(new Date().toISOString())}`;
     } catch (error) {
       if (!dashboard) renderAwaiting(true);
       renderInstructionState("error", "当前无法核验最新模型指令", "本轮未取得完整的最新记录，当前不展示可执行的新指令。请重新读取；历史记录的原生成时间和有效范围保持不变。" );
       if (dashboard) renderHistoricalResearch(dashboard, null, true);
+      renderDesk(dashboard, null, true);
+      byId("last-read").textContent = "本轮读取失败 · 可刷新重试";
       showConnectionNotice(dashboard?.status === "active" ? "最新账簿暂时无法读取，当前保留上次成功读取的记录，请以标注的截至时间为准。" : "账户数据暂时无法读取。页面不展示未经核实的业绩，请重新读取。" );
     } finally {
       window.clearTimeout(timeout);
       requestPending = false;
+      byId("refresh-dashboard").disabled = false;
+      byId("refresh-dashboard").replaceChildren(document.createTextNode("刷新账簿 "), element("span", "", "↻"));
       byId("performance").setAttribute("aria-busy", "false");
     }
   }
+
+  function renderResearchMetrics(research) {
+    const plans = research?.executionDecisions || [];
+    const rows = [
+      ["本轮扫描", research ? `${number(research.universeSize)} 只` : "—", "来自本轮研究的扫描记录"],
+      ["买入计划", research ? `${plans.filter((row) => row.action === "buy").length} 只` : "—", "研究计划，不是实际成交"],
+      ["观察标的", research ? `${plans.filter((row) => row.action === "watch").length} 只` : "—", "条件不足时，保持观察"],
+      ["行情日期", research ? research.dataAsOf.slice(0, 10) : "—", "模型引用的数据，非实时行情"],
+    ];
+    byId("research-metrics").replaceChildren(...rows.map(([label, value, note]) => {
+      const card = element("div");
+      card.append(element("span", "", label), element("strong", "", value), element("small", "", note));
+      return card;
+    }));
+  }
+
+  function renderDesk(data, research, connectionFailed = false) {
+    byId("hero-account-time").textContent = data?.latest ? dateTime(data.latest.asOf) : "待首笔真实记录";
+    byId("hero-research-time").textContent = data?.research?.latest ? dateTime(data.research.latest.asOf) : "待已核验研究";
+    const days = data?.latest ? Math.max(0, Math.floor((Date.now() - Date.parse(data.latest.asOf)) / 86400000)) : 0;
+    const accountNote = days >= 2 ? `真实账户距今 ${days} 天未新增记录，数值保持原快照。` : "真实账户以最后一笔已入账快照为准。";
+    byId("hero-data-note").textContent = `${accountNote} 研究使用 paper 核算；计划价格与仓位不代表实际成交。`;
+    if (connectionFailed) {
+      byId("hero-status").textContent = "读取失败 · 待重试";
+      byId("hero-summary").textContent = "本轮未能核验最新研究，暂不展示可执行的新指令。已读账户与历史记录保留原截至时间。";
+      return;
+    }
+    renderResearchMetrics(research);
+    if (!research) {
+      byId("hero-status").textContent = "等待完整研究";
+      byId("hero-summary").textContent = "暂时没有满足必需模型与证据条件的研究。本轮不据此给出新的交易指令，可查看历史记录与交易方法。";
+      return;
+    }
+    const plans = research.executionDecisions;
+    const allExpired = plans.length > 0 && plans.every((row) => expiredAt(row.valid_for));
+    const ageDays = Math.max(0, Math.floor((Date.now() - Date.parse(research.asOf)) / 86400000));
+    byId("hero-status").textContent = allExpired ? "历史研究 · 已过有效期" : ageDays >= 2 ? "最近研究 · 请核对有效期" : "模型研究 · 已核验";
+    byId("hero-summary").textContent = research.summary;
+    if (allExpired) byId("hero-data-note").textContent = `研究指令已过明确有效期，只作复核。${accountNote} 等待新一轮完整研究；真实执行与研究分别记账。`;
+  }
+
+  function renderQuicklist(research) {
+    const list = byId("decision-quicklist");
+    if (!research.executionDecisions.length) {
+      list.replaceChildren(element("p", "instruction-empty", "本轮没有新增单票计划。请按总体研究理解当前动作；真实持仓与已回报成交另见账户栏目。"));
+      return;
+    }
+    list.replaceChildren(...research.executionDecisions.map((item) => {
+      const row = element("article", "quick-row");
+      const identity = element("div");
+      identity.append(element("h4", "quick-symbol", item.symbol), element("span", `action-badge action-${item.action}`, ACTION_NAMES[item.action]));
+      const body = element("div", "quick-summary");
+      body.append(element("p", "", item.action_summary), element("small", "", `行情 ${item.market_evidence[0].as_of} · 目标 ${percent(item.target_weight * 100)}${expiredAt(item.valid_for) ? " · 已过有效期" : " · 请核对有效范围"}`));
+      const button = element("button", "", expiredAt(item.valid_for) ? "复核详情 →" : "查看详情 →");
+      button.type = "button";
+      button.setAttribute("aria-label", `查看 ${item.symbol} 的完整研究`);
+      button.addEventListener("click", () => {
+        activateTab("research", "stocks");
+        activateTab("stock", item.symbol, true);
+      });
+      row.append(identity, body, button);
+      return row;
+    }));
+  }
+
+  function activateTab(group, key, focus = false) {
+    const tabs = [...document.querySelectorAll(`[data-tab-group="${group}"]`)];
+    const target = tabs.find((tab) => tab.dataset.tab === key);
+    if (!target) return;
+    for (const tab of tabs) {
+      const selected = tab === target;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    for (const panel of document.querySelectorAll(`[data-panel-group="${group}"]`)) panel.hidden = panel.dataset.panel !== key;
+    if (group === "stock") selectedStock = key;
+    if (group === "main" && key === "account" && dashboard?.status === "active") window.requestAnimationFrame(renderChart);
+    if (focus) target.focus();
+  }
+
+  function bindTab(tab) {
+    tab.addEventListener("click", () => {
+      activateTab(tab.dataset.tabGroup, tab.dataset.tab);
+      if (tab.dataset.tabGroup === "main") {
+        window.history.replaceState(null, "", `#${tab.dataset.tab}`);
+      }
+    });
+    tab.addEventListener("keydown", (event) => {
+      const tabs = [...document.querySelectorAll(`[data-tab-group="${tab.dataset.tabGroup}"]`)];
+      const index = tabs.indexOf(tab);
+      let next;
+      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+      else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      activateTab(tab.dataset.tabGroup, tabs[next].dataset.tab, true);
+      if (tab.dataset.tabGroup === "main") window.history.replaceState(null, "", `#${tabs[next].dataset.tab}`);
+    });
+  }
+
+  function renderStockSelector(decisions) {
+    const selector = byId("stock-selector");
+    selector.replaceChildren(...decisions.map((item, index) => {
+      const button = element("button", "", item.symbol);
+      button.type = "button";
+      button.id = `stock-tab-${index}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", `stock-panel-${index}`);
+      button.dataset.tabGroup = "stock";
+      button.dataset.tab = item.symbol;
+      bindTab(button);
+      return button;
+    }));
+    selector.hidden = !decisions.length;
+    activateTab("stock", decisions.some((item) => item.symbol === selectedStock) ? selectedStock : decisions[0]?.symbol);
+  }
+
+  function openHash() {
+    const hash = window.location.hash.slice(1);
+    const main = ["research", "account", "method"].includes(hash) ? hash
+      : ["performance", "positions", "executions"].includes(hash) ? "account"
+      : ["whitepaper", "principles", "methodology"].includes(hash) ? "method" : null;
+    if (!main) return;
+    activateTab("main", main);
+    const target = byId(hash) || byId("workspace");
+    window.requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
+  }
+
+  document.querySelectorAll("[data-tab-group]").forEach(bindTab);
+  document.querySelectorAll("[data-open-research]").forEach((button) => button.addEventListener("click", () => activateTab("research", button.dataset.openResearch, true)));
+  byId("refresh-dashboard").addEventListener("click", () => { void loadDashboard(); });
+  window.addEventListener("hashchange", openHash);
+  openHash();
 
   byId("copyright-year").textContent = String(new Date().getFullYear());
   byId("history-toggle").addEventListener("click", () => { historyExpanded = !historyExpanded; renderHistory(); });

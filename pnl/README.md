@@ -161,3 +161,11 @@ Deployment, rollback, exact-domain TLS activation and operator checks are docume
 ## Public trading whitepaper
 
 The unchanged historical PDF is served at `/whitepaper/tiger-trading-20260730.pdf` with `application/pdf`, exact Content-Length and existing static path/security boundaries. It is the original 2026-07 document (29 pages), SHA-256 `85f5abbd26b1f76c765255ce83ba73af88282e58b480887f2464e8f6e872dc67`, 4,104,128 bytes. Include it in the pinned `pnl/` release and verify source, archive and HTTPS download bytes. GET and HEAD work without the API being available. Its older model-passthrough and simulation descriptions do not weaken the current required-model execution contract. The page labels the document's original date and provides native read/download links.
+
+## Reader interface
+
+The frontend follows the original Tiger report’s black-and-gold identity and pale-green research cards. Three accessible main tabs separate research, actual accounts, and methods. Research has overview, stock details and history tabs; stock-specific tabs expose the model’s full reasons, conditions, frozen market evidence and original sources. Arrow keys, Home and End switch tabs, and direct section links reveal their parent panel.
+
+The first screen shows research generation time and real-account observation time separately. Expired instructions remain historical, and an account with no new snapshot retains its original values and date. A failed refresh removes current instruction cards while keeping previously read account values visibly timestamped. Refresh reads the same public API; it never submits research or trades. Method explanations and the historical whitepaper remain separate from account performance.
+
+All account history points come from the complete dashboard history. The execution list deduplicates actual fills from the latest 20 public account snapshots returned by the dashboard; the interface states that scope. It never synthesizes missing fills or historical performance. The public contract has no current MRS/SHS/ICS or three-market fields, so the interface does not transplant old static report scores.
