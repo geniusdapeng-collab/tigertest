@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { LIMITS } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { LIMITS, PROFILE, REQUEST_SCHEMAS, RESULT_SCHEMA } from "../bundles/trading/capabilities/workflow-client.mjs";
 import { toolDefinitions, validateToolDefinitions } from "./tiger-agent-mcp.mjs";
 import { REQUEST, RUN_ID, eventually, mcpProcess, runnerFixture } from "./tiger-agent-test-support.mjs";
 
@@ -36,6 +36,49 @@ test("MCP N05/P01: initialize/probe/list are side-effect free; readonly hides an
     assert.equal((await proc.stop()).code, 0);
   }
   assert.deepEqual(await fixture.calls(), []); assert.equal(existsSync(fixture.stateRoot), false);
+});
+
+test("MCP discovery: short instructions and tool metadata explain new research without changing execution contracts", async (t) => {
+  const expectedOutput = structuredClone(RESULT_SCHEMA); delete expectedOutput.$defs;
+  const expectedNames = ["tiger_doctor", "tiger_workflow_describe", "tiger_workflow_run",
+    "tiger_workflow_status", "tiger_workflow_receipt", "tiger_workflow_verify"];
+  assert.equal(PROFILE, "us-public-paper-v1", "The legacy CLI default remains a compatibility contract");
+  for (const mode of ["readonly", "paper"]) await t.test(mode, async (scenario) => {
+    const fixture = await runnerFixture(scenario); const proc = launch(scenario, fixture, mode);
+    const initialized = await proc.initialize();
+    const prefix = initialized.result.instructions.slice(0, 512);
+    const paragraph = initialized.result.instructions.split("\n\n")[0];
+    assert.ok(paragraph.length <= 512); assert.match(paragraph.trim(), /[.!?]$/u);
+    assert.match(prefix, /us-public-intelligence-paper-v2/u); assert.match(prefix, /public-usd/u);
+    assert.match(prefix, /idempotency_key/u); assert.match(prefix, /run_id/u);
+    assert.match(prefix, /accepted\/running (?:status )?is not completion/u);
+    assert.match(prefix, /receipt.*verify/u); assert.match(prefix, /completed.*verified receipt/u);
+    assert.match(prefix, /Cancellation.*observation, not.*worker/u);
+    assert.match(initialized.result.instructions, /Run is hidden and rejected in readonly deployment/u);
+    proc.send({ jsonrpc: "2.0", id: "metadata", method: "tools/list" });
+    const tools = (await proc.response("metadata")).result.tools;
+    assert.deepEqual(tools.map((tool) => tool.name), expectedNames.filter((name) => mode === "paper" || name !== "tiger_workflow_run"));
+    assert.equal(new Set(tools.map((tool) => tool.title)).size, tools.length);
+    for (const tool of tools) {
+      assert.equal(typeof tool.title, "string"); assert.ok(tool.title.trim().length > 0 && tool.title.length <= 64);
+      const operation = tool.name === "tiger_doctor" ? "doctor" : tool.name.slice("tiger_workflow_".length);
+      assert.deepEqual(tool.inputSchema, REQUEST_SCHEMAS[operation], "Discovery metadata cannot change accepted arguments");
+      assert.deepEqual(tool.outputSchema, expectedOutput, "The result envelope remains unchanged");
+      assert.deepEqual(tool.annotations, { readOnlyHint: operation !== "run", destructiveHint: false,
+        idempotentHint: true, openWorldHint: operation === "run" });
+    }
+    assert.match(tools.find((tool) => tool.name === "tiger_workflow_describe").description,
+      /\{"profile":"us-public-intelligence-paper-v2"\}/u);
+    if (mode === "paper") {
+      const description = tools.find((tool) => tool.name === "tiger_workflow_run").description;
+      for (const field of REQUEST_SCHEMAS.run.required) assert.ok(description.includes(field), `Run explains ${field}`);
+      for (const phrase of ["us-public-intelligence-paper-v2", "identical request/key", "run_id", "receipt and verify"]) {
+        assert.ok(description.includes(phrase), `Run discovery retains ${phrase}`);
+      }
+    }
+    assert.equal((await proc.stop()).code, 0);
+    assert.deepEqual(await fixture.calls(), []); assert.equal(existsSync(fixture.stateRoot), false);
+  });
 });
 
 test("MCP E01/E02: lifecycle requires initialized notification and rejects malformed/repeated initialize", async (t) => {

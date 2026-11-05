@@ -24,6 +24,7 @@ outputs/
 
 # Per-machine Agent client configuration and controlled local paper state.
 .codex/config.toml
+.qoder/settings.local.json
 .dsh/tiger-mcp.yaml
 .tiger-agent/
 .tiger-agent-config.lock
