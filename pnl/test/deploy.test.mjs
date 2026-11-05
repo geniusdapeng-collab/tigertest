@@ -117,7 +117,9 @@ async function fixture(t, { scenario, previous = true, oldLink = true }) {
     for (const prefix of managed) script = script.replaceAll(prefix, `${root}${prefix}`);
     script = script.replaceAll('/usr/bin/flock', `${root}/bin/flock`);
     const executable = join(root, `isolated-${name}`); await writeFile(executable, script);
-    return spawnSync('bash', [executable, ...(name === 'install.sh' ? ['a'.repeat(40), archive, digest, node] : [])], { encoding: 'utf8', timeout: 15000, env: { ...process.env, ...extraEnv, PATH: `${join(root, 'bin')}:${process.env.PATH}`, TIGER_DEPLOY_FIXTURE_ROOT: root } });
+    // The isolated Python command harness can exceed 15s on a busy Mac. Keep
+    // a bounded process deadline without weakening any rollback assertions.
+    return spawnSync('bash', [executable, ...(name === 'install.sh' ? ['a'.repeat(40), archive, digest, node] : [])], { encoding: 'utf8', timeout: 60000, env: { ...process.env, ...extraEnv, PATH: `${join(root, 'bin')}:${process.env.PATH}`, TIGER_DEPLOY_FIXTURE_ROOT: root } });
   }
   async function protectedHostUnchanged() { assert.equal(await readFile(join(root, 'etc/nginx/sites-available/pengmanager.conf'), 'utf8'), 'PROTECTED_PENGMANAGER_CONF\n'); assert.equal(await readFile(join(root, 'etc/systemd/system/pengmanager.service'), 'utf8'), 'PROTECTED_PENGMANAGER_UNIT\n'); const state = JSON.parse(await readFile(join(root, 'mock-state.json'), 'utf8')); assert.equal(state.active['pengmanager.service'], true); assert.equal(state.enabled['pengmanager.service'], true); for (const command of state.commands.filter(c => c[0] === 'systemctl')) assert.equal(command.some(arg => arg.includes('pengmanager')), false); return state; }
   return { root, oldRelease, oldAvailable, oldEnabled, units, run, protectedHostUnchanged };

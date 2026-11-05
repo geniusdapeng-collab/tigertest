@@ -1,55 +1,76 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#171a17">
-  <meta name="description" content="Tiger PnL｜投资业绩与决策记录。Tiger AI 资产管理系统的真实账户公开账簿，持续记录持仓、决策与盈亏。">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10130f">
+  <meta name="description" content="Tiger PnL 投资业绩与决策记录：读懂 AI 研究的理由、风险与有效期，分开查看模型指令、真人执行和真实账户盈亏。">
   <title>Tiger PnL｜投资业绩与决策记录</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#performance">跳至账户业绩</a>
-  <header class="site-header">
-    <div class="header-inner">
-      <a class="brand" href="#top" aria-label="Tiger PnL 首页">
-        <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M4 8h11L7 32H0L4 8Zm15 0h8L17 32H9L19 8Zm12 0h9L27 32h-8L31 8Z" fill="currentColor"/></svg>
-        <span>TIGER<span class="brand-pnl">PnL</span></span>
-      </a>
-      <nav aria-label="主导航">
-        <a href="#performance">业绩</a><a href="#positions">持仓</a><a href="#decisions">交易指令</a><a href="#whitepaper">交易白皮书</a><a href="#principles">记账原则</a>
-      </nav>
-      <a class="header-cta" href="#performance">翻开账簿 <span aria-hidden="true">↗</span></a>
+<a class="skip-link" href="#workspace">跳至研究与账户工作台</a>
+<header class="site-header" id="top"><div class="header-inner">
+  <a class="brand" href="#top" aria-label="Tiger PnL 首页"><span class="brand-emblem" aria-hidden="true">T</span>TIGER<span class="brand-pnl">PnL</span></a>
+  <nav aria-label="站点导航"><a href="#research">决策日报</a><a href="#account">真实账户</a><a href="#method">交易方法</a><a href="#whitepaper">交易白皮书 ↗</a></nav>
+  <button class="refresh-button" id="refresh-dashboard" type="button">刷新账簿 <span aria-hidden="true">↻</span></button>
+</div></header>
+<main>
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-topline"><span>TIGER AI 资产管理系统</span><span>PROCESS. DISCIPLINE. THE OPEN RECORD.</span></div>
+  <div class="hero-main">
+    <div class="hero-copy"><p class="eyebrow"><span class="tiny-square"></span> 公开研究 · 真人执行 · 盈亏同记</p>
+      <h1 id="hero-title">噪声与<span class="hero-emphasis">信号</span></h1>
+      <p class="hero-description">从纷繁的公开市场信息中，筛选并核验关键的信号，<br>再据此做出决策判断。</p>
+      <div class="hero-actions"><a class="gold-button" href="#research">读本轮决策 <span aria-hidden="true">↗</span></a><a class="hero-link" href="#account">翻开真实账簿 <span aria-hidden="true">→</span></a></div>
     </div>
-  </header>
-
-  <main id="top">
-    <section class="hero" aria-labelledby="hero-title">
-      <div class="hero-topline"><span>TIGER AI 资产管理系统</span><span>PUBLIC ACCOUNT JOURNAL / 公开账户账簿</span></div>
-      <div class="hero-main">
-        <div class="hero-copy">
-          <p class="eyebrow"><span class="tiny-square"></span> 投资业绩与决策记录</p>
-          <h1 id="hero-title">让每一次判断，<br>留下<span class="hero-emphasis">盈亏。</span></h1>
-          <p class="hero-description">模型生成决策，真人团队执行。<br>Tiger 的交易指令与真实盈亏，持续公开。</p>
-          <a class="hero-link" href="#performance">从第一天，看长期结果 <span aria-hidden="true">↓</span></a>
-        </div>
-        <div class="hero-art" aria-hidden="true">
-          <div class="art-note">NO SHORTCUTS.<br>JUST THE RECORD.</div>
-          <svg class="tiger-orbit" viewBox="0 0 430 430" fill="none">
-            <circle cx="215" cy="215" r="190" fill="currentColor"/>
-            <g fill="#171a17"><path d="M128 28 180 25 133 194 59 290 31 259 91 160Z"/><path d="m217 25 56 13-70 161-93 139-37-21 79-154Z"/><path d="m307 51 48 35-102 146-106 135-40-13 99-157Z"/><path d="m379 127 28 58-106 111-85 108-47-6 87-136Z"/><path d="m403 244-10 64-83 66-61 38-3-49Z"/></g>
-            <circle cx="215" cy="215" r="209" stroke="#74786a" stroke-opacity=".4" stroke-dasharray="1 8"/>
-          </svg>
-          <div class="art-label"><span>PROFIT<br><i>&amp;</i> LOSS</span><span class="art-coordinate">31° / 120°<br>TIGERPNL.COM</span></div>
-        </div>
-      </div>
-      <div class="hero-bottom"><span><i class="status-dot" aria-hidden="true"></i> 真实账户 · 盈亏同记</span><span>Profit &amp; Loss，盈利与亏损，都是答案。</span><span class="hero-edition">THE OPEN LEDGER</span></div>
+    <aside class="hero-brief" aria-labelledby="hero-brief-title">
+      <div class="brief-heading"><span id="hero-brief-title">当前研究状态</span><span class="brief-status" id="hero-status">正在读取</span></div>
+      <p class="hero-summary" id="hero-summary" aria-live="polite">正在读取本轮研究。完整核验前，不展示可执行的新指令。</p>
+      <div class="hero-clocks"><div><span>研究生成</span><strong id="hero-research-time">等待读取</strong></div><div><span>真实账户截至</span><strong id="hero-account-time">等待读取</strong></div></div>
+      <p class="brief-disclosure" id="hero-data-note">研究与真实账户分别更新；研究中的计划价格、股数与资金，不代表实际成交。</p>
+    </aside>
+  </div>
+  <div class="hero-bottom"><span><i class="status-dot" aria-hidden="true"></i> 盈利不加滤镜，亏损不翻篇。</span><span>研究在 paper 环境计算 · 真实交易由人执行</span><span class="hero-edition">TIGERPNL.COM</span></div>
+</section>
+<div id="connection-notice" class="connection-notice" role="status" aria-live="polite" hidden></div>
+<div class="workspace" id="workspace">
+  <div class="workspace-top"><div><p class="section-index">YOUR DAILY RESEARCH DESK</p><h2>先读决策，再核对结果。</h2></div><p class="workspace-note" id="last-read">正在读取公开记录…</p></div>
+  <div class="main-tabs" role="tablist" aria-label="研究与账户工作台">
+    <button type="button" role="tab" id="main-tab-research" aria-controls="main-panel-research" aria-selected="true" tabindex="0" data-tab-group="main" data-tab="research"><span>01</span> 决策日报 <small>看理由与风险</small></button>
+    <button type="button" role="tab" id="main-tab-account" aria-controls="main-panel-account" aria-selected="false" tabindex="-1" data-tab-group="main" data-tab="account"><span>02</span> 真实账户 <small>看持仓与盈亏</small></button>
+    <button type="button" role="tab" id="main-tab-method" aria-controls="main-panel-method" aria-selected="false" tabindex="-1" data-tab-group="main" data-tab="method"><span>03</span> 方法与验证 <small>看系统如何判断</small></button>
+  </div>
+  <div id="main-panel-research" class="main-panel" role="tabpanel" aria-labelledby="main-tab-research" tabindex="0" data-panel-group="main" data-panel="research">
+    <div class="reading-guide"><span class="guide-label">第一次看？</span><p>先读总览了解本轮动作，再进个股深读查看入场、撤销与风险。最后到真实账户核对团队实际做了什么。</p><a href="#method">了解阅读方式 →</a></div>
+    <div class="sub-tabs" role="tablist" aria-label="决策日报栏目">
+      <button type="button" role="tab" id="research-tab-overview" aria-controls="research-panel-overview" aria-selected="true" tabindex="0" data-tab-group="research" data-tab="overview">本轮总览</button>
+      <button type="button" role="tab" id="research-tab-stocks" aria-controls="research-panel-stocks" aria-selected="false" tabindex="-1" data-tab-group="research" data-tab="stocks">个股深读</button>
+      <button type="button" role="tab" id="research-tab-history" aria-controls="research-panel-history" aria-selected="false" tabindex="-1" data-tab-group="research" data-tab="history">历史研究</button>
+    </div>
+    <section id="research-panel-overview" role="tabpanel" aria-labelledby="research-tab-overview" tabindex="0" data-panel-group="research" data-panel="overview">
+      <div class="section-heading"><div><p class="section-index">THE CURRENT ASSESSMENT</p><h2>本轮，怎样行动。</h2></div><span id="instruction-status" class="instruction-status" role="status">正在核验模型运行</span></div>
+      <div id="research-stamp" class="research-stamp" hidden></div>
+      <div id="instruction-summary" class="instruction-summary" hidden></div>
+      <div class="research-metrics" id="research-metrics" aria-label="本轮研究概况"><div><span>本轮扫描</span><strong>—</strong><small>等待已核验记录</small></div><div><span>买入计划</span><strong>—</strong><small>研究计划，不是实际成交</small></div><div><span>观察标的</span><strong>—</strong><small>等待条件改善</small></div><div><span>行情日期</span><strong>—</strong><small>非实时行情</small></div></div>
+      <div class="section-heading compact"><div><p class="section-index">AT A GLANCE</p><h3>先用一张表，看清每个标的。</h3></div><button class="text-button" type="button" data-open-research="stocks">逐只深入看 →</button></div>
+      <div id="decision-quicklist" class="decision-quicklist"><p class="instruction-empty">完整研究读取后，在这里查看标的与行动摘要。</p></div>
+      <details class="proof-fold"><summary>本轮模型与证据核验 <span>查看实际调用与完成阶段</span></summary><div id="model-proof" class="model-proof" hidden></div><p class="explain-note">这里展示本轮记录中的模型与证据契约。研究执行和原始回执由受控运行器独立校验；网站不连接券商，也不把模型建议直接当成成交。</p></details>
+      <div class="two-column section-gap"><article class="explain-card"><span class="card-number">READ THE PLAN</span><h3>“观察”也有明确含义</h3><p>没有通过条件的标的，保持观察。未提供的入场价、止损与股数留空；行情收盘价只是本轮引用的证据，不是一张待执行订单。</p></article><article class="explain-card"><span class="card-number">CHECK THE CLOCK</span><h3>看清日期，再看结论</h3><p>研究生成时间、行情日期和账户截至时间各不相同。已过有效期的指令保留用于复核；等待新一轮完整研究，不沿用旧指令下单。</p></article></div>
     </section>
-
-    <div id="connection-notice" class="connection-notice" role="status" aria-live="polite" hidden></div>
-
+    <section id="research-panel-stocks" role="tabpanel" aria-labelledby="research-tab-stocks" tabindex="0" data-panel-group="research" data-panel="stocks" hidden>
+      <div class="section-heading"><div><p class="section-index">THE REASON BEHIND EACH DECISION</p><h2>个股深读 · 从理由到失效。</h2></div><p class="section-aside">读懂关注理由，再看行动条件。<br>实际成交以团队回报为准。</p></div>
+      <div id="stock-selector" class="stock-selector" role="tablist" aria-label="选择研究标的" hidden></div>
+      <div id="decisions-list" class="instruction-cards"><p class="instruction-empty">正在读取并核验本轮模型指令…</p></div>
+    </section>
+    <section id="research-panel-history" role="tabpanel" aria-labelledby="research-tab-history" tabindex="0" data-panel-group="research" data-panel="history" hidden>
+      <div class="section-heading"><div><p class="section-index">KEEP THE ORIGINAL JUDGMENT</p><h2>历史研究，不改当时的答案。</h2></div></div>
+      <p class="section-description">按原生成时间保留判断、目标配置和行情日期。历史指令只用于复核；未满足必需模型条件的旧运行会单独说明。</p>
+      <details id="legacy-research" class="instruction-history" open hidden><summary id="legacy-research-title">历史指令与运行记录</summary><div id="legacy-research-body"></div></details>
+      <p id="research-history-empty" class="instruction-empty" hidden>暂时没有可读取的历史研究记录。</p>
+    </section>
+  </div>
+  <div id="main-panel-account" class="main-panel" role="tabpanel" aria-labelledby="main-tab-account" tabindex="0" data-panel-group="main" data-panel="account" hidden>
+    <div class="reading-guide"><span class="guide-label">真实账户</span><p>这里展示实际账户快照和真人执行回报。模型计划另记；没有新的真实凭证时，账户日期和数值保持原样。</p><a href="#methodology">查看收益口径 →</a></div>
     <section class="section performance-section" id="performance" aria-labelledby="performance-title" aria-busy="true">
       <div class="section-heading">
         <div><p class="section-index">01 / PERFORMANCE</p><h2 id="performance-title">真实账户，公开作答。</h2></div>
@@ -79,22 +100,32 @@
       <p class="table-footnote" id="position-note">金额以账户记账币种列示。持仓以最新账户快照为准，价格并非实时行情。</p>
     </section>
 
-    <section class="section decisions-section" id="decisions" aria-labelledby="decisions-title">
-      <div class="section-heading"><div><p class="section-index">03 / TRADING DIRECTIVES</p><h2 id="decisions-title">Tiger 决策，真人执行。</h2></div><p class="section-aside">先读清楚为什么，<br>再按指令执行每一步。</p></div>
-      <div class="journal-grid">
-        <div class="decision-journal">
-          <div class="journal-title"><h3>Tiger 交易指令</h3><span id="instruction-status" class="instruction-status" role="status">正在核验模型运行</span></div>
-          <p class="journal-description instruction-description">以下为 Tiger 发出的交易指令与目标配置，由真人交易团队在富途、老虎等券商执行。实际成交价格、数量与持仓随执行回报入账。</p>
-          <div id="model-proof" class="model-proof" hidden></div>
-          <div id="research-stamp" class="research-stamp" hidden></div>
-          <div id="instruction-summary" class="instruction-summary" hidden></div>
-          <div id="decisions-list" class="instruction-cards"><p class="instruction-empty">正在读取并核验本轮模型指令…</p></div>
-          <details id="legacy-research" class="instruction-history" hidden><summary id="legacy-research-title">历史运行记录</summary><div id="legacy-research-body"></div></details>
-        </div>
-        <div class="trade-journal"><div class="journal-title"><h3>实际执行回报</h3><span>EXECUTION REPORTS</span></div><p class="journal-description">记录团队已回报并入账的真实成交。未收到新回报时保留原账户截至时间，目标价和目标仓位不会替代实际成交。</p><div id="trades-list" class="trades-list"><p class="journal-empty">正在读取执行回报…</p></div></div>
-      </div>
-    </section>
 
+    <section class="section execution-section" id="executions" aria-labelledby="executions-title"><div class="section-heading"><div><p class="section-index">ACTUAL EXECUTION REPORTS</p><h2 id="executions-title">团队实际做了什么。</h2></div></div><p class="section-description">展示最近 20 笔账户快照中已回报的真实成交；账户收益曲线与每日账页保留完整记录期。目标仓位不会替代实际持仓，计划价格不会替代成交价格。</p><div id="trades-list" class="trades-list"><p class="journal-empty">正在读取执行回报…</p></div></section>
+  </div>
+  <div id="main-panel-method" class="main-panel" role="tabpanel" aria-labelledby="main-tab-method" tabindex="0" data-panel-group="main" data-panel="method" hidden>
+    <section class="section method-intro" id="method"><p class="section-index">NO PREDICTION. PROCESS, DISCIPLINE, AUDIT.</p><h2>让每一个判断，有一条可复查的来路。</h2><p class="section-description">Tiger 研究市场、筛选候选并解释理由；规则限制风险；人类执行真实交易。Tiger PnL 把这三件事分别记录，让过程与结果可以对照。</p>
+      <article class="explain-card section-gap" aria-labelledby="signal-theory-title"><span class="card-number">NOISE &amp; SIGNAL</span><h3 id="signal-theory-title">噪声与信号 · 核心理论假设</h3><p>决策所需的信息，都可以从公开市场取得。研究的工作是从大量噪声中筛选、交叉验证关键的信号，并把它转为可复查的判断。信息不足时保留等待。</p></article>
+      <div class="four-steps"><article><span>01 / 市场环境</span><h3>现在，适合承担风险吗？</h3><p>先看市场整体状态和数据是否完整。环境不允许时停止新开仓，现金也是一种配置。</p></article><article><span>02 / 资金方向</span><h3>机会，是否有持续支撑？</h3><p>再看板块主线与产业链景气，分清公司消息、资金推进和短期热度。</p></article><article><span>03 / 具体买点</span><h3>这只股票，条件到了吗？</h3><p>结合价格结构、动能与公司证据提出候选，写清关注理由、入场条件和失效条件。</p></article><article><span>04 / 风险与执行</span><h3>判断错了，怎样退出？</h3><p>风险预算、仓位、止损与时间纪律先明确；符合条件再由真人执行，按真实回报记账。</p></article></div>
+    </section>
+    <section class="section"><div class="section-heading"><div><p class="section-index">PEOPLE, MODELS & RULES</p><h2>各司其职，才能对结果负责。</h2></div></div><div class="three-column">
+      <article class="explain-card"><span class="card-number">研究班组</span><h3>模型理解语义</h3><p>阅读消息、整理板块叙事、检查风险和组织多空观点。所有理由要能回到当时的来源与行情证据。</p></article>
+      <article class="explain-card"><span class="card-number">确定性规则</span><h3>程序约束数值</h3><p>评分门槛、资金预算、仓位与风控由规则限制。模型可以选择或否决合法候选，不能自行扩大风险上限。</p></article>
+      <article class="explain-card"><span class="card-number">真人团队</span><h3>执行并回报事实</h3><p>人类在券商落实交易，检查成交和账户凭证。研究与paper核算不等于实盘，真实盈亏来自实际成交回报。</p></article>
+    </div></section>
+    <section class="section"><div class="section-heading"><div><p class="section-index">RISK COMES FIRST</p><h2>刻意不赚的钱，也是纪律。</h2></div></div><div class="two-column">
+      <article class="explain-card"><h3>先设退出条件，再讨论收益</h3><p>计划从可承担的风险倒推仓位。单票、组合和同一产业链都受预算限制；结构破坏或超过时间窗口时，按纪律复核退出。</p><p class="explain-note">计划止损不是亏损保证。跳空、滑点、费用与执行延迟都可能放大实际损失。</p></article>
+      <article class="explain-card"><h3>证据不够，就保留“等待”</h3><p>数据源失败、模型结果缺失或证据未过核验时，不以编造的结果补位。WAIT 和观察是正式输出，没有新指令时不强行交易。</p></article>
+      <article class="explain-card"><h3>不把漂亮回测当作结论</h3><p>策略和参数改动需要样本外检验，检查是否只是对过去数据过度拟合。未经充分样本与统计验证，不以短期胜率或收益宣称有效。</p></article>
+      <article class="explain-card"><h3>亏损与更正，保留原记录</h3><p>账户与研究各有独立的顺序账簿。更正通过新增记录表达，不把旧答案改成后来才知道的答案。哈希帮助核对记录，不代替券商真实性核验。</p></article>
+    </div></section>
+    <section class="section" aria-labelledby="reading-title"><div class="section-heading"><div><p class="section-index">HOW TO READ TIGER PnL</p><h2 id="reading-title">读懂一张卡，先看这五处。</h2></div></div><div class="reading-questions">
+      <details open><summary>为什么选它 / 为什么现在</summary><p>前者说明关注这家公司或价格结构的理由，后者说明本轮时点的证据。理由应能与列出的新闻来源、行情日期相互核对。</p></details>
+      <details><summary>入场参考 / 认错线 / 计划股数</summary><p>这是研究中已核验的计划值，使用计划资金基准计算。观察标的不提供执行数值；真实账户规模、实际成交和持仓另记。</p></details>
+      <details><summary>执行办法 / 何时撤销</summary><p>入场条件说明什么发生后才考虑行动；失效条件说明何时不再成立。两者必须一起读，不能只摘出一个价格。</p></details>
+      <details><summary>有效范围 / 行情日期</summary><p>生成时间是研究完成时间，行情日期是模型引用的数据时点，有效范围是指令适用窗口。过期只留作复盘，不自动延长。</p></details>
+      <details><summary>研究记录 / 真实账户</summary><p>研究展示的是模型当时的判断；真实账户展示实际持仓、成交与净资产。研究更新不会制造新的账户收益点，未回报成交时不推断已成交。</p></details>
+    </div></section>
     <section class="section whitepaper-section" id="whitepaper" aria-labelledby="whitepaper-title">
       <div class="whitepaper-card"><div class="whitepaper-edition" aria-hidden="true">TIGER<br>WHITE<br>PAPER<span>2026 / 07</span></div><div class="whitepaper-copy"><p class="section-index">THE METHOD / 交易方法</p><h2 id="whitepaper-title">先写清楚，<br>为什么值得做。</h2><p class="whitepaper-name">《AI 短线美股交易（1–15 天波段版）白皮书》</p><p class="whitepaper-meta">2026 年 7 月原版 · 29 页 · 4.10 MB</p><p class="whitepaper-description">从市场环境、资金主线与产业链，到入场、止损和复盘，完整说明 Tiger 交易体系的来路。</p><div class="whitepaper-actions"><a class="whitepaper-read" href="/whitepaper/tiger-trading-20260730.pdf" target="_blank" rel="noopener noreferrer">阅读白皮书 <span aria-hidden="true">↗</span></a><a class="whitepaper-download" href="/whitepaper/tiger-trading-20260730.pdf" download="Tiger-Trading-Whitepaper-20260730.pdf">下载原版 PDF <span aria-hidden="true">↓</span></a></div><p class="whitepaper-version-note">这是保留原貌的历史版本，包含当时的规则分工、透传与模拟盘口径。当前交易以本轮经核验的必需模型指令和实际执行回报为准，模型失败时不以规则结果替代。</p></div></div>
     </section>
@@ -107,9 +138,10 @@
         <article><span>04</span><div><h3>记录结果，不承诺结果</h3><p>本网站公开 Tiger 的交易决策、团队执行与账户结果，不向读者承诺收益。历史表现不代表未来收益，投资存在本金损失风险。</p></div></article>
       </div></div>
     </section>
-  </main>
 
-  <footer class="site-footer"><div class="footer-top"><a class="brand" href="#top" aria-label="返回顶部">TIGER<span class="brand-pnl">PnL</span></a><span>一份持续书写的真实账户账簿。</span><a class="back-top" href="#top">返回顶部 <span aria-hidden="true">↑</span></a></div><div class="footer-bottom"><span>© <span id="copyright-year">2026</span> TIGER PnL · PROFIT &amp; LOSS</span><span>投资业绩与决策记录</span><span>TIGERPNL.COM</span></div></footer>
-  <noscript><div class="noscript-notice">请启用 JavaScript 以读取实时账户账簿。本页未预置任何账户业绩数据。</div></noscript>
-</body>
-</html>
+  </div>
+</div>
+</main>
+<footer class="site-footer"><div class="footer-top"><a class="brand" href="#top">TIGER<span class="brand-pnl">PnL</span></a><span>一份持续书写的真实账户账簿。</span><a class="back-top" href="#top">返回顶部 ↑</a></div><div class="footer-bottom"><span>© <span id="copyright-year">2026</span> TIGER PnL · PROFIT & LOSS</span><span>记录结果，不承诺结果</span><span>TIGERPNL.COM</span></div></footer>
+<noscript><div class="noscript-notice"><p>请启用 JavaScript 以读取实时账簿和切换栏目。本页没有预置账户业绩。</p><p><a href="/whitepaper/tiger-trading-20260730.pdf" target="_blank" rel="noopener noreferrer">阅读交易白皮书 ↗</a> · <a href="/whitepaper/tiger-trading-20260730.pdf" download="Tiger-Trading-Whitepaper-20260730.pdf">下载原版 PDF ↓</a></p></div></noscript>
+</body></html>
