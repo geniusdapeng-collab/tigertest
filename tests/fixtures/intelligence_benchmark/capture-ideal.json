@@ -1,0 +1,3008 @@
+{
+  "schema": "tiger.intelligence-benchmark-capture/v1",
+  "dataset_sha256": "2bdcd69238e0adb808c814064528046029a95eddcd2b2ebed578e92536f50a44",
+  "provider": "fixture-ideal",
+  "mode": "fixture_replay",
+  "cases": [
+    {
+      "case_id": "macro_policy-01",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-01",
+          "publisher_origin": "fixture-origin:macro_policy-01",
+          "event_ids": [
+            "fixture-event:macro_policy-01"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:1"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:1 reported policy-rate decision. Event fixture-event:macro_policy-01. No real financial fact is represented.",
+          "content_sha256": "722f70cdff675d63788d4f4827a4c84b7a56c1ea3ee00507775b65b38bec11c3",
+          "evidence_quote": "fixture-subject:macro_policy:1",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 111,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-02",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-02",
+          "publisher_origin": "fixture-origin:macro_policy-02",
+          "event_ids": [
+            "fixture-event:macro_policy-02"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:2"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:2 reported policy statement revision. Event fixture-event:macro_policy-02. No real financial fact is represented.",
+          "content_sha256": "88eb6ba52c609f20748a43eb16da02e8701247328b277ac3a15b9d8222f82812",
+          "evidence_quote": "fixture-subject:macro_policy:2",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 122,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-03",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-03",
+          "publisher_origin": "fixture-origin:macro_policy-03",
+          "event_ids": [
+            "fixture-event:macro_policy-03"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:3"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:3 reported balance-sheet runoff. Event fixture-event:macro_policy-03. No real financial fact is represented.",
+          "content_sha256": "d6b5772d1f2c4a4e60748207420e1a2645173dd8bddd43590a4648c3c322f50e",
+          "evidence_quote": "fixture-subject:macro_policy:3",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 133,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-04",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-04",
+          "publisher_origin": "fixture-origin:macro_policy-04",
+          "event_ids": [
+            "fixture-event:macro_policy-04"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:4"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:4 reported consumer price index. Event fixture-event:macro_policy-04. No real financial fact is represented.",
+          "content_sha256": "11adb07f00ab469ad964c6ad20cfafff98a1c07821f107db87f3d4cf1895b1ab",
+          "evidence_quote": "fixture-subject:macro_policy:4",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 144,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-05",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-05",
+          "publisher_origin": "fixture-origin:macro_policy-05",
+          "event_ids": [
+            "fixture-event:macro_policy-05"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:5"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:5 reported core consumer price index. Event fixture-event:macro_policy-05. No real financial fact is represented.",
+          "content_sha256": "7d783af8691e5418b375b62cd1309584f507c0c7d1f0401325d0f3e65bfd6888",
+          "evidence_quote": "fixture-subject:macro_policy:5",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 155,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-06",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-06",
+          "publisher_origin": "fixture-origin:macro_policy-06",
+          "event_ids": [
+            "fixture-event:macro_policy-06"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:6"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:6 reported producer price index. Event fixture-event:macro_policy-06. No real financial fact is represented.",
+          "content_sha256": "3a067d33cdd8b5c17a6854bbaca0c133edb7086d7d803deb645da55e162cc2cc",
+          "evidence_quote": "fixture-subject:macro_policy:6",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 166,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-07",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-07",
+          "publisher_origin": "fixture-origin:macro_policy-07",
+          "event_ids": [
+            "fixture-event:macro_policy-07"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:7"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:7 reported payroll employment. Event fixture-event:macro_policy-07. No real financial fact is represented.",
+          "content_sha256": "123c6bc74145e922f5f97a89bf13b2357c48531872a3a4d57e1d32d566ad24ff",
+          "evidence_quote": "fixture-subject:macro_policy:7",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 177,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-08",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-08",
+          "publisher_origin": "fixture-origin:macro_policy-08",
+          "event_ids": [
+            "fixture-event:macro_policy-08"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:8"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:8 reported unemployment rate. Event fixture-event:macro_policy-08. No real financial fact is represented.",
+          "content_sha256": "7e85430c6e7cf1c015fe236942238ef96e2ddfcb107fffc38c29de068496776a",
+          "evidence_quote": "fixture-subject:macro_policy:8",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 188,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-09",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-09",
+          "publisher_origin": "fixture-origin:macro_policy-09",
+          "event_ids": [
+            "fixture-event:macro_policy-09"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:9"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:9 reported hourly earnings. Event fixture-event:macro_policy-09. No real financial fact is represented.",
+          "content_sha256": "a62fd884db0bf91063a7489bc899dc835ae64e09d1da6b1a86802690d1594eba",
+          "evidence_quote": "fixture-subject:macro_policy:9",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 199,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-10",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-10",
+          "publisher_origin": "fixture-origin:macro_policy-10",
+          "event_ids": [
+            "fixture-event:macro_policy-10"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:10"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:10 reported retail sales. Event fixture-event:macro_policy-10. No real financial fact is represented.",
+          "content_sha256": "734f9c5dacdde7fcdd17b64eeb346d3ccc2e8d76be1b0467db70f059cbf01a46",
+          "evidence_quote": "fixture-subject:macro_policy:10",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 210,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-11",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-11",
+          "publisher_origin": "fixture-origin:macro_policy-11",
+          "event_ids": [
+            "fixture-event:macro_policy-11"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:11"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:11 reported industrial production. Event fixture-event:macro_policy-11. No real financial fact is represented.",
+          "content_sha256": "b350308c4c409c6c407aa5c3a097ceff2650c383292002814b8969e2a0fa34f7",
+          "evidence_quote": "fixture-subject:macro_policy:11",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 221,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-12",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-12",
+          "publisher_origin": "fixture-origin:macro_policy-12",
+          "event_ids": [
+            "fixture-event:macro_policy-12"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:12"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:12 reported housing starts. Event fixture-event:macro_policy-12. No real financial fact is represented.",
+          "content_sha256": "7a871ef55743be3d20a6a35e80d5fe897b894c97df43a15b9d8d818eb0196d7e",
+          "evidence_quote": "fixture-subject:macro_policy:12",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 232,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-13",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-13",
+          "publisher_origin": "fixture-origin:macro_policy-13",
+          "event_ids": [
+            "fixture-event:macro_policy-13"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:13"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:13 reported GDP estimate. Event fixture-event:macro_policy-13. No real financial fact is represented.",
+          "content_sha256": "70e3cefee4eea88c3022fd45f480ba1f09d7991e480446b91a2884f512ddcaee",
+          "evidence_quote": "fixture-subject:macro_policy:13",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 243,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-14",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-14",
+          "publisher_origin": "fixture-origin:macro_policy-14",
+          "event_ids": [
+            "fixture-event:macro_policy-14"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:14"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:14 reported PCE price index. Event fixture-event:macro_policy-14. No real financial fact is represented.",
+          "content_sha256": "cabc1ff24a6344d318c205c901abe79bed6a3f274a18fa6b0e8b5f5bc4565c4f",
+          "evidence_quote": "fixture-subject:macro_policy:14",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 254,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-15",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-15",
+          "publisher_origin": "fixture-origin:macro_policy-15",
+          "event_ids": [
+            "fixture-event:macro_policy-15"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:15"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:15 reported job openings. Event fixture-event:macro_policy-15. No real financial fact is represented.",
+          "content_sha256": "524720f090c7550fb6a6b03f3097d68d1163149310596a30118a093829f575f1",
+          "evidence_quote": "fixture-subject:macro_policy:15",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 265,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-16",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-16",
+          "publisher_origin": "fixture-origin:macro_policy-16",
+          "event_ids": [
+            "fixture-event:macro_policy-16"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:16"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:16 reported regional manufacturing survey. Event fixture-event:macro_policy-16. No real financial fact is represented.",
+          "content_sha256": "7705d22552cfd9ea6751592c08187770e46e33e504926b802abf4bba913670ae",
+          "evidence_quote": "fixture-subject:macro_policy:16",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 276,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-17",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-17",
+          "publisher_origin": "fixture-origin:macro_policy-17",
+          "event_ids": [
+            "fixture-event:macro_policy-17"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:17"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:17 reported Treasury refunding. Event fixture-event:macro_policy-17. No real financial fact is represented.",
+          "content_sha256": "db15dc8a809e6e0435271d036831ffa1f0d6c7044db47faa8c63851601cf0421",
+          "evidence_quote": "fixture-subject:macro_policy:17",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 287,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-18",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-18",
+          "publisher_origin": "fixture-origin:macro_policy-18",
+          "event_ids": [
+            "fixture-event:macro_policy-18"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:18"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:18 reported liquidity operation. Event fixture-event:macro_policy-18. No real financial fact is represented.",
+          "content_sha256": "fb9cc52a4b9d29468a4bc924334d87a6dbf5344dc84c2f74a976ced0e313bee4",
+          "evidence_quote": "fixture-subject:macro_policy:18",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 298,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-19",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-19",
+          "publisher_origin": "fixture-origin:macro_policy-19",
+          "event_ids": [
+            "fixture-event:macro_policy-19"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:19"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:19 reported tariff effective date. Event fixture-event:macro_policy-19. No real financial fact is represented.",
+          "content_sha256": "427cc368eebcd8835a8e418258e0e41e3d6312e1d9333c37cc6389f0c136ea24",
+          "evidence_quote": "fixture-subject:macro_policy:19",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 309,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "macro_policy-20",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/macro_policy-20",
+          "publisher_origin": "fixture-origin:macro_policy-20",
+          "event_ids": [
+            "fixture-event:macro_policy-20"
+          ],
+          "subject_ids": [
+            "fixture-subject:macro_policy:20"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:macro_policy:20 reported central bank minutes. Event fixture-event:macro_policy-20. No real financial fact is represented.",
+          "content_sha256": "ad69cdf2a4225499d93e94a7d2976ee8ce565da3b2e06500d003c6e6ce3ca467",
+          "evidence_quote": "fixture-subject:macro_policy:20",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 320,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-01",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-01",
+          "publisher_origin": "fixture-origin:earnings_guidance-01",
+          "event_ids": [
+            "fixture-event:earnings_guidance-01"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:1"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:1 reported quarter revenue. Event fixture-event:earnings_guidance-01. No real financial fact is represented.",
+          "content_sha256": "eb57c08303353f8a0edb07d57a56566ea072e26fba7a85511b23183ee26bae86",
+          "evidence_quote": "fixture-subject:earnings_guidance:1",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 111,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-02",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-02",
+          "publisher_origin": "fixture-origin:earnings_guidance-02",
+          "event_ids": [
+            "fixture-event:earnings_guidance-02"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:2"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:2 reported quarter operating margin. Event fixture-event:earnings_guidance-02. No real financial fact is represented.",
+          "content_sha256": "d4f13513174f0d2c5e1417c2424d864a82b769ede19e64669b09969c7ac9627c",
+          "evidence_quote": "fixture-subject:earnings_guidance:2",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 122,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-03",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-03",
+          "publisher_origin": "fixture-origin:earnings_guidance-03",
+          "event_ids": [
+            "fixture-event:earnings_guidance-03"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:3"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:3 reported annual revenue outlook. Event fixture-event:earnings_guidance-03. No real financial fact is represented.",
+          "content_sha256": "d222e43d28151eaa5e4faf3e242840940f1ca68696f0b130cffd0123874c0b7c",
+          "evidence_quote": "fixture-subject:earnings_guidance:3",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 133,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-04",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-04",
+          "publisher_origin": "fixture-origin:earnings_guidance-04",
+          "event_ids": [
+            "fixture-event:earnings_guidance-04"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:4"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:4 reported quarter EPS. Event fixture-event:earnings_guidance-04. No real financial fact is represented.",
+          "content_sha256": "31542303f6dbf446db0a9636e4653a30cbf4c651f9a0c56b883cd442e591a1de",
+          "evidence_quote": "fixture-subject:earnings_guidance:4",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 144,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-05",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-05",
+          "publisher_origin": "fixture-origin:earnings_guidance-05",
+          "event_ids": [
+            "fixture-event:earnings_guidance-05"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:5"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:5 reported cash flow. Event fixture-event:earnings_guidance-05. No real financial fact is represented.",
+          "content_sha256": "bcaf35a884092ce75b1d55f25f9ab30f8879553088f0bec52979e71466157c4a",
+          "evidence_quote": "fixture-subject:earnings_guidance:5",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 155,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-06",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-06",
+          "publisher_origin": "fixture-origin:earnings_guidance-06",
+          "event_ids": [
+            "fixture-event:earnings_guidance-06"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:6"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:6 reported segment revenue. Event fixture-event:earnings_guidance-06. No real financial fact is represented.",
+          "content_sha256": "65e73f6d204660d7115fa44db496343bc143eeb8a8cc6631aab1a60e1447c689",
+          "evidence_quote": "fixture-subject:earnings_guidance:6",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 166,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-07",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-07",
+          "publisher_origin": "fixture-origin:earnings_guidance-07",
+          "event_ids": [
+            "fixture-event:earnings_guidance-07"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:7"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:7 reported capital expenditure outlook. Event fixture-event:earnings_guidance-07. No real financial fact is represented.",
+          "content_sha256": "d554b66e410d9218f4b6c0962078046adc37f16469ba4d323ae0fe4dd18049f5",
+          "evidence_quote": "fixture-subject:earnings_guidance:7",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 177,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-08",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-08",
+          "publisher_origin": "fixture-origin:earnings_guidance-08",
+          "event_ids": [
+            "fixture-event:earnings_guidance-08"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:8"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:8 reported backlog. Event fixture-event:earnings_guidance-08. No real financial fact is represented.",
+          "content_sha256": "b651e4f9814cefad65896677c8132c46cc375037e549020b105aed9671ca24f8",
+          "evidence_quote": "fixture-subject:earnings_guidance:8",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 188,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-09",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-09",
+          "publisher_origin": "fixture-origin:earnings_guidance-09",
+          "event_ids": [
+            "fixture-event:earnings_guidance-09"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:9"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:9 reported bookings. Event fixture-event:earnings_guidance-09. No real financial fact is represented.",
+          "content_sha256": "7e119f0af940af9dc20cc497ac6240de1a331b29465d2a3cc09de540da6978d1",
+          "evidence_quote": "fixture-subject:earnings_guidance:9",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 199,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-10",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-10",
+          "publisher_origin": "fixture-origin:earnings_guidance-10",
+          "event_ids": [
+            "fixture-event:earnings_guidance-10"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:10"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:10 reported net retention. Event fixture-event:earnings_guidance-10. No real financial fact is represented.",
+          "content_sha256": "0de6c1c35579bb16b4658e51ca45920400fa8a722c7f1f77db023206449d0d7f",
+          "evidence_quote": "fixture-subject:earnings_guidance:10",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 210,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-11",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-11",
+          "publisher_origin": "fixture-origin:earnings_guidance-11",
+          "event_ids": [
+            "fixture-event:earnings_guidance-11"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:11"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:11 reported gross margin. Event fixture-event:earnings_guidance-11. No real financial fact is represented.",
+          "content_sha256": "a3a00b83ffe7fc5d7643e46b61c64b63ca3695b924ebcf29111d0d75d8ecb2fc",
+          "evidence_quote": "fixture-subject:earnings_guidance:11",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 221,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-12",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-12",
+          "publisher_origin": "fixture-origin:earnings_guidance-12",
+          "event_ids": [
+            "fixture-event:earnings_guidance-12"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:12"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:12 reported inventory. Event fixture-event:earnings_guidance-12. No real financial fact is represented.",
+          "content_sha256": "acf4e130aec6538d8d7c9cb70d7b6831d0f4ca88cd03f252ce06e700c7cb7402",
+          "evidence_quote": "fixture-subject:earnings_guidance:12",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 232,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-13",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-13",
+          "publisher_origin": "fixture-origin:earnings_guidance-13",
+          "event_ids": [
+            "fixture-event:earnings_guidance-13"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:13"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:13 reported dividend declaration. Event fixture-event:earnings_guidance-13. No real financial fact is represented.",
+          "content_sha256": "ec27c421e4305e5c1f6a1a9cd46cd5145d5218ce6b2cb85681f658ed50b8ab02",
+          "evidence_quote": "fixture-subject:earnings_guidance:13",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 243,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-14",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-14",
+          "publisher_origin": "fixture-origin:earnings_guidance-14",
+          "event_ids": [
+            "fixture-event:earnings_guidance-14"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:14"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:14 reported share repurchase. Event fixture-event:earnings_guidance-14. No real financial fact is represented.",
+          "content_sha256": "e02faefef6ab3f6fec72ddabbf1e34f5306bcbaac38590926e1fe274ee1e7f96",
+          "evidence_quote": "fixture-subject:earnings_guidance:14",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 254,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-15",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-15",
+          "publisher_origin": "fixture-origin:earnings_guidance-15",
+          "event_ids": [
+            "fixture-event:earnings_guidance-15"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:15"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:15 reported annual EPS outlook. Event fixture-event:earnings_guidance-15. No real financial fact is represented.",
+          "content_sha256": "2830c89296768bcf1c8cc30f9c665b1b56a184d733e251e98d6a6f149dfd3142",
+          "evidence_quote": "fixture-subject:earnings_guidance:15",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 265,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-16",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-16",
+          "publisher_origin": "fixture-origin:earnings_guidance-16",
+          "event_ids": [
+            "fixture-event:earnings_guidance-16"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:16"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:16 reported earnings restatement. Event fixture-event:earnings_guidance-16. No real financial fact is represented.",
+          "content_sha256": "3faea5ea3cbe18029c82c806c7e83bc8886a2007f44fd005e2a7db463aea082e",
+          "evidence_quote": "fixture-subject:earnings_guidance:16",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 276,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-17",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-17",
+          "publisher_origin": "fixture-origin:earnings_guidance-17",
+          "event_ids": [
+            "fixture-event:earnings_guidance-17"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:17"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:17 reported earnings release date. Event fixture-event:earnings_guidance-17. No real financial fact is represented.",
+          "content_sha256": "c5ae7a796d2c35c0f59b222250e088243afa320bf11d94ca5a4f5d62b704142b",
+          "evidence_quote": "fixture-subject:earnings_guidance:17",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 287,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-18",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-18",
+          "publisher_origin": "fixture-origin:earnings_guidance-18",
+          "event_ids": [
+            "fixture-event:earnings_guidance-18"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:18"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:18 reported currency impact. Event fixture-event:earnings_guidance-18. No real financial fact is represented.",
+          "content_sha256": "41f7f02ebf1336fa94fb9aba34d1b69e46b1056a57af0438597ff3bbb55d520c",
+          "evidence_quote": "fixture-subject:earnings_guidance:18",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 298,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-19",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-19",
+          "publisher_origin": "fixture-origin:earnings_guidance-19",
+          "event_ids": [
+            "fixture-event:earnings_guidance-19"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:19"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:19 reported guidance withdrawal. Event fixture-event:earnings_guidance-19. No real financial fact is represented.",
+          "content_sha256": "35ad3dd5656cc66522015639f9f06bb00339efff16ad236afe0df7f32c42a3ca",
+          "evidence_quote": "fixture-subject:earnings_guidance:19",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 309,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "earnings_guidance-20",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/earnings_guidance-20",
+          "publisher_origin": "fixture-origin:earnings_guidance-20",
+          "event_ids": [
+            "fixture-event:earnings_guidance-20"
+          ],
+          "subject_ids": [
+            "fixture-subject:earnings_guidance:20"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:earnings_guidance:20 reported quarterly vs fiscal period. Event fixture-event:earnings_guidance-20. No real financial fact is represented.",
+          "content_sha256": "2ca840f23315efe1fa036e61f6b9e310639848c7c6c9674c28cd971dc8cc487e",
+          "evidence_quote": "fixture-subject:earnings_guidance:20",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 320,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-01",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-01",
+          "publisher_origin": "fixture-origin:industry_supply_chain-01",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-01"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:1"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:1 reported memory contract price. Event fixture-event:industry_supply_chain-01. No real financial fact is represented.",
+          "content_sha256": "a8dd865070a97df45d73e1650120dddf14c72fbda8287ca4bcf0a368413df562",
+          "evidence_quote": "fixture-subject:industry_supply_chain:1",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 111,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-02",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-02",
+          "publisher_origin": "fixture-origin:industry_supply_chain-02",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-02"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:2"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:2 reported memory inventory. Event fixture-event:industry_supply_chain-02. No real financial fact is represented.",
+          "content_sha256": "067f89546452299d2f7d8e12606b98ddca54eeeb91663aa0779802c8cf29510d",
+          "evidence_quote": "fixture-subject:industry_supply_chain:2",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 122,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-03",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-03",
+          "publisher_origin": "fixture-origin:industry_supply_chain-03",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-03"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:3"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:3 reported wafer utilization. Event fixture-event:industry_supply_chain-03. No real financial fact is represented.",
+          "content_sha256": "88d444eb4b13131ddcb986870e431edf667de98a814d87ab8dea46f4ad54fa34",
+          "evidence_quote": "fixture-subject:industry_supply_chain:3",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 133,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-04",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-04",
+          "publisher_origin": "fixture-origin:industry_supply_chain-04",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-04"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:4"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:4 reported packaging capacity. Event fixture-event:industry_supply_chain-04. No real financial fact is represented.",
+          "content_sha256": "d0896e83e0a3b6bd730d2945d4c309212d5b138062ceb9949c26823011357147",
+          "evidence_quote": "fixture-subject:industry_supply_chain:4",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 144,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-05",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-05",
+          "publisher_origin": "fixture-origin:industry_supply_chain-05",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-05"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:5"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:5 reported equipment orders. Event fixture-event:industry_supply_chain-05. No real financial fact is represented.",
+          "content_sha256": "6589137fce4e0d0a266f4caea504af2361923a50981239e677148186610f4651",
+          "evidence_quote": "fixture-subject:industry_supply_chain:5",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 155,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-06",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-06",
+          "publisher_origin": "fixture-origin:industry_supply_chain-06",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-06"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:6"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:6 reported shipment lead time. Event fixture-event:industry_supply_chain-06. No real financial fact is represented.",
+          "content_sha256": "2ed12bdcd7b2e9de74afb61de37eae93d0c02a3fe1b5d92f6c4a43a51e6e99c4",
+          "evidence_quote": "fixture-subject:industry_supply_chain:6",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 166,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-07",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-07",
+          "publisher_origin": "fixture-origin:industry_supply_chain-07",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-07"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:7"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:7 reported foundry capital spending. Event fixture-event:industry_supply_chain-07. No real financial fact is represented.",
+          "content_sha256": "92f0704c77fd2a58396fd686cfd4ab3e2a46dff74a3254c97295d80a2f911621",
+          "evidence_quote": "fixture-subject:industry_supply_chain:7",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 177,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-08",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-08",
+          "publisher_origin": "fixture-origin:industry_supply_chain-08",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-08"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:8"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:8 reported cloud infrastructure spending. Event fixture-event:industry_supply_chain-08. No real financial fact is represented.",
+          "content_sha256": "554e0d430bb24ddba936bde6a2c6506cf7bf0b0e9069d7fb70d0c919851d9cb0",
+          "evidence_quote": "fixture-subject:industry_supply_chain:8",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 188,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-09",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-09",
+          "publisher_origin": "fixture-origin:industry_supply_chain-09",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-09"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:9"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:9 reported server assembly. Event fixture-event:industry_supply_chain-09. No real financial fact is represented.",
+          "content_sha256": "e53f869f85c54f1ae9053a8467524a3af56801e5a915165dae2fa0b7a5aadec0",
+          "evidence_quote": "fixture-subject:industry_supply_chain:9",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 199,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-10",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-10",
+          "publisher_origin": "fixture-origin:industry_supply_chain-10",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-10"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:10"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:10 reported network equipment orders. Event fixture-event:industry_supply_chain-10. No real financial fact is represented.",
+          "content_sha256": "41c545f0e4af920672e42c8b73351338269019ba4137116bc62a259083e27a9c",
+          "evidence_quote": "fixture-subject:industry_supply_chain:10",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 210,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-11",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-11",
+          "publisher_origin": "fixture-origin:industry_supply_chain-11",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-11"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:11"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:11 reported energy supply. Event fixture-event:industry_supply_chain-11. No real financial fact is represented.",
+          "content_sha256": "dab002afae4353d651715d5dc53f085782dc6f638e7b6694a4a4509e0a915fc7",
+          "evidence_quote": "fixture-subject:industry_supply_chain:11",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 221,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-12",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-12",
+          "publisher_origin": "fixture-origin:industry_supply_chain-12",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-12"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:12"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:12 reported grid investment. Event fixture-event:industry_supply_chain-12. No real financial fact is represented.",
+          "content_sha256": "189ad11cbd8030173c54e29ff764f668d9ce3b17040b0e6324fc4dddfcd911db",
+          "evidence_quote": "fixture-subject:industry_supply_chain:12",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 232,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-13",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-13",
+          "publisher_origin": "fixture-origin:industry_supply_chain-13",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-13"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:13"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:13 reported transport interruption. Event fixture-event:industry_supply_chain-13. No real financial fact is represented.",
+          "content_sha256": "55169c9b8b5de75d6eb82967dcfc44ab69ea4f39dd352dc33f4b1223b9c84e78",
+          "evidence_quote": "fixture-subject:industry_supply_chain:13",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 243,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-14",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-14",
+          "publisher_origin": "fixture-origin:industry_supply_chain-14",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-14"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:14"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:14 reported industrial input cost. Event fixture-event:industry_supply_chain-14. No real financial fact is represented.",
+          "content_sha256": "204c7387bc159a3da6364f442e7ad15615bf5304f882577d2b741b6bdbc102d8",
+          "evidence_quote": "fixture-subject:industry_supply_chain:14",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 254,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-15",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-15",
+          "publisher_origin": "fixture-origin:industry_supply_chain-15",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-15"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:15"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:15 reported semiconductor export license. Event fixture-event:industry_supply_chain-15. No real financial fact is represented.",
+          "content_sha256": "e3157bd2021e177eb4e722a7bdbf94924dd4deea2c56d91a4b77c650fbc848be",
+          "evidence_quote": "fixture-subject:industry_supply_chain:15",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 265,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-16",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-16",
+          "publisher_origin": "fixture-origin:industry_supply_chain-16",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-16"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:16"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:16 reported battery material supply. Event fixture-event:industry_supply_chain-16. No real financial fact is represented.",
+          "content_sha256": "8569eb677e8155195609726ee1da28f464263f7bd238f94e2e3d0493bad11cba",
+          "evidence_quote": "fixture-subject:industry_supply_chain:16",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 276,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-17",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-17",
+          "publisher_origin": "fixture-origin:industry_supply_chain-17",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-17"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:17"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:17 reported pharma manufacturing outage. Event fixture-event:industry_supply_chain-17. No real financial fact is represented.",
+          "content_sha256": "875d9603da049b06946c8d5b32dcbbb77a549eb1b8b8009a338acaf5ed2c128d",
+          "evidence_quote": "fixture-subject:industry_supply_chain:17",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 287,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-18",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-18",
+          "publisher_origin": "fixture-origin:industry_supply_chain-18",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-18"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:18"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:18 reported retail inventory. Event fixture-event:industry_supply_chain-18. No real financial fact is represented.",
+          "content_sha256": "134c997ff06f1cf962e967585435e45be1073f984e611f3fc357997b96ade332",
+          "evidence_quote": "fixture-subject:industry_supply_chain:18",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 298,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-19",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-19",
+          "publisher_origin": "fixture-origin:industry_supply_chain-19",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-19"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:19"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:19 reported construction backlog. Event fixture-event:industry_supply_chain-19. No real financial fact is represented.",
+          "content_sha256": "7a71b786118abe1f3c88bb18d514d6851916383a3cd92580de803e9eb149089b",
+          "evidence_quote": "fixture-subject:industry_supply_chain:19",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 309,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "industry_supply_chain-20",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/industry_supply_chain-20",
+          "publisher_origin": "fixture-origin:industry_supply_chain-20",
+          "event_ids": [
+            "fixture-event:industry_supply_chain-20"
+          ],
+          "subject_ids": [
+            "fixture-subject:industry_supply_chain:20"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:industry_supply_chain:20 reported telecom network spending. Event fixture-event:industry_supply_chain-20. No real financial fact is represented.",
+          "content_sha256": "2d557fd2f4a2738c422c5f88b67455358d863c60733b4c11945da4a4c3eb714d",
+          "evidence_quote": "fixture-subject:industry_supply_chain:20",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 320,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-01",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-01",
+          "publisher_origin": "fixture-origin:negative_risk-01",
+          "event_ids": [
+            "fixture-event:negative_risk-01"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:1"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:1 reported regulatory investigation. Event fixture-event:negative_risk-01. No real financial fact is represented.",
+          "content_sha256": "507e396013a6b56a53bd0f83dc11c1a5e17968e96198e0648995516f4f7737b1",
+          "evidence_quote": "fixture-subject:negative_risk:1",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 111,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-02",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-02",
+          "publisher_origin": "fixture-origin:negative_risk-02",
+          "event_ids": [
+            "fixture-event:negative_risk-02"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:2"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:2 reported product recall. Event fixture-event:negative_risk-02. No real financial fact is represented.",
+          "content_sha256": "b1848ab1e07011582a81e38619ee45719f4485a3e601f59b5dabd0e2384ecde0",
+          "evidence_quote": "fixture-subject:negative_risk:2",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 122,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-03",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-03",
+          "publisher_origin": "fixture-origin:negative_risk-03",
+          "event_ids": [
+            "fixture-event:negative_risk-03"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:3"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:3 reported data breach. Event fixture-event:negative_risk-03. No real financial fact is represented.",
+          "content_sha256": "fb32bcd99f6426e04fd6a89687768a14864b7232a4ddedce9d557b1bf3eebbf8",
+          "evidence_quote": "fixture-subject:negative_risk:3",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 133,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-04",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-04",
+          "publisher_origin": "fixture-origin:negative_risk-04",
+          "event_ids": [
+            "fixture-event:negative_risk-04"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:4"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:4 reported credit downgrade. Event fixture-event:negative_risk-04. No real financial fact is represented.",
+          "content_sha256": "b94155824d32050be0fb51d9befac3c74704dde201926ac9b44d18159b484855",
+          "evidence_quote": "fixture-subject:negative_risk:4",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 144,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-05",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-05",
+          "publisher_origin": "fixture-origin:negative_risk-05",
+          "event_ids": [
+            "fixture-event:negative_risk-05"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:5"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:5 reported debt covenant. Event fixture-event:negative_risk-05. No real financial fact is represented.",
+          "content_sha256": "9cef6f75ab5e7ba271c218375c4fc0dda803dcf2ef07657adba868374a1e5fe7",
+          "evidence_quote": "fixture-subject:negative_risk:5",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 155,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-06",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-06",
+          "publisher_origin": "fixture-origin:negative_risk-06",
+          "event_ids": [
+            "fixture-event:negative_risk-06"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:6"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:6 reported litigation filing. Event fixture-event:negative_risk-06. No real financial fact is represented.",
+          "content_sha256": "7423045eb04bc0f5bf281a2a875693fa42afc39b275337aa96ce17b7e0d04d49",
+          "evidence_quote": "fixture-subject:negative_risk:6",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 166,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-07",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-07",
+          "publisher_origin": "fixture-origin:negative_risk-07",
+          "event_ids": [
+            "fixture-event:negative_risk-07"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:7"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:7 reported management departure. Event fixture-event:negative_risk-07. No real financial fact is represented.",
+          "content_sha256": "8dbfa72322f7c5fbe0a3edb2443c0f9e06139597eb44a5da764e20ac94efa1e9",
+          "evidence_quote": "fixture-subject:negative_risk:7",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 177,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-08",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-08",
+          "publisher_origin": "fixture-origin:negative_risk-08",
+          "event_ids": [
+            "fixture-event:negative_risk-08"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:8"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:8 reported auditor departure. Event fixture-event:negative_risk-08. No real financial fact is represented.",
+          "content_sha256": "e85114c93b75dc49058c90188e87d0df9e7b73939a95f4f4c6c665502b60cf0c",
+          "evidence_quote": "fixture-subject:negative_risk:8",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 188,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-09",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-09",
+          "publisher_origin": "fixture-origin:negative_risk-09",
+          "event_ids": [
+            "fixture-event:negative_risk-09"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:9"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:9 reported guidance reduction. Event fixture-event:negative_risk-09. No real financial fact is represented.",
+          "content_sha256": "d02610c7885b0d804329baa580a9ee2b1d7953546c2c8f0f6c6bca2e07a92a27",
+          "evidence_quote": "fixture-subject:negative_risk:9",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 199,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-10",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-10",
+          "publisher_origin": "fixture-origin:negative_risk-10",
+          "event_ids": [
+            "fixture-event:negative_risk-10"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:10"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:10 reported accounting correction. Event fixture-event:negative_risk-10. No real financial fact is represented.",
+          "content_sha256": "3eca8991664da568f5b9c58e02296a27628e0460d319dc4f1de113bbaad86d7c",
+          "evidence_quote": "fixture-subject:negative_risk:10",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 210,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-11",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-11",
+          "publisher_origin": "fixture-origin:negative_risk-11",
+          "event_ids": [
+            "fixture-event:negative_risk-11"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:11"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:11 reported operational outage. Event fixture-event:negative_risk-11. No real financial fact is represented.",
+          "content_sha256": "367eb0a251de8b30cd33d5686b634d405bd8106b3e5db7a4680dca24f7f6ba04",
+          "evidence_quote": "fixture-subject:negative_risk:11",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 221,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-12",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-12",
+          "publisher_origin": "fixture-origin:negative_risk-12",
+          "event_ids": [
+            "fixture-event:negative_risk-12"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:12"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:12 reported plant fire. Event fixture-event:negative_risk-12. No real financial fact is represented.",
+          "content_sha256": "580494ec6cff42e4254905cebd0c462903bcac417111c8049cf2e2967657a5f4",
+          "evidence_quote": "fixture-subject:negative_risk:12",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 232,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-13",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-13",
+          "publisher_origin": "fixture-origin:negative_risk-13",
+          "event_ids": [
+            "fixture-event:negative_risk-13"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:13"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:13 reported contract cancellation. Event fixture-event:negative_risk-13. No real financial fact is represented.",
+          "content_sha256": "3ec40777eabc044c8b2b387b5b668912287ab61578747bf841a031ce9fe0f546",
+          "evidence_quote": "fixture-subject:negative_risk:13",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 243,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-14",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-14",
+          "publisher_origin": "fixture-origin:negative_risk-14",
+          "event_ids": [
+            "fixture-event:negative_risk-14"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:14"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:14 reported customer concentration. Event fixture-event:negative_risk-14. No real financial fact is represented.",
+          "content_sha256": "9bc952f2ebbd21331e96a269ab2aaf536968ab7ae9c05e808c300a446b844e11",
+          "evidence_quote": "fixture-subject:negative_risk:14",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 254,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-15",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-15",
+          "publisher_origin": "fixture-origin:negative_risk-15",
+          "event_ids": [
+            "fixture-event:negative_risk-15"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:15"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:15 reported insider disclosure. Event fixture-event:negative_risk-15. No real financial fact is represented.",
+          "content_sha256": "d22d3299cb2031cf6d936585020c050e662e84fe8bdbf278184b4727dba75777",
+          "evidence_quote": "fixture-subject:negative_risk:15",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 265,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-16",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-16",
+          "publisher_origin": "fixture-origin:negative_risk-16",
+          "event_ids": [
+            "fixture-event:negative_risk-16"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:16"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:16 reported capital shortfall. Event fixture-event:negative_risk-16. No real financial fact is represented.",
+          "content_sha256": "09ccfbaf2c86befb8865397298fadbc8656496934611ca77807166a1afdbda8f",
+          "evidence_quote": "fixture-subject:negative_risk:16",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 276,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-17",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-17",
+          "publisher_origin": "fixture-origin:negative_risk-17",
+          "event_ids": [
+            "fixture-event:negative_risk-17"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:17"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:17 reported delisting notice. Event fixture-event:negative_risk-17. No real financial fact is represented.",
+          "content_sha256": "5b2364ac3bd59cea9954350e29ad92e7f38a7280f2acbf00694f002b7ad5e897",
+          "evidence_quote": "fixture-subject:negative_risk:17",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 287,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-18",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-18",
+          "publisher_origin": "fixture-origin:negative_risk-18",
+          "event_ids": [
+            "fixture-event:negative_risk-18"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:18"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:18 reported safety finding. Event fixture-event:negative_risk-18. No real financial fact is represented.",
+          "content_sha256": "8d6831af03af3d9721413e2c39f5ba9b54d22799ad2771fa150dd65ae0123cb8",
+          "evidence_quote": "fixture-subject:negative_risk:18",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 298,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-19",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-19",
+          "publisher_origin": "fixture-origin:negative_risk-19",
+          "event_ids": [
+            "fixture-event:negative_risk-19"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:19"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:19 reported sanctions notice. Event fixture-event:negative_risk-19. No real financial fact is represented.",
+          "content_sha256": "c923d2c7f991157f783649394010f7b4a401f868700e1841c5c24ab629e9c4a9",
+          "evidence_quote": "fixture-subject:negative_risk:19",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 309,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "negative_risk-20",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/negative_risk-20",
+          "publisher_origin": "fixture-origin:negative_risk-20",
+          "event_ids": [
+            "fixture-event:negative_risk-20"
+          ],
+          "subject_ids": [
+            "fixture-subject:negative_risk:20"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:negative_risk:20 reported going-concern disclosure. Event fixture-event:negative_risk-20. No real financial fact is represented.",
+          "content_sha256": "97f8d62e9615968abcdc75c3510e64ec540739a33b59d9e7cf449a01473e6120",
+          "evidence_quote": "fixture-subject:negative_risk:20",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 320,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-01",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-01",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-01",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-01"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:1"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:1 reported date-only intraday cutoff. Event fixture-event:time_entity_repost_traps-01. No real financial fact is represented.",
+          "content_sha256": "f8d6979d9d82e2500f8dd9eb97bf0a03a4b87cdd3519d6456dc602dbe6e46ca4",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:1",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 111,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-02",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-02",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-02",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-02"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:2"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:2 reported future publication. Event fixture-event:time_entity_repost_traps-02. No real financial fact is represented.",
+          "content_sha256": "a48a79ab10e269629ef0ce294f920d41b863d99883f90e520c2a427e49a75f6a",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:2",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 122,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-03",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-03",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-03",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-03"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:3"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:3 reported late mutable page. Event fixture-event:time_entity_repost_traps-03. No real financial fact is represented.",
+          "content_sha256": "1bb8cecf5b175e93bc295f13eb5b8cc1c5be21b85e29b7ca7a5eeeeea6fd4326",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:3",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 133,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-04",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-04",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-04",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-04"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:4"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:4 reported old publication new body. Event fixture-event:time_entity_repost_traps-04. No real financial fact is represented.",
+          "content_sha256": "71c9d24c4d706f924d7f29df0cadd64c3ff85fa646388c17b2203545199f7714",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:4",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 144,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-05",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-05",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-05",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-05"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:5"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:5 reported issuer name alias. Event fixture-event:time_entity_repost_traps-05. No real financial fact is represented.",
+          "content_sha256": "d2cae5f9c165b3420418fe4d1950c8727072ec847a5ae3f1351c64fca3f293dd",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:5",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 155,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-06",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-06",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-06",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-06"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:6"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:6 reported ticker suffix. Event fixture-event:time_entity_repost_traps-06. No real financial fact is represented.",
+          "content_sha256": "b401aae890e646b2ddf6ef8d65aeccfc05c32d2b890e4e3f81da2d35b7546300",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:6",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 166,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-07",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-07",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-07",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-07"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:7"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:7 reported foreign research subject. Event fixture-event:time_entity_repost_traps-07. No real financial fact is represented.",
+          "content_sha256": "fb691a87377fefe44835f91643e394de4d48ec07608978b1a80f50af5fa0cdea",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:7",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 177,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-08",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-08",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-08",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-08"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:8"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:8 reported ETF vs issuer. Event fixture-event:time_entity_repost_traps-08. No real financial fact is represented.",
+          "content_sha256": "b6c2b9edc897f85585aa16a38813b52529d8735c0daff8a09a19e4e08dd39c1b",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:8",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 188,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-09",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-09",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-09",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-09"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:9"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:9 reported same-day two events. Event fixture-event:time_entity_repost_traps-09. No real financial fact is represented.",
+          "content_sha256": "3d3420f7847fbf2288d1573dcfa5effac151a8a02e7c489c40b8bcca9de55d67",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:9",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 199,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-10",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-10",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-10",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-10"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:10"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:10 reported different fiscal quarter. Event fixture-event:time_entity_repost_traps-10. No real financial fact is represented.",
+          "content_sha256": "a81ea8b5de1147a923cc2eb9c97c76f79f6a50e17e1883726aab7ca213a2e566",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:10",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 210,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-11",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-11",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-11",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-11"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:11"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:11 reported repost of same original. Event fixture-event:time_entity_repost_traps-11. No real financial fact is represented.",
+          "content_sha256": "673533d4650784e8e746bce39598cba05061845f57d6d63ef6d20f046d87a0fa",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:11",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 221,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-12",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-12",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-12",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-12"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:12"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:12 reported independent reporting origins. Event fixture-event:time_entity_repost_traps-12. No real financial fact is represented.",
+          "content_sha256": "101c830e5f03ca3b21e1591bcb40a42576fceda5a79bd2cba47a4393218af5bd",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:12",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 232,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-13",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-13",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-13",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-13"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:13"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:13 reported multiple subjects on page. Event fixture-event:time_entity_repost_traps-13. No real financial fact is represented.",
+          "content_sha256": "d164598fe912cf32f9e60d130553755a20f5aaf4d6f7823a6d6a87ead06f13cc",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:13",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 243,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-14",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-14",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-14",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-14"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:14"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:14 reported macro without ticker. Event fixture-event:time_entity_repost_traps-14. No real financial fact is represented.",
+          "content_sha256": "24578826bff8a94489d99dc43dbcdb2173db99c54cc27d438fedf474215caa2d",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:14",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 254,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-15",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-15",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-15",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-15"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:15"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:15 reported Chinese quarter label. Event fixture-event:time_entity_repost_traps-15. No real financial fact is represented.",
+          "content_sha256": "3b4f9d1ba7fabcf69f79bb9a53d6b598f67eb5718da35cdc26b034e5cac4ff4c",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:15",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 265,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-16",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-16",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-16",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-16"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:16"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:16 reported timezone conversion. Event fixture-event:time_entity_repost_traps-16. No real financial fact is represented.",
+          "content_sha256": "542f91625a2ad6e04df754fb5fd00914a6df4cdf7d6fb5a4d037f86d93cfbd80",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:16",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 276,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-17",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-17",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-17",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-17"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:17"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:17 reported unknown publication. Event fixture-event:time_entity_repost_traps-17. No real financial fact is represented.",
+          "content_sha256": "1076c710cecf5bc18e3cba4213f48695f02e39c1387a0f6dd2dd26cda52c22dd",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:17",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 287,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-18",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-18",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-18",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-18"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:18"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:18 reported wrong accession. Event fixture-event:time_entity_repost_traps-18. No real financial fact is represented.",
+          "content_sha256": "f48866ab86377ace1857f2c5904b6c6e05cd93cbeccc7625137dac62604c025b",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:18",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 298,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-19",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-19",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-19",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-19"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:19"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:19 reported conflicting claims. Event fixture-event:time_entity_repost_traps-19. No real financial fact is represented.",
+          "content_sha256": "4fa16cd2d48e108b1ed665115a4ed111aca50e02cd6c416cd5d589d29da528af",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:19",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 309,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    },
+    {
+      "case_id": "time_entity_repost_traps-20",
+      "status": "completed",
+      "documents": [
+        {
+          "url": "https://primary.fixture.invalid/time_entity_repost_traps-20",
+          "publisher_origin": "fixture-origin:time_entity_repost_traps-20",
+          "event_ids": [
+            "fixture-event:time_entity_repost_traps-20"
+          ],
+          "subject_ids": [
+            "fixture-subject:time_entity_repost_traps:20"
+          ],
+          "label_status": "fixture_verified",
+          "content": "Synthetic fixture only. fixture-subject:time_entity_repost_traps:20 reported snippet without main text. Event fixture-event:time_entity_repost_traps-20. No real financial fact is represented.",
+          "content_sha256": "28173e7e5d8233aa00acc07ee80c1bea1937da558b3db827792b85874a0186a6",
+          "evidence_quote": "fixture-subject:time_entity_repost_traps:20",
+          "published_at": "2024-02-01T14:00:00+00:00",
+          "first_seen_at": "2024-02-01T14:00:01+00:00",
+          "fetched_at": "2024-02-01T14:00:01+00:00",
+          "source_id": "fixture"
+        }
+      ],
+      "latency_ms": 320,
+      "cost": {
+        "state": "reported",
+        "amount": 0,
+        "currency": "FIXTURE"
+      }
+    }
+  ]
+}

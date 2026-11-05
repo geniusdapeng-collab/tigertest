@@ -46,8 +46,16 @@ class RequiredModelFailed(ExecutionContractError):
 
 REQUIRED_PROFILE = "us-public-model-required-paper-v1"
 REQUIRED_POLICY_ID = "tiger.public-model-required-paper-policy.v1"
+INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2"
+INTELLIGENCE_POLICY_ID = "tiger.public-intelligence-paper-policy.v2"
+MODEL_REQUIRED_POLICIES = frozenset({REQUIRED_POLICY_ID, INTELLIGENCE_POLICY_ID})
+INTELLIGENCE_SEARCH_SOURCES = (
+    "deepseek_search", "brave_news", "tavily_search", "exa_search",
+    "sec_submissions", "issuer_ir", "fed", "fred", "bls", "cboe", "fda", "ecb",
+)
 REQUIRED_MODEL_STAGES = ("clean.llm_semantic", "tech.sentiment", "tech.risk",
                          "sector.narrative", "decision.debate")
+DAILY_MACRO_OBSERVATION_CONTRACT = "source-midnight-macro-label/v1"
 
 
 PUBLIC_PROVIDER_NAMES = ("yahoo", "stooq", "official", "tencent", "sina", "eastmoney")
@@ -66,14 +74,16 @@ class ExecutionPolicy:
     market_timezone: str = "America/New_York"
 
     def __post_init__(self):
-        required = self.policy_id == REQUIRED_POLICY_ID
+        required = self.policy_id in MODEL_REQUIRED_POLICIES
         if not self.policy_id or self.model_mode != ("enabled" if required else "disabled"):
             raise ExecutionContractError("Strict public paper requires a disabled model policy")
         if self.market_timezone != "America/New_York":
             raise ExecutionContractError("Strict public paper has a fixed market timezone")
         for values, allowed, label in (
             (self.provider_names, PUBLIC_PROVIDER_NAMES, "provider"),
-            (self.search_source_names, ("deepseek_search",) if required else PUBLIC_SEARCH_SOURCE_NAMES, "search source"),
+            (self.search_source_names, INTELLIGENCE_SEARCH_SOURCES
+             if self.policy_id == INTELLIGENCE_POLICY_ID else
+             ("deepseek_search",) if required else PUBLIC_SEARCH_SOURCE_NAMES, "search source"),
         ):
             if (not values or len(set(values)) != len(values)
                     or any(name not in allowed for name in values)):
@@ -114,16 +124,17 @@ class DailyStageSpec:
 
 
 def daily_stage_specs(model_required: bool = False, *,
-                      authoritative_paper: bool = False) -> tuple[DailyStageSpec, ...]:
+                      authoritative_paper: bool = False,
+                      intelligence: bool = False) -> tuple[DailyStageSpec, ...]:
     """The sole strict daily order: 3 setup + 20 registered pipeline + 16 tail."""
-    from . import DEFERRED_STEPS, STEP_REGISTRY
+    from . import DEFERRED_STEPS, pipeline_steps
     setup = (
         DailyStageSpec("daily.preflight", "rules", "main"),
         DailyStageSpec("state.reset", "rules", "state"),
         DailyStageSpec("pipeline.prepare", "rules", "pipeline"),
     )
     pipeline = tuple(DailyStageSpec(s.name, s.driver, s.owner, s.driver == "llm" and not model_required)
-                     for s in STEP_REGISTRY if s.name not in DEFERRED_STEPS)
+                     for s in pipeline_steps(intelligence) if s.name not in DEFERRED_STEPS)
     paper = (("paper.step", "simulator"), ("paper.persist", "simulator"))
     journal = (("journal.log", "journal"), ("journal.settle", "journal"),
                ("journal.stats", "journal"))
@@ -139,9 +150,10 @@ def daily_stage_specs(model_required: bool = False, *,
     return setup + pipeline + tail
 
 
-def daily_stage_contract(model_required: bool = False, *, authoritative_paper: bool = False) -> list[dict]:
+def daily_stage_contract(model_required: bool = False, *, authoritative_paper: bool = False,
+                         intelligence: bool = False) -> list[dict]:
     return [asdict(spec) for spec in daily_stage_specs(
-        model_required, authoritative_paper=authoritative_paper)]
+        model_required, authoritative_paper=authoritative_paper, intelligence=intelligence)]
 
 
 class EvidenceStore(Protocol):
@@ -223,7 +235,8 @@ class ExecutionContext:
             raise ExecutionContractError("run_date must be the frozen admission-market date")
         self.run_id, self.run_date = run_id, run_date
         self.paths, self.policy, self.store = paths, policy, store
-        self.model_required = policy.policy_id == REQUIRED_POLICY_ID
+        self.model_required = policy.policy_id in MODEL_REQUIRED_POLICIES
+        self.intelligence = policy.policy_id == INTELLIGENCE_POLICY_ID
         self.admitted_at = admitted_at
         self.authoritative_paper = authoritative_paper
         self.account_version_before = account_version_before
@@ -238,7 +251,8 @@ class ExecutionContext:
             if admitted_at.astimezone(ZoneInfo(policy.market_timezone)).date() != run_date:
                 raise ExecutionContractError("Admission timestamp differs from the frozen market date")
         self.signal_benchmark_chart = None
-        self._specs = daily_stage_specs(self.model_required, authoritative_paper=authoritative_paper)
+        self._specs = daily_stage_specs(self.model_required, authoritative_paper=authoritative_paper,
+                                        intelligence=self.intelligence)
         self._cursor = 0
         self._sequence = 0
         self._owner_thread = get_ident()
@@ -413,8 +427,8 @@ class ExecutionContext:
         self._active.passthrough(reason)
 
     def assert_pipeline_complete(self) -> None:
-        from . import DEFERRED_STEPS, STEP_REGISTRY
-        required = [s.name for s in STEP_REGISTRY if s.name not in DEFERRED_STEPS]
+        from . import DEFERRED_STEPS, pipeline_steps
+        required = [s.name for s in pipeline_steps(self.intelligence) if s.name not in DEFERRED_STEPS]
         actual = [r["stage"] for r in self._records if r["stage"] in required]
         if self._failed or actual != required:
             self._reject("Pipeline subsequence is incomplete")
@@ -462,6 +476,37 @@ def market_observation(value, *, run_date: date, market_timezone: str):
     return value
 
 
+def daily_macro_observation(value, *, run_date: date, market_timezone: str):
+    """Project an explicit daily macro label without changing its calendar date.
+
+    A source-local midnight is a label for a source session, not an intraday
+    instant. Converting Chicago midnight to New York produces 01:00; converting
+    UTC midnight can even move it to the previous day. Only the two registered
+    rate/volatility daily methods use this versioned rule. Validate every raw
+    row before dropping its timezone; ordinary aware observations keep their
+    original instant semantics. The caller has already persisted the raw return.
+    """
+    import pandas as pd
+
+    if value is None or isinstance(value, pd.Series) and value.empty:
+        return value
+    if not isinstance(value, pd.Series):
+        raise StrictObservationError("Macro daily feed must be a typed series")
+    index = value.index
+    if (not isinstance(index, pd.DatetimeIndex) or index.hasnans
+            or not index.is_monotonic_increasing or not index.is_unique
+            or not index.equals(index.normalize())):
+        raise StrictObservationError("Macro daily feed contains unverifiable source-session labels")
+    local_labels = index.tz_localize(None) if index.tz is not None else index
+    if any(day > run_date for day in local_labels.date):
+        raise StrictObservationError("Macro source-session label is later than the frozen market date")
+    if value.index.tz is None:
+        return value
+    projected = value.copy()
+    projected.index = local_labels
+    return projected
+
+
 class RecordingProvider:
     """Record public provider calls without changing their internal algorithms."""
     def __init__(self, provider, execution: ExecutionContext):
@@ -489,9 +534,12 @@ class RecordingProvider:
                 lambda: value(*args, **kwargs),
             )
             try:
-                observed = market_observation(raw, run_date=self.execution.run_date,
-                                              market_timezone=self.execution.policy.market_timezone)
                 close = self.execution.completed_session_close
+                projector = (daily_macro_observation if close is not None and name in {
+                    "rate_yield_for", "vol_index_for",
+                } else market_observation)
+                observed = projector(raw, run_date=self.execution.run_date,
+                                     market_timezone=self.execution.policy.market_timezone)
                 stage = self.execution._active.spec.name
                 if close is not None and stage == "tech.monitor":
                     from ..market_close import close_observation

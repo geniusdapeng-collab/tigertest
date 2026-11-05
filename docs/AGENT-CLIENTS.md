@@ -1,6 +1,6 @@
 # Tiger 接入 Codex / DeepSeek Harness
 
-本指南面向用 Agent 调用 Tiger 的操作者和维护者。Tiger 有两条独立入口：原有 WorkLoom 能力目录提供仓库只读信息；新增 Tiger CLI/MCP 调用同一个 Python 严格工作流。根目录是 Python 引擎，治理壳在 `governance/`。不要把根目录当成 Node 工作区，也不要修改通用能力加载器来开放本地 execute。
+本指南面向用 Agent 调用 Tiger 的操作者和维护者。原有 WorkLoom 能力目录提供仓库只读信息；Tiger CLI/MCP 调用同一个 Python 严格工作流；独立 `tiger-intelligence` 入口提供受控来源同步与证据查询。根目录是 Python 引擎，治理壳在 `governance/`。不要把根目录当成 Node 工作区，也不要修改通用能力加载器来开放本地 execute。
 
 ## 1. 先检查，再选择访问模式
 
@@ -8,7 +8,7 @@
 
 ```bash
 node scripts/tiger-agent.mjs doctor --python /absolute/path/to/python
-printf '%s\n' '{"profile":"us-public-model-required-paper-v1"}' | \
+printf '%s\n' '{"profile":"us-public-intelligence-paper-v2"}' | \
   node scripts/tiger-agent.mjs describe --python /absolute/path/to/python --input-file -
 ```
 
@@ -16,11 +16,13 @@ printf '%s\n' '{"profile":"us-public-model-required-paper-v1"}' | \
 
 默认 `--mode readonly`。执行完整 paper 工作流必须由操作者在启动参数或项目部署配置中显式选择 `--mode paper`。请求 JSON 不能改变 mode、解释器、state-root、阶段或策略。
 
-当前开放三个显式 profile。新的 AI 研究和官网更新的操作默认是必须明确选择 `us-public-model-required-paper-v1`，按下一节配置，无需用户再次强调真实模型。CLI 兼容函数默认仍为 `us-public-paper-v1`，仅保留旧调用/历史语义；操作默认与兼容函数默认不同。原 `us-public-paper-v1` 和 `us-public-active-paper-v1` 保留内层 disabled 与合法 passthrough 语义，用于其明确的历史/实验用途，不能作为新研究完成。所有配置仍为美股公开数据、USD 本地 paper 账户 `public-usd`、独立初始资金 100000 USD，不连接真实券商、不执行真实资金订单。外层宿主模型不会自动接入内层模型。
+当前开放四个显式 profile。新的 AI 研究和官网更新必须明确选择 `us-public-intelligence-paper-v2`：真实同模型语义、独立数值 frontier、登记来源采集、逐目标证据与冻结包共同组成完成条件。`us-public-model-required-paper-v1` 保留历史严格运行及旧回执；`us-public-paper-v1` 和 `us-public-active-paper-v1` 保留原 disabled/passthrough 或明确实验语义，均不能代替新研究验收。兼容函数的默认值仍保留旧调用含义，操作者不得靠省略 profile 推断获得 v2。所有配置仍为美股公开数据、USD 本地 paper 账户 `public-usd`、独立初始资金 100000 USD，不连接真实券商、不执行真实资金订单。外层宿主模型不会自动接入内层模型。完整情报合同、来源启用、采集预算与评测边界见 [INTELLIGENCE-ACQUISITION.md](INTELLIGENCE-ACQUISITION.md)。
 
 可选 active 实验的回退板块是冻结的 NASDAQ 供应商分类代理，不是 GICS、真实 ETF 成分或历史时点分类；第三条达标主线保留为次池。更高资金使用率会改变实际风险，不能把“上限不变”解释为“收益或回撤不变”。该实验不会随 model-required 配置启用。运行和评测边界见 [TIGER-ACTIVITY-EVALUATION.md](TIGER-ACTIVITY-EVALUATION.md)。
 
 ### 真实 DeepSeek 内层模型与原生搜索
+
+本节保留严格 v1 的精确历史口径，便于旧运行复核。v2 继续要求同一 DeepSeek 客户端完成五个语义阶段，不将搜索供应商当替代文本模型；它以登记来源、原文/附件、结构化事件、逐目标 `null`/缺口与冻结证据包替代固定主题 collector。以下提到固定 14 主题、单一文档资格或原交叉验证的段落仅描述 v1；v2 的差异与独立采集操作以 [情报指南](INTELLIGENCE-ACQUISITION.md) 为准。
 
 固定配置见根 `.env.example`，实际 key 存在仓库外受保护文件。运行器不自动寻找或加载 `.env`，也不读取 Codex/DSH 的登录缓存。可信启动器先将 `LLM_BACKEND=api`、`LLM_BASE_URL=https://api.deepseek.com`、`LLM_MODEL=deepseek-flash` 与非空 `LLM_API_KEY` 导出到进程环境，再执行 CLI/MCP。五个语义调用固定 JSON mode；thinking 从 bundle 场景策略读取：清洗与舆情为非思考，风险与板块叙事为 high，最终多空判断为 max。每次调用用仓库固定的官方 tokenizer 对完整序列化请求计数，并自动申请全部合法剩余输出窗口；输入超过 1,048,576 tokens 或输出超过 393,216 时失败关闭。启用 SEC 原文核验时，可信启动器还须导出操作者的 `TIGER_SEC_CONTACT` 邮箱。这些设置只传入 model-required 的业务子进程。请求 JSON 无权设置这些值。
 
@@ -34,7 +36,7 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
   --input-file model-required-request.json --wait
 ```
 
-`model-required-request.json` 使用下文同一四字段结构，将 profile 设为 `us-public-model-required-paper-v1`。此配置沿用原策略和已通用的时序/预算正确性修复，activity 实验保持关闭。模型只能选择/否决数值风险闸门已批准的买入，不得新增、扩大或绕过任何风险限制；无合格买入也必须由实际模型生成等待理由。
+新任务的 `model-required-request.json` 使用下文同一四字段结构，将 profile 设为 `us-public-intelligence-paper-v2`；仅复核历史严格路径时显式选择 `us-public-model-required-paper-v1`。两个严格配置的 activity 实验均保持关闭。模型只能选择/否决数值风险闸门已批准的买入，不得新增、扩大或绕过任何风险限制；无合格买入也必须由实际模型生成等待理由。
 
 严格研究保留原初排和主线补扫名单。对初筛通过但未进入名单的股票，用已有日线逐只检查同一套 A/B/C 入场形态；有形态的股票追加到精评，再走原有期权、评分、风控和模型证据检查。结果中的 `raw.scan_stats.entry_setup_supplement` 分别记录原名单数 `baseline_selected`、额外检查数 `checked`、追加数 `added` 与缺少可用结构行情的数量 `unavailable`。检查范围以已取得合格行情的股票池为准。
 
@@ -67,7 +69,7 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
 ```json
 {
   "schema_version": "tiger.agent-request/v1",
-  "profile": "us-public-model-required-paper-v1",
+  "profile": "us-public-intelligence-paper-v2",
   "paper_account": "public-usd",
   "idempotency_key": "operator-task-20261021-001"
 }
@@ -80,7 +82,7 @@ node scripts/tiger-agent.mjs run \
   --mode paper --input-file request.json
 ```
 
-如需单独运行已授权的 active 实验，将请求中的 `profile` 明确改为 `us-public-active-paper-v1`，使用新的逻辑幂等键和独立 state-root；兼容旧调用须明确使用 `us-public-paper-v1`，不作为新 AI 研究完成。`describe` 可用 `--input-file` 读取对应 profile 的对象返回其 policy。三个 profile 不应在同一个账户历史中混用；切换时应新建独立 state-root，不复制待成交/净值来冒充迁移。
+如需单独运行已授权的 active 实验，将请求中的 `profile` 明确改为 `us-public-active-paper-v1`，使用新的逻辑幂等键和独立 state-root；复核历史严格调用使用 `us-public-model-required-paper-v1`，兼容旧调用使用 `us-public-paper-v1`，不作为新 v2 研究完成。`describe` 可用 `--input-file` 读取对应 profile 的对象返回其 policy。四个 profile 不应在同一个账户历史中混用；切换时应新建独立 state-root，不复制待成交/净值来冒充迁移。
 
 成功提交返回 `run_id` 和 `status=accepted` 或 `running`。这只表示请求身份被接纳，不能报告分析或账户处理完成。将实际 `run_id` 写入查询文件：
 
@@ -209,3 +211,17 @@ TIGER_TEST_PYTHON=/absolute/path/to/python node --test \
 | 公开源失败/访问挑战/数据不足 | 依据回执如实报告缺口；不注入演示行情，不绕过访问控制 |
 
 当前 profile 不接受 skip、自由 argv、手改 score、tune、approve、live、provider 或 root 覆写。后续扩展必须修改已审查的固定 profile、Python 流程和验证契约，不能只在 Node 层放开参数。
+
+## 8. 情报同步、监测、证据与独立评测
+
+`node scripts/tiger-intelligence.mjs sync|monitor|status|evidence` 是独立采集入口。
+它默认只读，可信启动配置可明确选择 acquire，并限制归档目录、来源、次数和时限；
+请求只接受审定代码、登记 source IDs 与含时区的截止时点。同步完成只表示采集记录
+已冻结，不能当作五个模型阶段、paper 账户或当日研究完整成功。来源正文、附件、
+转载身份和时间未核实时仍保留缺口。
+
+离线 `python scripts/intelligence-benchmark.py` 对固定 dataset/capture 计算召回、
+主证据、时序、实体、转载、分层延迟与已报告成本，不联网、不调用模型。仓内 100 题
+五类是明确标记的 synthetic_fixture，不能冒充人工金融 gold 或真实供应商比较。
+请求示例、来源条件、预算、失败码与真实评测准备流程见
+[INTELLIGENCE-ACQUISITION.md](INTELLIGENCE-ACQUISITION.md)。

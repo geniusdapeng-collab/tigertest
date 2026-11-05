@@ -78,6 +78,21 @@ STEP_REGISTRY: tuple[StepSpec, ...] = (
 
 LLM_STEPS = {s.name for s in STEP_REGISTRY if s.driver == "llm"}
 
+
+def pipeline_steps(intelligence: bool = False) -> tuple[StepSpec, ...]:
+    """Versioned order; historical profiles retain their exact original stages."""
+    if not intelligence:
+        return STEP_REGISTRY
+    by_name = {step.name: step for step in STEP_REGISTRY}
+    acquisition = (
+        by_name["data.prepare"],
+        StepSpec("intelligence.frontier", "rules", "研究对象或行情绑定缺失则失败", "intelligence_workflow"),
+        *(by_name[name] for name in ("search.collect", "clean.rule_base", "clean.llm_semantic", "clean.cross_validate")),
+        StepSpec("intelligence.freeze", "rules", "证据不足显式partial；篡改或并发封存失败", "intelligence_workflow"),
+    )
+    moved = {step.name for step in acquisition}
+    return acquisition + tuple(step for step in STEP_REGISTRY if step.name not in moved)
+
 # 延迟环节：由 pipeline 之外的编排层执行并补账（当前仅 review.daily）。
 # assert_complete 不强制 pipeline 内打点；pipeline 末尾统一记 deferred 占位，
 # 外层（main.daily）执行后把 redline 中该环节改写为 executed 留痕。
@@ -120,7 +135,8 @@ class ExecutionTracer:
 
     @contextmanager
     def step(self, name: str, inputs: Any = None):
-        spec = next((s for s in STEP_REGISTRY if s.name == name), None)
+        registry = pipeline_steps(bool(self.execution and getattr(self.execution, "intelligence", False)))
+        spec = next((s for s in registry if s.name == name), None)
         if spec is None:
             raise RedlineViolation(f"未注册环节被调用: {name}（疑似擅自变更全链路）")
         if self.execution is not None:
@@ -167,7 +183,7 @@ class ExecutionTracer:
 
     def summary(self) -> list[dict]:
         if self.execution is not None:
-            names = {s.name for s in STEP_REGISTRY} - DEFERRED_STEPS
+            names = {s.name for s in pipeline_steps(getattr(self.execution, "intelligence", False))} - DEFERRED_STEPS
             actual = [{"step": r["stage"],
                        "status": "executed" if r["status"] == "completed" else r["status"],
                        "ms": r["ms"], "note": r["reason"]}

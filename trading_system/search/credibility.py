@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 
 from .. import config
 from .models import CleanDocument, Evidence, RawDocument
+from .ontology import legacy_event_type
 
 log = logging.getLogger("search.credibility")
 
@@ -123,13 +124,8 @@ def _normalize(t: str) -> str:
 def _canonical_event(events: list[str], meta_hint: str = "") -> str | None:
     """把 LLM 事件标注/源 meta 提示归一到 config.KEY_EVENT_TYPES 规范型。
     纯规则：别名子串匹配（别名表在 config，可维护）。"""
-    haystacks = [_normalize(e) for e in events] + ([_normalize(meta_hint)] if meta_hint else [])
-    for canon in config.KEY_EVENT_TYPES:
-        aliases = (canon.lower(),) + tuple(a.lower() for a in config.KEY_EVENT_ALIASES.get(canon, ()))
-        for h in haystacks:
-            if h and any(a in h for a in aliases):
-                return canon
-    return None
+    return legacy_event_type(events, meta_hint, event_types=config.KEY_EVENT_TYPES,
+                             aliases=config.KEY_EVENT_ALIASES)
 
 
 def _entity_key(doc: CleanDocument) -> str:

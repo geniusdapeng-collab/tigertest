@@ -118,14 +118,16 @@ class SectorAgent(BaseAgent):
         #    LLM 不可用 → None 剔除再归一化，红线禁止规则估算）
         narr_llm = context.get("narrative_llm") or {}
         s_narr = None
-        if etf in narr_llm:
+        if etf in narr_llm and narr_llm[etf]["score"] is not None:
             s_narr = round(float(narr_llm[etf]["score"]), 1)
             evidence.append(
                 f"{etf} 叙事兑现: LLM 评分 {s_narr}（EPS修正 {narr_llm[etf].get('bias')}, "
                 f"指引 {narr_llm[etf].get('tone')}; {narr_llm[etf].get('evidence', '')[:60]}）"
             )
         else:
-            evidence.append(f"{etf} 叙事兑现: LLM 不可用/无产出 → 剔除后再归一化（红线透传）")
+            status = narr_llm.get(etf, {}).get("status", "unavailable")
+            note = narr_llm.get(etf, {}).get("evidence", "")
+            evidence.append(f"{etf} 叙事兑现: {status}，{note} → 缺失维剔除后再归一化")
 
         # 4) 微观催化（缺失 → None）
         s_micro = None

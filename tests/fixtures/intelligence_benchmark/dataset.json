@@ -1,0 +1,2308 @@
+{
+  "schema": "tiger.intelligence-benchmark-dataset/v1",
+  "dataset_id": "synthetic-contract-100-v1",
+  "truth_kind": "synthetic_fixture",
+  "description": "One hundred owned, synthetic acquisition-contract cases: five strata of twenty. This is a regression fixture, not a human-labelled financial gold set, real-provider comparison or a production performance measurement.",
+  "cases": [
+    {
+      "id": "macro_policy-01",
+      "category": "macro_policy",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the policy-rate decision event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-01",
+          "subject_id": "fixture-subject:macro_policy:1",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-01"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-01"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-01"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-02",
+      "category": "macro_policy",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the policy statement revision event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-02",
+          "subject_id": "fixture-subject:macro_policy:2",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-02"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-02"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-02"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-03",
+      "category": "macro_policy",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the balance-sheet runoff event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-03",
+          "subject_id": "fixture-subject:macro_policy:3",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-03"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-03"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-03"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-04",
+      "category": "macro_policy",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the consumer price index event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-04",
+          "subject_id": "fixture-subject:macro_policy:4",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-04"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-04"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-04"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-05",
+      "category": "macro_policy",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the core consumer price index event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-05",
+          "subject_id": "fixture-subject:macro_policy:5",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-05"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-05"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-05"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-06",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the producer price index event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-06",
+          "subject_id": "fixture-subject:macro_policy:6",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-06"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-06"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-06"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-07",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the payroll employment event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-07",
+          "subject_id": "fixture-subject:macro_policy:7",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-07"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-07"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-07"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-08",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the unemployment rate event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-08",
+          "subject_id": "fixture-subject:macro_policy:8",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-08"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-08"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-08"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-09",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the hourly earnings event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-09",
+          "subject_id": "fixture-subject:macro_policy:9",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-09"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-09"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-09"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-10",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the retail sales event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-10",
+          "subject_id": "fixture-subject:macro_policy:10",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-10"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-10"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-10"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-11",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the industrial production event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-11",
+          "subject_id": "fixture-subject:macro_policy:11",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-11"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-11"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-11"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-12",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the housing starts event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-12",
+          "subject_id": "fixture-subject:macro_policy:12",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-12"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-12"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-12"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-13",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the GDP estimate event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-13",
+          "subject_id": "fixture-subject:macro_policy:13",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-13"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-13"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-13"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-14",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the PCE price index event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-14",
+          "subject_id": "fixture-subject:macro_policy:14",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-14"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-14"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-14"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-15",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the job openings event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-15",
+          "subject_id": "fixture-subject:macro_policy:15",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-15"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-15"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-15"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-16",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the regional manufacturing survey event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-16",
+          "subject_id": "fixture-subject:macro_policy:16",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-16"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-16"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-16"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-17",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the Treasury refunding event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-17",
+          "subject_id": "fixture-subject:macro_policy:17",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-17"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-17"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-17"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-18",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the liquidity operation event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-18",
+          "subject_id": "fixture-subject:macro_policy:18",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-18"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-18"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-18"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-19",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the tariff effective date event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-19",
+          "subject_id": "fixture-subject:macro_policy:19",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-19"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-19"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-19"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "macro_policy-20",
+      "category": "macro_policy",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the central bank minutes event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:macro_policy-20",
+          "subject_id": "fixture-subject:macro_policy:20",
+          "reference_urls": [
+            "https://primary.fixture.invalid/macro_policy-20"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/macro_policy-20"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/macro_policy-20"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-01",
+      "category": "earnings_guidance",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the quarter revenue event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-01",
+          "subject_id": "fixture-subject:earnings_guidance:1",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-01"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-01"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-01"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-02",
+      "category": "earnings_guidance",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the quarter operating margin event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-02",
+          "subject_id": "fixture-subject:earnings_guidance:2",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-02"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-02"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-02"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-03",
+      "category": "earnings_guidance",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the annual revenue outlook event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-03",
+          "subject_id": "fixture-subject:earnings_guidance:3",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-03"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-03"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-03"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-04",
+      "category": "earnings_guidance",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the quarter EPS event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-04",
+          "subject_id": "fixture-subject:earnings_guidance:4",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-04"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-04"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-04"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-05",
+      "category": "earnings_guidance",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the cash flow event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-05",
+          "subject_id": "fixture-subject:earnings_guidance:5",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-05"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-05"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-05"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-06",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the segment revenue event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-06",
+          "subject_id": "fixture-subject:earnings_guidance:6",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-06"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-06"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-06"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-07",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the capital expenditure outlook event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-07",
+          "subject_id": "fixture-subject:earnings_guidance:7",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-07"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-07"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-07"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-08",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the backlog event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-08",
+          "subject_id": "fixture-subject:earnings_guidance:8",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-08"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-08"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-08"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-09",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the bookings event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-09",
+          "subject_id": "fixture-subject:earnings_guidance:9",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-09"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-09"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-09"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-10",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the net retention event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-10",
+          "subject_id": "fixture-subject:earnings_guidance:10",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-10"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-10"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-10"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-11",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the gross margin event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-11",
+          "subject_id": "fixture-subject:earnings_guidance:11",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-11"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-11"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-11"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-12",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the inventory event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-12",
+          "subject_id": "fixture-subject:earnings_guidance:12",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-12"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-12"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-12"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-13",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the dividend declaration event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-13",
+          "subject_id": "fixture-subject:earnings_guidance:13",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-13"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-13"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-13"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-14",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the share repurchase event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-14",
+          "subject_id": "fixture-subject:earnings_guidance:14",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-14"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-14"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-14"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-15",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the annual EPS outlook event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-15",
+          "subject_id": "fixture-subject:earnings_guidance:15",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-15"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-15"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-15"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-16",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the earnings restatement event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-16",
+          "subject_id": "fixture-subject:earnings_guidance:16",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-16"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-16"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-16"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-17",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the earnings release date event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-17",
+          "subject_id": "fixture-subject:earnings_guidance:17",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-17"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-17"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-17"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-18",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the currency impact event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-18",
+          "subject_id": "fixture-subject:earnings_guidance:18",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-18"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-18"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-18"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-19",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the guidance withdrawal event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-19",
+          "subject_id": "fixture-subject:earnings_guidance:19",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-19"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-19"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-19"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "earnings_guidance-20",
+      "category": "earnings_guidance",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the quarterly vs fiscal period event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:earnings_guidance-20",
+          "subject_id": "fixture-subject:earnings_guidance:20",
+          "reference_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-20"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/earnings_guidance-20"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/earnings_guidance-20"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-01",
+      "category": "industry_supply_chain",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the memory contract price event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-01",
+          "subject_id": "fixture-subject:industry_supply_chain:1",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-01"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-01"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-01"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-02",
+      "category": "industry_supply_chain",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the memory inventory event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-02",
+          "subject_id": "fixture-subject:industry_supply_chain:2",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-02"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-02"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-02"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-03",
+      "category": "industry_supply_chain",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the wafer utilization event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-03",
+          "subject_id": "fixture-subject:industry_supply_chain:3",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-03"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-03"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-03"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-04",
+      "category": "industry_supply_chain",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the packaging capacity event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-04",
+          "subject_id": "fixture-subject:industry_supply_chain:4",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-04"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-04"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-04"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-05",
+      "category": "industry_supply_chain",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the equipment orders event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-05",
+          "subject_id": "fixture-subject:industry_supply_chain:5",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-05"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-05"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-05"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-06",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the shipment lead time event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-06",
+          "subject_id": "fixture-subject:industry_supply_chain:6",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-06"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-06"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-06"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-07",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the foundry capital spending event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-07",
+          "subject_id": "fixture-subject:industry_supply_chain:7",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-07"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-07"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-07"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-08",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the cloud infrastructure spending event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-08",
+          "subject_id": "fixture-subject:industry_supply_chain:8",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-08"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-08"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-08"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-09",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the server assembly event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-09",
+          "subject_id": "fixture-subject:industry_supply_chain:9",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-09"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-09"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-09"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-10",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the network equipment orders event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-10",
+          "subject_id": "fixture-subject:industry_supply_chain:10",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-10"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-10"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-10"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-11",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the energy supply event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-11",
+          "subject_id": "fixture-subject:industry_supply_chain:11",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-11"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-11"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-11"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-12",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the grid investment event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-12",
+          "subject_id": "fixture-subject:industry_supply_chain:12",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-12"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-12"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-12"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-13",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the transport interruption event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-13",
+          "subject_id": "fixture-subject:industry_supply_chain:13",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-13"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-13"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-13"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-14",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the industrial input cost event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-14",
+          "subject_id": "fixture-subject:industry_supply_chain:14",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-14"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-14"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-14"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-15",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the semiconductor export license event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-15",
+          "subject_id": "fixture-subject:industry_supply_chain:15",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-15"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-15"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-15"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-16",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the battery material supply event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-16",
+          "subject_id": "fixture-subject:industry_supply_chain:16",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-16"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-16"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-16"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-17",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the pharma manufacturing outage event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-17",
+          "subject_id": "fixture-subject:industry_supply_chain:17",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-17"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-17"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-17"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-18",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the retail inventory event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-18",
+          "subject_id": "fixture-subject:industry_supply_chain:18",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-18"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-18"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-18"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-19",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the construction backlog event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-19",
+          "subject_id": "fixture-subject:industry_supply_chain:19",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-19"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-19"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-19"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "industry_supply_chain-20",
+      "category": "industry_supply_chain",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the telecom network spending event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:industry_supply_chain-20",
+          "subject_id": "fixture-subject:industry_supply_chain:20",
+          "reference_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-20"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/industry_supply_chain-20"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/industry_supply_chain-20"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-01",
+      "category": "negative_risk",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the regulatory investigation event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-01",
+          "subject_id": "fixture-subject:negative_risk:1",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-01"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-01"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-01"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-02",
+      "category": "negative_risk",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the product recall event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-02",
+          "subject_id": "fixture-subject:negative_risk:2",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-02"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-02"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-02"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-03",
+      "category": "negative_risk",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the data breach event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-03",
+          "subject_id": "fixture-subject:negative_risk:3",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-03"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-03"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-03"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-04",
+      "category": "negative_risk",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the credit downgrade event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-04",
+          "subject_id": "fixture-subject:negative_risk:4",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-04"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-04"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-04"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-05",
+      "category": "negative_risk",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the debt covenant event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-05",
+          "subject_id": "fixture-subject:negative_risk:5",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-05"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-05"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-05"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-06",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the litigation filing event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-06",
+          "subject_id": "fixture-subject:negative_risk:6",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-06"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-06"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-06"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-07",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the management departure event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-07",
+          "subject_id": "fixture-subject:negative_risk:7",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-07"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-07"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-07"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-08",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the auditor departure event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-08",
+          "subject_id": "fixture-subject:negative_risk:8",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-08"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-08"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-08"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-09",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the guidance reduction event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-09",
+          "subject_id": "fixture-subject:negative_risk:9",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-09"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-09"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-09"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-10",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the accounting correction event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-10",
+          "subject_id": "fixture-subject:negative_risk:10",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-10"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-10"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-10"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-11",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the operational outage event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-11",
+          "subject_id": "fixture-subject:negative_risk:11",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-11"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-11"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-11"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-12",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the plant fire event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-12",
+          "subject_id": "fixture-subject:negative_risk:12",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-12"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-12"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-12"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-13",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the contract cancellation event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-13",
+          "subject_id": "fixture-subject:negative_risk:13",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-13"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-13"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-13"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-14",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the customer concentration event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-14",
+          "subject_id": "fixture-subject:negative_risk:14",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-14"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-14"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-14"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-15",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the insider disclosure event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-15",
+          "subject_id": "fixture-subject:negative_risk:15",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-15"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-15"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-15"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-16",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the capital shortfall event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-16",
+          "subject_id": "fixture-subject:negative_risk:16",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-16"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-16"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-16"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-17",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the delisting notice event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-17",
+          "subject_id": "fixture-subject:negative_risk:17",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-17"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-17"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-17"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-18",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the safety finding event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-18",
+          "subject_id": "fixture-subject:negative_risk:18",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-18"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-18"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-18"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-19",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the sanctions notice event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-19",
+          "subject_id": "fixture-subject:negative_risk:19",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-19"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-19"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-19"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "negative_risk-20",
+      "category": "negative_risk",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the going-concern disclosure event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:negative_risk-20",
+          "subject_id": "fixture-subject:negative_risk:20",
+          "reference_urls": [
+            "https://primary.fixture.invalid/negative_risk-20"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/negative_risk-20"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/negative_risk-20"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-01",
+      "category": "time_entity_repost_traps",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the date-only intraday cutoff event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-01",
+          "subject_id": "fixture-subject:time_entity_repost_traps:1",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-01"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-01"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-01"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-02",
+      "category": "time_entity_repost_traps",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the future publication event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-02",
+          "subject_id": "fixture-subject:time_entity_repost_traps:2",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-02"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-02"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-02"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-03",
+      "category": "time_entity_repost_traps",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the late mutable page event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-03",
+          "subject_id": "fixture-subject:time_entity_repost_traps:3",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-03"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-03"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-03"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-04",
+      "category": "time_entity_repost_traps",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the old publication new body event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-04",
+          "subject_id": "fixture-subject:time_entity_repost_traps:4",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-04"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-04"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-04"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-05",
+      "category": "time_entity_repost_traps",
+      "split": "calibration",
+      "question": "At the frozen cutoff, identify the issuer name alias event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-05",
+          "subject_id": "fixture-subject:time_entity_repost_traps:5",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-05"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-05"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-05"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-06",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the ticker suffix event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-06",
+          "subject_id": "fixture-subject:time_entity_repost_traps:6",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-06"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-06"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-06"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-07",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the foreign research subject event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-07",
+          "subject_id": "fixture-subject:time_entity_repost_traps:7",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-07"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-07"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-07"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-08",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the ETF vs issuer event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-08",
+          "subject_id": "fixture-subject:time_entity_repost_traps:8",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-08"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-08"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-08"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-09",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the same-day two events event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-09",
+          "subject_id": "fixture-subject:time_entity_repost_traps:9",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-09"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-09"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-09"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-10",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the different fiscal quarter event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-10",
+          "subject_id": "fixture-subject:time_entity_repost_traps:10",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-10"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-10"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-10"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-11",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the repost of same original event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-11",
+          "subject_id": "fixture-subject:time_entity_repost_traps:11",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-11"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-11"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-11"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-12",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the independent reporting origins event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-12",
+          "subject_id": "fixture-subject:time_entity_repost_traps:12",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-12"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-12"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-12"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-13",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the multiple subjects on page event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-13",
+          "subject_id": "fixture-subject:time_entity_repost_traps:13",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-13"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-13"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-13"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-14",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the macro without ticker event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-14",
+          "subject_id": "fixture-subject:time_entity_repost_traps:14",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-14"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-14"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-14"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-15",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the Chinese quarter label event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-15",
+          "subject_id": "fixture-subject:time_entity_repost_traps:15",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-15"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-15"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-15"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-16",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the timezone conversion event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-16",
+          "subject_id": "fixture-subject:time_entity_repost_traps:16",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-16"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-16"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-16"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-17",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the unknown publication event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-17",
+          "subject_id": "fixture-subject:time_entity_repost_traps:17",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-17"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-17"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-17"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-18",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the wrong accession event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-18",
+          "subject_id": "fixture-subject:time_entity_repost_traps:18",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-18"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-18"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-18"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-19",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the conflicting claims event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-19",
+          "subject_id": "fixture-subject:time_entity_repost_traps:19",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-19"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-19"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-19"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    },
+    {
+      "id": "time_entity_repost_traps-20",
+      "category": "time_entity_repost_traps",
+      "split": "blind",
+      "question": "At the frozen cutoff, identify the snippet without main text event, its exact subject, independent origin, original text and availability time in the synthetic archive.",
+      "as_of": "2024-02-02T20:00:00+00:00",
+      "expected": [
+        {
+          "event_id": "fixture-event:time_entity_repost_traps-20",
+          "subject_id": "fixture-subject:time_entity_repost_traps:20",
+          "reference_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-20"
+          ],
+          "primary_urls": [
+            "https://primary.fixture.invalid/time_entity_repost_traps-20"
+          ]
+        }
+      ],
+      "forbidden_urls": [
+        "https://trap.fixture.invalid/time_entity_repost_traps-20"
+      ],
+      "notes": "Synthetic event and domain; no real market fact, human adjudication or provider result."
+    }
+  ]
+}

@@ -49,15 +49,19 @@
             "model": {"type": "string", "const": "deepseek-flash"},
             "release": {"type": "string", "const": "DeepSeek-V4.1-Flash-1017"},
             "required": {"type": "boolean", "const": true},
-            "response_ids": {"type": "array", "minItems": 5, "maxItems": 100,
+            "response_ids": {"type": "array", "minItems": 5, "maxItems": 10000,
               "items": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9_.:-]+$"}},
-            "call_count": {"type": "integer", "minimum": 5, "maximum": 100},
+            "call_count": {"type": "integer", "minimum": 5, "maximum": 10000},
             "required_stages": {"type": "array", "minItems": 5, "maxItems": 5,
               "items": {"type": "string", "enum": ["clean.llm_semantic", "tech.sentiment", "tech.risk", "sector.narrative", "decision.debate"]}},
             "stage_counts": {"type": "object"},
-            "search_count": {"type": "integer", "minimum": 14, "maximum": 14},
-            "search_mode": {"type": "string", "const": "provider_native_search"},
-            "all_required_completed": {"type": "boolean", "const": true}
+            "search_count": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "search_mode": {"type": "string", "enum": ["provider_native_search", "intelligence_source_registry"]},
+            "all_required_completed": {"type": "boolean", "const": true},
+            "fetch_count": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "acquisition_contract": {"type": "string", "const": "tiger.intelligence-acquisition.v2"},
+            "bundle_id": {"type": "string", "pattern": "^bundle_[0-9a-f]{32}$"},
+            "source_requests": {"type": "integer", "minimum": 0, "maximum": 10000}
           }
         },
         "action_summary": {"type": "string", "minLength": 1, "maxLength": 2000},
@@ -79,7 +83,7 @@
               "shares": {"type": ["integer", "null"], "minimum": 1},
               "risk_usd": {"type": ["number", "null"], "minimum": 0},
               "time_stop_days": {"type": ["integer", "null"], "minimum": 1},
-              "valid_for": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T16:00:00-(04|05):00$"},
+              "valid_for": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T(13|16):00:00-(04|05):00$"},
               "reference_capital_usd": {"type": "number", "minimum": 0},
               "sources": {"type": "array", "maxItems": 8,
                 "items": {"type": "object", "additionalProperties": false,
@@ -151,14 +155,14 @@
     "doctor_request": {"type": "object", "properties": {}, "additionalProperties": false},
     "describe_request": {
       "type": "object", "additionalProperties": false, "required": ["profile"],
-      "properties": {"profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1"]}}
+      "properties": {"profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1", "us-public-intelligence-paper-v2"]}}
     },
     "run_request": {
       "type": "object", "additionalProperties": false,
       "required": ["schema_version", "profile", "paper_account", "idempotency_key"],
       "properties": {
         "schema_version": {"type": "string", "const": "tiger.agent-request/v1"},
-        "profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1"]},
+        "profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1", "us-public-intelligence-paper-v2"]},
         "paper_account": {"type": "string", "const": "public-usd"},
         "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$"}
       }

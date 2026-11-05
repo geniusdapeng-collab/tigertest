@@ -17,7 +17,7 @@ def _gate(status, *reasons):
     return {"status": status, "reasons": list(reasons)}
 
 
-def candidate_funnel(universe, scan, scored, risk, debate, roster=None):
+def candidate_funnel(universe, scan, scored, risk, debate, roster=None, intelligence=None):
     """One auditable row per scanned ticker; each gate partitions its denominator."""
     symbols = (roster or {}).get("symbols", {})
     if len(universe) != len(set(universe)) or set(universe) != set(scan):
@@ -36,6 +36,8 @@ def candidate_funnel(universe, scan, scored, risk, debate, roster=None):
     model = {row["symbol"]: row["action"] for row in debate["execution_decisions"]}
     if set(companies) != approved or not approved <= model.keys():
         raise ValueError("Final company and model evidence differs from approved risk candidates")
+    gate_names = (*_GATES, "research") if intelligence is not None else _GATES
+    frontier = set(intelligence["symbols"]) if intelligence is not None else set()
     rows = []
     for ticker in universe:
         scan_row = scan[ticker]
@@ -47,12 +49,14 @@ def candidate_funnel(universe, scan, scored, risk, debate, roster=None):
         action = model.get(ticker)
         template = candidate.get("entry_template") if candidate else None
         no_data = filtered in {"no_data", "short_history"}
-        gates = dict.fromkeys(_GATES, _gate("not_applicable"))
+        gates = dict.fromkeys(gate_names, _gate("not_applicable"))
         gates["market_data"] = _gate("unknown", filtered) if no_data else _gate("passed")
         gates["hard_filter"] = (_gate("unknown", filtered) if no_data else
                                 _gate("passed") if filtered == "pass" else _gate("rejected", filtered))
         if filtered == "pass":
-            if template in {"A", "B", "C"}:
+            if selection == "research_missing":
+                gates["entry_setup"] = _gate("unknown", "outside_frozen_research_frontier")
+            elif template in {"A", "B", "C"}:
                 gates["entry_setup"] = _gate("passed")
             elif selection == "shape_missing":
                 gates["entry_setup"] = _gate("unknown", selection)
@@ -75,6 +79,10 @@ def candidate_funnel(universe, scan, scored, risk, debate, roster=None):
             gates["model"] = (_gate("passed") if action == "buy" else
                               _gate("rejected", f"model_{action}") if verified else
                               _gate("unknown", company["status"]))
+        if intelligence is not None:
+            gates["research"] = (_gate("passed", "frozen_research_object") if ticker in frontier else
+                                  _gate("unknown", "outside_frozen_research_frontier")
+                                  if selection == "research_missing" else _gate("not_applicable"))
         rows.append({
             "security_id": symbols.get(ticker, f"us:{ticker}"), "ticker": ticker,
             "selection": selection, "entry_template": template or None,
@@ -84,7 +92,7 @@ def candidate_funnel(universe, scan, scored, risk, debate, roster=None):
             "gates": gates,
         })
     gates = {}
-    for name in _GATES:
+    for name in gate_names:
         counts = Counter(row["gates"][name]["status"] for row in rows)
         reasons = Counter(reason for row in rows for reason in row["gates"][name]["reasons"])
         gates[name] = {"denominator": len(rows) - counts["not_applicable"],
@@ -109,6 +117,10 @@ def _stage_record(event, output, bound_input=None):
     if (event["stage"] in {"tech.risk", "tech.fusion"}
             and (bound_input or {}).get("risk_coverage", {}).get("status") == "insufficient_evidence"):
         gaps.append("scorable_risk_evidence_missing")
+    coverage = (bound_input or {}).get("risk_coverage", {})
+    if coverage.get("contract") == "tiger.tech-risk-evidence.v2" and any(
+            row.get("status") != "assessed" for row in coverage.get("targets", {}).values()):
+        gaps.append("per_target_risk_unassessed")
     if event["stage"] == "data.prepare":
         freshness = value["market_data"]["freshness"].get("market_close", {})
         if freshness.get("stock_missing"):
@@ -121,6 +133,8 @@ def _stage_record(event, output, bound_input=None):
         gaps.append("rule_evidence_missing")
     if event["stage"] == "layer0.scan" and value["scan_stats"]["rejected"]["nodata"]:
         gaps.append("scanner_inputs_missing")
+    if event["stage"] == "layer0.scan" and value["scan_stats"].get("intelligence_unresearched"):
+        gaps.append("final_candidates_outside_frozen_frontier")
     if event["stage"] == "decision.debate" and any(
             row["status"] != "filing_verified" for row in value["company_evidence"]["candidates"].values()):
         gaps.append("candidate_sources_missing")
@@ -143,7 +157,7 @@ def _audit_events(run: Path, *, through_reports: bool):
         bound_input = (read_snapshot(run, event["input_ref"], run_id=run.name, stage=name, role="input")
                        if name in {"tech.risk", "tech.fusion"} else None)
         stage_rows.append(_stage_record(event, output, bound_input))
-        if name in _REQUIRED:
+        if name in _REQUIRED or name in {"intelligence.frontier", "intelligence.freeze"}:
             values[name] = output["value"]
             refs[name] = event["output_ref"]
         if name == "layer0.scan":
@@ -157,8 +171,10 @@ def report_audit(run: Path):
     stages, values, refs = _audit_events(run, through_reports=False)
     funnel = candidate_funnel(values["universe"], values["layer0.scan"]["scan_decisions"],
                               values["layer3.tss"]["watchlist"], values["layer4.risk"]["rejections"],
-                              values["decision.debate"], values["pipeline.prepare"].get("security_roster"))
-    return {"contract": CONTRACT, "observed_through": stages[-1]["stage"], "stages": stages,
+                              values["decision.debate"], values["pipeline.prepare"].get("security_roster"),
+                              intelligence=values.get("intelligence.frontier"))
+    contract = "tiger.research-audit.v2" if "intelligence.frontier" in values else CONTRACT
+    return {"contract": contract, "observed_through": stages[-1]["stage"], "stages": stages,
             "funnel": funnel, "rule_coverage": values["review.daily"]["review"]["attribution"]["violation_coverage"],
             "evidence_refs": refs}
 
@@ -169,7 +185,7 @@ def verify_audit(run: Path, actual):
         if actual != expected:
             raise ValueError("Published research audit differs from stage evidence")
         stages, _, _ = _audit_events(run, through_reports=True)
-        return {"contract": CONTRACT, "stages": stages,
+        return {"contract": expected["contract"], "stages": stages,
                 "funnel": expected["funnel"]["gates"], "rule_coverage": expected["rule_coverage"],
                 "evidence_refs": expected["evidence_refs"]}
     except (KeyError, TypeError, ValueError, IndexError) as exc:

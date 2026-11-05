@@ -7,6 +7,7 @@ No raw response body, authorization header or unsafe source URL is persisted.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import html
 import ipaddress
@@ -476,6 +477,27 @@ class DeepSeekRequiredClient:
         self._remote_requests = 0
         self._chat_schema_retry_used = False
         self._observed_response_ids: set[str] = set()
+        self._native_io_limits = None
+
+    @contextmanager
+    def native_io_budget(self, *, max_bytes: int, deadline: float):
+        """Trusted acquisition limits for Search/Fetch only, shared across retry.
+
+        Chat planning and its legal model window are deliberately independent.
+        The mutable meter survives failures so the acquisition ledger can record
+        bytes/requests that were actually observed instead of reporting zero.
+        """
+        if (type(max_bytes) is not int or max_bytes <= 0
+                or type(deadline) not in {int, float} or not math.isfinite(deadline)
+                or self._native_io_limits is not None):
+            raise ValueError("Invalid or nested native acquisition budget")
+        meter = {"bytes_received": 0, "request_count": 0, "limit_reason": None,
+                 "transport_observed": False}
+        self._native_io_limits = {"max_bytes": max_bytes, "deadline": deadline, "meter": meter}
+        try:
+            yield meter
+        finally:
+            self._native_io_limits = None
 
     def describe(self) -> dict:
         return {"mode": "required", "enabled": True, "provider": "deepseek",
@@ -520,13 +542,31 @@ class DeepSeekRequiredClient:
         response_limit = CHAT_RESPONSE_MAX_BYTES if chat else SEARCH_FETCH_MAX_BYTES
         response = None
         deadline = time.monotonic() + (CHAT_RESPONSE_DEADLINE if chat else RESPONSE_DEADLINE)
+        tool_limits = self._native_io_limits if not chat else None
+        if tool_limits is not None:
+            meter = tool_limits["meter"]
+            meter["transport_observed"] = True
+            remaining_bytes = tool_limits["max_bytes"] - meter["bytes_received"]
+            if remaining_bytes <= 0:
+                meter["limit_reason"] = "bytes"
+                _fail("RESPONSE_TOO_LARGE")
+            response_limit = min(response_limit, remaining_bytes)
+            deadline = min(deadline, tool_limits["deadline"])
+            if time.monotonic() >= deadline:
+                meter["limit_reason"] = "deadline"
+                _fail("RESPONSE_DEADLINE")
         self._remote_requests += 1
         try:
+            remaining = max(0.001, deadline - time.monotonic()) if tool_limits is not None else None
+            if tool_limits is not None:
+                meter["request_count"] += 1
             response = requests.post(
                 BASE_URL + path, data=wire,
                 headers={"Content-Type": "application/json", "Accept": "application/json",
                          "Accept-Encoding": "identity", "Authorization": "Bearer " + self._api_key},
-                timeout=(CONNECT_TIMEOUT, CHAT_READ_TIMEOUT if chat else READ_TIMEOUT),
+                timeout=((min(CONNECT_TIMEOUT, remaining / 2), min(READ_TIMEOUT, remaining / 2))
+                         if tool_limits is not None else
+                         (CONNECT_TIMEOUT, CHAT_READ_TIMEOUT if chat else READ_TIMEOUT)),
                 allow_redirects=False, verify=True, stream=True)
             status = response.status_code
             if type(status) is not int or status != 200:
@@ -538,14 +578,30 @@ class DeepSeekRequiredClient:
                 _fail("UNEXPECTED_CONTENT_TYPE")
             declared = response.headers.get("Content-Length")
             if declared is not None and (not declared.isdecimal() or int(declared) > response_limit):
+                if tool_limits is not None and declared.isdecimal() and int(declared) > remaining_bytes:
+                    meter["limit_reason"] = "bytes"
                 _fail("RESPONSE_TOO_LARGE")
             chunks: list[bytes] = []
             size = 0
             while True:
                 if time.monotonic() > deadline:
+                    if tool_limits is not None:
+                        meter["limit_reason"] = "deadline"
                     _fail("RESPONSE_DEADLINE")
-                chunk = response.raw.read1(16384)
+                if tool_limits is not None:
+                    room = min(response_limit - size, tool_limits["max_bytes"] - meter["bytes_received"])
+                    if room <= 0:
+                        if meter["bytes_received"] >= tool_limits["max_bytes"]:
+                            meter["limit_reason"] = "bytes"
+                        _fail("RESPONSE_TOO_LARGE")
+                    chunk = response.raw.read1(min(16384, room))
+                    if isinstance(chunk, bytes):
+                        meter["bytes_received"] += len(chunk)
+                else:
+                    chunk = response.raw.read1(16384)
                 if time.monotonic() > deadline:
+                    if tool_limits is not None:
+                        meter["limit_reason"] = "deadline"
                     _fail("RESPONSE_DEADLINE")
                 if not chunk:
                     break
@@ -555,6 +611,8 @@ class DeepSeekRequiredClient:
                 if size > response_limit:
                     _fail("RESPONSE_TOO_LARGE")
                 chunks.append(chunk)
+                if tool_limits is not None and declared is not None and size == int(declared):
+                    break
             raw = b"".join(chunks)
             obj = _json_loads(raw)
             if not isinstance(obj, dict):
@@ -572,6 +630,14 @@ class DeepSeekRequiredClient:
                     response.close()
                 except Exception:
                     _fail("RESPONSE_CLOSE_FAILURE")
+
+    def _native_transport_usage(self):
+        limits = self._native_io_limits
+        if limits is None or not limits["meter"]["transport_observed"]:
+            return {}
+        meter = limits["meter"]
+        return {"transport_usage": {"bytes_received": meter["bytes_received"],
+                                    "request_count": meter["request_count"]}}
 
     @staticmethod
     def _identifier(value: object) -> str:
@@ -796,6 +862,10 @@ class DeepSeekRequiredClient:
                 if not retryable_search_failure(error.diagnostic):
                     raise
                 retry_diagnostics.append(error.diagnostic)
+                limits = self._native_io_limits
+                if limits is not None and time.monotonic() + 1 >= limits["deadline"]:
+                    limits["meter"]["limit_reason"] = "deadline"
+                    _fail("RESPONSE_DEADLINE")
                 time.sleep(1)
                 response, body_hash = self._post_json("/v1/tools/search", request)
             original = response.get("results")
@@ -826,7 +896,8 @@ class DeepSeekRequiredClient:
                     "result_count": len(original), "usable_result_count": len(results),
                     "retry_diagnostics": retry_diagnostics,
                     "response_sha256": _hash({"results": results}),
-                    "transport_response_sha256": body_hash, "results": results}
+                    "transport_response_sha256": body_hash, "results": results,
+                    **self._native_transport_usage()}
 
         proof = self.execution.call_io("model.deepseek.search", inputs, invoke)
         self.search_receipts.append({k: v for k, v in proof.items() if k not in ("schema", "results")})
@@ -852,7 +923,8 @@ class DeepSeekRequiredClient:
             return {"schema": "tiger.deepseek-fetch.v1", "call_id": call_id, "stage": stage,
                     "provider": "deepseek", "method": "POST", "search_mode": SEARCH_MODE,
                     "request_sha256": inputs["request_sha256"], "response_sha256": _hash({"page": page}),
-                    "transport_response_sha256": body_hash, "page": page}
+                    "transport_response_sha256": body_hash, "page": page,
+                    **self._native_transport_usage()}
 
         proof = self.execution.call_io("model.deepseek.fetch", inputs, invoke)
         self.fetch_receipts.append({k: v for k, v in proof.items() if k not in ("schema", "page")})

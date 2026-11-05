@@ -27,13 +27,14 @@ from .agent_evidence import (
     verify_ref,
 )
 from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_PROFILE,
-                                REQUIRED_POLICY_ID)
+                                REQUIRED_POLICY_ID, INTELLIGENCE_PROFILE, INTELLIGENCE_POLICY_ID,
+                                INTELLIGENCE_SEARCH_SOURCES)
 from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
 from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
 
 PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
-SUPPORTED_PROFILES = frozenset({PROFILE, ACTIVE_PROFILE, REQUIRED_PROFILE})
+SUPPORTED_PROFILES = frozenset({PROFILE, ACTIVE_PROFILE, REQUIRED_PROFILE, INTELLIGENCE_PROFILE})
 ACCOUNT = "public-usd"
 POLICY_ID = "tiger.public-paper-policy.v1"
 RUN_RE = re.compile(r"run-[0-9a-f]{32}\Z")
@@ -66,14 +67,17 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     company_evidence_contract: str = SEC_COMPANY_CONTRACT,
                     event_contract: str = EVENT_EVIDENCE_CONTRACT,
                     risk_evidence_contract: str = RISK_EVIDENCE_CONTRACT,
-                    authoritative_paper: bool = True) -> dict:
+                    authoritative_paper: bool = True, intelligence_input: dict | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
-    required = profile == REQUIRED_PROFILE
+    intelligence = profile == INTELLIGENCE_PROFILE
+    required = profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}
     active = profile == ACTIVE_PROFILE
-    policy_id = REQUIRED_POLICY_ID if required else "tiger.public-active-paper-policy.v1" if active else POLICY_ID
+    policy_id = (INTELLIGENCE_POLICY_ID if intelligence else REQUIRED_POLICY_ID if required
+                 else "tiger.public-active-paper-policy.v1" if active else POLICY_ID)
     execution = ExecutionPolicy(policy_id=policy_id, model_mode="enabled",
-                                search_source_names=("deepseek_search",)) if required else ExecutionPolicy(policy_id=policy_id)
+                                search_source_names=INTELLIGENCE_SEARCH_SOURCES if intelligence
+                                else ("deepseek_search",)) if required else ExecutionPolicy(policy_id=policy_id)
     value = {
         "schema": "tiger.policy.v1", "profile": profile,
         "paper_account": ACCOUNT, "execution_mode": "paper",
@@ -87,7 +91,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         "search_cleanup_budget_seconds": 15.0,
         "business_deadline_seconds": DEADLINE_SECONDS,
         "access_challenges": "refuse",
-        "stages": daily_stage_contract(required, authoritative_paper=required and authoritative_paper),
+        "stages": daily_stage_contract(required, authoritative_paper=required and authoritative_paper,
+                                        intelligence=intelligence),
         "limitations": [
             "Public market data with a local paper account; no broker orders.",
             "Inner semantic models are disabled; legal passthrough is disclosed.",
@@ -147,6 +152,24 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "Search uses DeepSeek native Search API collected by this application, not Flash server-hosted web_search.",
             "Numeric portfolio constraints and accounting remain deterministic; model may veto approved entries, never bypass bounds.",
         ]
+        if intelligence:
+            from .intelligence_workflow import acquisition_policy, validate_input_packet
+            value["intelligence"] = acquisition_policy()
+            value["intelligence"]["input_sha256"] = (digest(json_bytes(validate_input_packet(intelligence_input)))
+                                                       if intelligence_input is not None else None)
+            value["model_contract"].update(
+                source_content_contract="intelligence-original-versions/v2",
+                event_contract="point-in-time-typed-event/v2",
+                risk_evidence_contract="tiger.tech-risk-evidence.v2",
+                company_evidence_contract="sec-frozen-typed-original/v3",
+                search_mode="intelligence_source_registry")
+            value["search_collection_budget_seconds"] = value["intelligence"]["limits"]["deadline_seconds"]
+            value["limitations"] += [
+                "Intelligence sources are frozen from trusted startup configuration; unavailable sources and unknown version times remain explicit gaps.",
+                "Each target has separate typed evidence and coverage; missing research is never a clean-risk score.",
+                "A frozen frontier and evidence manifest precede final scoring; unresearched final supplements cannot enter.",
+                "Raw historical archives are imported only through an explicit admission snapshot; old semantic outputs are not reused.",
+            ]
     if active:
         from .sector_classification import OBSERVED_DATE, SOURCE_RESPONSE_SHA256, SOURCE_URL
         value["sector_proxy_snapshot"] = {"observed_date": OBSERVED_DATE,
@@ -297,7 +320,9 @@ def run_environment(work: Path, *, model_required: bool = False) -> dict[str, st
     # Trusted startup configuration only. Business requests cannot supply keys,
     # provider URLs or model overrides. The selected required adapter validates
     # the exact fixed backend/origin/model before using any credential.
-    for key in ("LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT"):
+    for key in ("LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
+                "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
+                "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT"):
         if model_required and key in os.environ:
             env[key] = os.environ[key]
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
@@ -532,13 +557,18 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
                                  COMPANY_EVIDENCE_CONTRACT if COMPANY_EVIDENCE_RELATIVE in frozen_files else "")
     event_contract = (EVENT_EVIDENCE_CONTRACT
                       if any(ref["path"] == EVENT_EVIDENCE_RELATIVE for ref in source["files"]) else "")
+    intelligence_input = None
+    if request["profile"] == INTELLIGENCE_PROFILE:
+        from .intelligence_workflow import validate_input_packet
+        intelligence_input = validate_input_packet(read_json(run, "intelligence-input.json"))
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
                                       event_contract=event_contract,
                                       risk_evidence_contract=RISK_EVIDENCE_CONTRACT
                                       if RISK_EVIDENCE_RELATIVE in frozen_files else "",
                                       company_evidence_contract=company_evidence_contract,
                                       authoritative_paper=any(ref["path"] == PAPER_LEDGER_RELATIVE for ref in source["files"]),
-                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE)
+                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
+                                      intelligence_input=intelligence_input)
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
@@ -651,7 +681,7 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
         raise EvidenceInvalid("RESULT_INVALID", "Invalid benchmark date") from exc
     from .calendar import prev_trading_day
     expected_date = prev_trading_day(datetime.fromisoformat(date).date())
-    if profile == REQUIRED_PROFILE:
+    if profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
         from .market_close import SOURCE_PATH, completed_session, verify_close_evidence
         from .redline.execution import StrictObservationError
 
@@ -734,8 +764,11 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
                         "redline": raw.get("redline", []),
                         "account_origin": "independent USD paper account, initially 100000"},
     }
-    if profile == REQUIRED_PROFILE:
-        from .llm.required_proof import verify_required_model
+    if profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
+        if profile == INTELLIGENCE_PROFILE:
+            from .llm.intelligence_proof import verify_intelligence_model as verify_required_model
+        else:
+            from .llm.required_proof import verify_required_model
         from .research_audit import SOURCE_PATH as RESEARCH_AUDIT_SOURCE, verify_audit
 
         if any(ref["path"] == RESEARCH_AUDIT_SOURCE for ref in read_json(run, "source-manifest.json")["files"]):
@@ -755,6 +788,8 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
         summary["action_summary"] = raw["action_summary"]
         summary["execution_decisions"] = raw["execution_decisions"]
         summary["disclosures"].update(model_mode="enabled", model_required=True)
+        if profile == INTELLIGENCE_PROFILE:
+            summary["disclosures"]["intelligence"] = raw["intelligence"]
     return summary
 
 
