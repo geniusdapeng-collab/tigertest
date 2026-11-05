@@ -8,11 +8,23 @@ import {
 
 const VERSIONS = new Set(["2025-03-26", "2025-06-18", "2025-11-25"]);
 const SERVER_VERSION = "1.0.0";
-export const INSTRUCTIONS = "Tiger runs the fixed public US paper workflow only. Call doctor and describe first. Run is hidden and rejected in readonly deployment. A returned accepted/running status is not completion: use the same run_id with status, then receipt and verify. Only a verified receipt may supply a completion summary; model-required accepts completed only. For every new AI research task or website research update explicitly select us-public-intelligence-paper-v2 with trusted DeepSeek environment configuration and a separate state root. That profile requires real deepseek-flash responses for all five semantic stages plus a trusted source registry, original fetches, per-target coverage and a frozen evidence bundle; disabled, passthrough, rules replacement or missing evidence is failure, never completion. Legacy profiles retain historical disabled semantics. Paper signals and fills are not real broker execution. On connection loss, recover using the identical request and idempotency key; never generate a replacement key automatically. Tool cancellation stops observation, not an accepted worker. No live, skip, tuning, score or approval controls exist.";
+// Keep the first paragraph self-contained for clients that limit initialization instructions.
+export const INSTRUCTIONS = [
+  "New AI research uses us-public-intelligence-paper-v2 with public-usd. Call doctor, then describe that profile. Reuse the original request, idempotency_key and run_id; never replace a key after losing a response. accepted/running status is not completion: poll status, then receipt and verify. Report success only for completed with a verified receipt. Cancellation stops observation, not an accepted worker. Paper only; no real broker orders. Run requires trusted paper mode and real DeepSeek API configuration.",
+  "Tiger runs only the fixed public US paper workflow. Run is hidden and rejected in readonly deployment. Access mode, Python executable and state-root are trusted startup settings, never tool arguments. Keep the trusted state root for the selected profile and recovery; use a separate state root when changing profiles. A new logical task gets a fresh idempotency key; retries retain the identical four-field request. The intelligence profile requires real deepseek-flash responses for all five semantic stages, a trusted source registry, original fetches, per-target coverage and a frozen evidence bundle. Disabled, passthrough, rules replacement or missing evidence is failure, never completion. Legacy profiles retain historical semantics. No live, skip, tuning, score or approval controls exist.",
+].join("\n\n");
+const TITLES = {
+  doctor: "老虎环境自检",
+  describe: "查看研究流程与约束",
+  run: "启动公开美股纸面研究",
+  status: "查询既有研究进度",
+  receipt: "读取已核验研究回执",
+  verify: "独立核验研究证据",
+};
 const DESCRIPTIONS = {
   doctor: "Check the fixed public-paper runner and dependencies. No market/model calls or account writes.",
-  describe: "Describe the fixed ordered workflow, public-data policy, output evidence and completion requirements.",
-  run: "Accept one complete public US paper workflow. Requires paper deployment. Keep the original idempotency key; accepted/running is not completed. Retrieve status, receipt and verify.",
+  describe: "Describe the selected profile's ordered workflow, public-data policy, output evidence and completion requirements. For new AI research, pass {\"profile\":\"us-public-intelligence-paper-v2\"} explicitly. No business worker starts.",
+  run: "Accept one complete public US paper workflow in a trusted paper deployment. Pass exactly schema_version=\"tiger.agent-request/v1\", profile, paper_account=\"public-usd\" and idempotency_key. New AI research uses profile=\"us-public-intelligence-paper-v2\". Preserve the identical request/key on retries and the returned run_id for status, then receipt and verify. accepted/running is not completion.",
   status: "Read the existing run's state. A successful query may describe a failed business run and never supplies a completion summary.",
   receipt: "Independently verify immutable evidence and the account commit, then read the existing run's completion summary. Never execute or resume a stage.",
   verify: "Independently verify the existing run's immutable evidence, identities, hashes and account commit. Never execute or resume a stage.",
@@ -22,7 +34,7 @@ export function toolDefinitions(mode = "readonly") {
   const outputSchema = structuredClone(RESULT_SCHEMA);
   delete outputSchema.$defs;
   const tools = OPERATIONS.filter((operation) => mode === "paper" || operation !== "run").map((operation) => ({
-    name: toolName(operation), description: DESCRIPTIONS[operation], inputSchema: REQUEST_SCHEMAS[operation], outputSchema,
+    name: toolName(operation), title: TITLES[operation], description: DESCRIPTIONS[operation], inputSchema: REQUEST_SCHEMAS[operation], outputSchema,
     annotations: { readOnlyHint: operation !== "run", destructiveHint: false, idempotentHint: true, openWorldHint: operation === "run" },
   }));
   return validateToolDefinitions(tools);

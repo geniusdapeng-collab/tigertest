@@ -279,6 +279,11 @@ LLM 的本质是**高维语义压缩器**：它擅长理解、归纳、生成、
 
 ## 快速开始（交易内核）
 
+只通过 Codex、Qoder 等平台对话操作后端时，从 [对话操作指南](docs/TIGER-OPERATOR.md) 开始。
+Agent 会先检查环境，再按固定 CLI/MCP 提交与查询同一个任务，取得独立核验回执后汇报。
+平台配置、Qoder CLI 与桌面导入的区别见 [客户端接入指南](docs/AGENT-CLIENTS.md)；
+同一 profile 的纸面账户保持同一 state-root，日常新任务只更换逻辑幂等键。
+
 ```bash
 bash scripts/setup.sh                # 一键安装+自检（或 pip install -r requirements.txt）
 python3 -m pytest tests/ -q          # 交易内核测试（本机实测 327 passed，2026-09-19）
@@ -318,9 +323,11 @@ pnpm setup && pnpm preview:all
 
 ---
 
-## 面向 AI Coding Agent
+## 面向 AI Coding Agent（治理外壳开发）
 
-治理外壳对 AI Coding Agent 原生友好（继承 WorkLoom IM 底座约定）：
+以下启动和页面验证要求用于 `governance/` 治理外壳开发。仅通过 CLI/MCP 操作 Tiger 后端时，按 [对话操作指南](docs/TIGER-OPERATOR.md) 执行，无需启动治理壳或官网。
+
+治理外壳开发沿用 WorkLoom IM 底座约定：
 
 1. 进仓先读 [`governance/README.md`](governance/README.md)；全量能力清单见 `governance/docs/capability-map.md`；
 2. **首启必跑 `pnpm preview:all`**（governance 目录下），未完成视为环境初始化未完成；
@@ -364,10 +371,16 @@ pnpm setup && pnpm preview:all
 
 Apache-2.0。
 
-## 桌面 Agent 接入（Codex / DeepSeek Harness）
+## 桌面 Agent 接入（Codex / Qoder / DeepSeek Harness）
 
-本仓内置桌面 Agent 入口：`node scripts/workloom-agent.mjs list`（能力清单）与
-`node scripts/workloom-agent-mcp.mjs`（stdio MCP）。接入步骤、本仓可用能力与安全边界见
-[`docs/AGENT-CLIENTS.md`](docs/AGENT-CLIENTS.md)。
+完整后端研究使用 `node scripts/tiger-agent.mjs`（固定六操作 CLI）或
+`node scripts/tiger-agent-mcp.mjs`（独立 STDIO MCP）。通过
+`node scripts/tiger-agent-config.mjs --client codex` 生成 Codex 本机项目配置，默认只读；
+Qoder CLI 与 DSH 分别选择 `--client qoder` 和 `--client dsh`。
+给外层 Agent 的流程见 [TIGER-OPERATOR.md](docs/TIGER-OPERATOR.md)，
+客户端接入与真实模型条件见 [AGENT-CLIENTS.md](docs/AGENT-CLIENTS.md)。
+
+原 `node scripts/workloom-agent.mjs list` 和 `node scripts/workloom-agent-mcp.mjs`
+保留通用能力目录；目录中的仓库只读能力不会因此获得完整研究执行权限。
 
 `list` 证明仓内接口声明可发现；可调用性与结果验证须按实际环境、提交和运行回执分别取证。治理壳的自动导览见 `governance/docs/capabilities.auto.md`，缺少独立运行证据的条目保持“未验证”。模拟运行结果不得标成真实交易或客户生产通过。

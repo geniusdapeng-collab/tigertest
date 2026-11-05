@@ -17,6 +17,11 @@ const TERMINAL_OK = new Set(["completed", "completed_degraded"]);
 const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+// Client launchers forward these names only; values stay in the trusted process environment.
+export const MODEL_ENV_NAMES = Object.freeze(["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
+  "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
+  "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
+  "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT"]);
 const EXIT_CODES = new Map([
   ...["INVALID_REQUEST", "INPUT_TOO_LARGE"].map((s) => [s, 2]),
   ...["READ_ONLY", "LIVE_FORBIDDEN", "UNAUTHORIZED"].map((s) => [s, 3]),
@@ -326,10 +331,7 @@ export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_COD
 
 export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
-  if (modelRequired) for (const key of ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
-    "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
-    "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
-    "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT"]) {
+  if (modelRequired) for (const key of MODEL_ENV_NAMES) {
     if (typeof env[key] === "string") result[key] = env[key];
   }
   return { ...result, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1" };

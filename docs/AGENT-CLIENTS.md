@@ -1,18 +1,33 @@
-# Tiger 接入 Codex / DeepSeek Harness
+# Tiger 接入 Codex / Qoder / DeepSeek Harness
 
 本指南面向用 Agent 调用 Tiger 的操作者和维护者。原有 WorkLoom 能力目录提供仓库只读信息；Tiger CLI/MCP 调用同一个 Python 严格工作流；独立 `tiger-intelligence` 入口提供受控来源同步与证据查询。根目录是 Python 引擎，治理壳在 `governance/`。不要把根目录当成 Node 工作区，也不要修改通用能力加载器来开放本地 execute。
+
+只在对话框中操作时，外层 Agent 先读 [TIGER-OPERATOR.md](TIGER-OPERATOR.md)，负责运行检查、准备固定请求、保存原始任务身份、查询和解释已核验的结果。用户可说“检查研究环境”“运行今天的新研究”“继续查看刚才的任务”，不必手写命令或 JSON。外层 Agent 能调用的权限仍来自可信启动配置。
+
+| 调用端 | 本仓提供的配置方式 | 生效与验证 |
+|---|---|---|
+| Codex 本地主机 | `--client codex` → `.codex/config.toml` | 正常项目信任及新连接；实际发现 Tiger 工具后再调用 doctor |
+| Qoder CLI | `--client qoder` → `.qoder/settings.local.json` | 正常目录信任及重连；核对工具与 doctor |
+| Qoder 独立桌面 | 从 Connector 的 Add custom MCP 导入已复核的服务器条目 | 桌面保存用户级 Connector；项目文件生成不等于已导入 |
+| DeepSeek Harness | `--client dsh` → `.dsh/tiger-mcp.yaml` 插件列表 overlay | 按所用部署装配后，由实际宿主发现并调用 |
+
+同一操作者、同一 profile 的持续纸面账户保持固定可信 state-root；新逻辑任务使用新幂等键，重连或重试保留原 root、原请求和身份。切换 profile 或明确创建新隔离账户才使用独立 root；日常研究不会为了“从零评分”而丢掉账户历史。
 
 ## 1. 先检查，再选择访问模式
 
 从仓库根目录运行。Node 要求由仓库现行运行时约束决定；新 Tiger 入口的 Python 最低要求为 3.11。推荐显式传入已安装本仓依赖的 Python；省略时先找仓库 `.venv/bin/python`，再找 PATH 中的 `python3`。系统 Python 版本不满足时，doctor 会失败，不会假装就绪。
 
 ```bash
-node scripts/tiger-agent.mjs doctor --python /absolute/path/to/python
+node scripts/tiger-agent.mjs doctor --python /absolute/path/to/python \
+  --state-root /absolute/path/to/existing-v2-state
 printf '%s\n' '{"profile":"us-public-intelligence-paper-v2"}' | \
-  node scripts/tiger-agent.mjs describe --python /absolute/path/to/python --input-file -
+  node scripts/tiger-agent.mjs describe --python /absolute/path/to/python \
+    --state-root /absolute/path/to/existing-v2-state --input-file -
 ```
 
 这两条命令不调用行情或模型、不创建账户、不启动业务 worker。doctor 检查实际解释器和依赖；describe 返回固定 profile、阶段顺序和限制。`trading.repo.readiness` 只检查文件布局，不能代替 doctor。
+
+doctor 的 `ready` 不核验模型凭据或提供者。缺少模型配置的 paper 请求仍可能先被接纳为 `accepted`，随后 worker 以 `MODEL_REQUIRED_FAILED` 失败；必须沿原 run_id 查询，并以 receipt/verify 的结果判断业务是否完成。
 
 默认 `--mode readonly`。执行完整 paper 工作流必须由操作者在启动参数或项目部署配置中显式选择 `--mode paper`。请求 JSON 不能改变 mode、解释器、state-root、阶段或策略。
 
@@ -154,11 +169,35 @@ node scripts/tiger-agent-config.mjs --client codex \
 
 提交到仓库的是 `config/agent-clients/codex.toml.example` 可移植模板；带有本机绝对路径的实际配置留在本地并被 Git 忽略。
 
+显式 paper 配置包含 `env_vars`，名称来自共享 `MODEL_ENV_NAMES`：必需模型配置及已支持的来源凭据、registry/archive 路径。只保存变量名；值由可信宿主启动环境提供，切回 readonly 时移除该业务名单。生成器不读取受保护凭据文件、不复制环境值，始终返回 `credentials_verified=false`；paper 回执中的 `environment_requirements` 只列所需名称和验证边界。配置语法及 Python 版本通过，不代表模型登录或调用已验证。Codex 环境转发字段依据 [官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
+
 Codex 支持项目 `.codex/config.toml`、STDIO 的 command/args/cwd、启动与工具超时配置；项目配置受客户端信任机制约束，详见已核实的 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。生成配置成功不表示当前会话已加载。请在可信项目的新连接或显式刷新后的实际宿主中验证工具列表和 doctor；交付证据应分别记录“文件校验”“协议调用”“原生宿主挂载”。生成器始终返回 `host_attached=false`。
 
 原生 `codex mcp get tiger-workflow --json` 是配置查询入口，单独的 not-found 不能判定项目文件无效。需要区分项目层发现和实际生效时，可通过已支持该接口的原生 app-server `config/read` 指定 `cwd`、检查项目层及 `disabledReason`；只输出 Tiger 字段，避免暴露其他配置。若项目层因尚未信任而禁用，应使用客户端正常的项目信任流程；生成器不会更改这项用户设置。只读配置检查不需要启动 thread/turn 或模型，接口见 [Codex App Server 文档](https://learn.chatgpt.com/docs/app-server)。
 
 根 `AGENTS.md` 显式要求阅读 `AGENTS.repo.md`。后者补充 Tiger 用法，不创建覆盖根规则的 `AGENTS.override.md`；参见 [Codex AGENTS.md 发现规则](https://learn.chatgpt.com/docs/agent-configuration/agents-md)。
+
+## 4.1. 生成 Qoder CLI 配置与桌面导入
+
+```bash
+# 只校验匹配情况；默认只读，不写用户全局设置。
+node scripts/tiger-agent-config.mjs --client qoder \
+  --python /absolute/path/to/python --check
+
+# 生成或更新本机项目配置；显式 --mode paper 才启用提交能力。
+node scripts/tiger-agent-config.mjs --client qoder \
+  --python /absolute/path/to/python
+```
+
+默认目标是 `.qoder/settings.local.json`；可通过项目相对 `--config .qoder/settings.json` 明确选择共享项目文件，但带本机绝对路径的生成物不应提交。Qoder CLI 的项目级/本机级文件及目录信任规则见 [配置层级](https://docs.qoder.com/cli/settings)，STDIO 的 `type`、`command`、`args`、`cwd`、`timeout` 和 `mcpServers` 见 [官方 MCP reference](https://docs.qoder.com/cli/mcp-reference)。
+
+生成器只修改一对 `// BEGIN/END TIGER AGENT MCP v1` 标记内的 Tiger 成员，保留其他服务器、设置与注释原文。它校验完整 JSONC、重复键和修改前后其他设置的语义，拒绝同名非托管条目、错误标记、无效 UTF-8、超限文件、链接路径和已检测到的并发改动。输出的 Node/Python/入口/state-root 均为可信启动配置，工具请求不能改写；不设置 `trust` 或 `alwaysAllow`。
+
+独立 Qoder 桌面的 Add custom MCP 当前保存用户级 `~/.qoder/settings.json` 的 `mcpServers`，见 [桌面 Connectors](https://docs.qoder.com/qoder/connectors)。本项目生成器不会写该全局文件，也不承诺桌面自动发现 CLI 项目配置。通过桌面正常的 JSON 导入入口使用 [严格 JSON 示例](../config/agent-clients/qoder.json.example)，由操作者或获授权的宿主配置流程替换实际路径并保存；不要直接粘贴带管理注释的 JSONC 作为严格 JSON。MCP 连接成功后，在新任务里查询工具、调用 doctor 和对应 profile 的 describe。
+
+Qoder 桌面的 Agent 可在 Settings → Agent 配置，导入 [外层操作者指令模板](agent-clients/tiger-operator.prompt.md) 并选择已配置的 Tiger Connector。只有保存成功、实际任务选择并完成工具发现后，才算该宿主已装配；生成草稿不等于保存的 Agent。官方步骤见 [Qoder Agent](https://docs.qoder.com/qoder/custom-agents)。本仓不宣称该 prompt 文件会被桌面自动加载。
+
+没有足以保证任意 Qoder 宿主环境继承或插值写法的验证，本配置不填造 `${...}` 凭据值。paper 模式仍要求可信宿主环境到达实际 MCP 进程；环境条件不足时据实报告并保留失败身份，不改请求传 key、不读取宿主登录缓存。原始协议测试可以验证生成的服务器命令，不能替代 Qoder 宿主挂载或真实提供者调用。
 
 ## 5. 生成 DeepSeek Harness 插件列表
 
@@ -195,10 +234,11 @@ TIGER_TEST_PYTHON=/absolute/path/to/python node --test \
   bundles/trading/capabilities/repo.test.mjs \
   scripts/tiger-agent.test.mjs scripts/tiger-agent-mcp.test.mjs \
   scripts/tiger-agent-config.test.mjs \
+  scripts/tiger-intelligence.test.mjs scripts/tiger-intelligence-workflow.test.mjs \
   scripts/agent-capabilities.test.mjs governance/scripts/agent-capabilities.test.mjs
 ```
 
-这些 Node 测试包含确定性传输夹具，不能证明公开行情调用、39 阶段执行或 paper 账户提交成功。完整验收还需要真实 Python 集成、故障/并发/证据篡改测试，以及通过当前宿主 CLI 或工具取得的实际公开数据 paper 回执。任何 completion 声明须关联源代码身份、run_id、receipt hash、验证结果及限制。
+这些 Node 测试包含确定性传输夹具，不能证明公开行情调用、所选 profile 的完整阶段执行或 paper 账户提交成功；阶段契约以该 profile 的实际 describe 为准。完整验收还需要真实 Python 集成、故障/并发/证据篡改测试，以及通过当前宿主 CLI 或工具取得的实际公开数据 paper 回执。任何 completion 声明须关联源代码身份、run_id、receipt hash、验证结果及限制。
 
 | 错误或现象 | 处理 |
 |---|---|

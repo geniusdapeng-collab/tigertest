@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "tiger-workflow": {
+      "type": "stdio",
+      "command": "/absolute/path/to/node",
+      "args": [
+        "/absolute/path/to/workroom-tiger/scripts/tiger-agent-mcp.mjs",
+        "--python",
+        "/absolute/path/to/python",
+        "--state-root",
+        "/absolute/path/to/tiger-state",
+        "--mode",
+        "readonly"
+      ],
+      "cwd": "/absolute/path/to/workroom-tiger",
+      "timeout": 65000
+    }
+  }
+}
