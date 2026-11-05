@@ -1,5 +1,8 @@
 # Portable example only. Use tiger-agent-config.mjs for the actual project paths.
 # Default readonly; explicitly select paper in trusted deployment configuration.
+# Generate paper configuration with --mode paper: it adds the shared MODEL_ENV_NAMES
+# as env_vars (names only). Supply values in the trusted host environment before
+# starting the client. This file neither stores a key nor verifies a host connection.
 [mcp_servers.tiger-workflow]
 command = "/absolute/path/to/node"
 args = ["/absolute/path/to/workroom-tiger/scripts/tiger-agent-mcp.mjs", "--python", "/absolute/path/to/python", "--state-root", "/absolute/path/to/tiger-state", "--mode", "readonly"]

@@ -33,6 +33,13 @@ Tiger Global Asset Management (TGAM) uses the [Caishen AI trading system](docs/C
 
 ## Quick Start (Trading Kernel)
 
+For dialogue-only operation through Codex or Qoder, start with the
+[operator guide](docs/TIGER-OPERATOR.md) and [client setup](docs/AGENT-CLIENTS.md).
+The outer agent prepares fixed CLI/MCP requests, preserves the original task
+identity through reconnects, and reports completion only after independent
+receipt verification. Keep one trusted state root for a continuing paper account
+and profile; a new daily task changes its logical idempotency key.
+
 ```bash
 pip install -r requirements.txt
 python3 -m pytest tests/ -q          # 252 tests
