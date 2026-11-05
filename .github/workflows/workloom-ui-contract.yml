@@ -12,7 +12,8 @@ permissions:
 jobs:
   ui-contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    # Full evidence replay and the serial browser matrix need this hosted-runner budget.
+    timeout-minutes: 90
     env:
       WORKLOOM_DIR: governance
       NODE_ENV: test
