@@ -243,15 +243,21 @@ def test_a_rehashed_prompt_cannot_omit_the_frozen_documents(isolated):
         verify_intelligence_model(root, result, admission)
 
 
-def test_source_secret_redaction_is_a_replayable_partial_version_without_leaking_key(tmp_path, monkeypatch):
+@pytest.mark.parametrize("representation", ["html", "json"])
+def test_source_secret_redaction_is_a_replayable_partial_version_without_leaking_key(tmp_path, monkeypatch, representation):
     from trading_system.intelligence.transport import HttpTransport
     execution, root, args, _, _, _ = intelligence_fixture(tmp_path, monkeypatch)
     original = HttpTransport.request
     def fetch(transport, method, url, **kwargs):
         response = original(transport, method, url, **kwargs)
         from dataclasses import replace
-        body = response.body.replace(b"Original source article.", b"Original source article fixture-secret-only.")
-        return replace(response, body=body, transport_sha256=hashlib.sha256(body).hexdigest())
+        if representation == "json":
+            body = b'{ "public": "fixture-secret-only", "value": 1 }\n'
+            headers = {"content-type": "application/json"}
+        else:
+            body = response.body.replace(b"Original source article.", b"Original source article fixture-secret-only.")
+            headers = response.headers
+        return replace(response, headers=headers, body=body, transport_sha256=hashlib.sha256(body).hexdigest())
     monkeypatch.setattr(HttpTransport, "request", fetch)
     output = main._daily(args, "yahoo", execution=execution)
     result = asdict(output.result)

@@ -289,3 +289,25 @@ def test_linkage_observed_fallback_reconstructs_closes_and_rejects_unknown_sourc
     with pytest.raises(ExecutionContractError):
         _linkage(data, _Trace(altered), "yahoo", ["yahoo", "official", "stooq"],
                  date(2026, 10, 20), date(2026, 10, 20))
+
+
+@pytest.mark.parametrize("source,availability,accepted", [
+    ("tencent", True, True), ("tencent", False, False),
+    ("tencent", None, False), ("official", True, False),
+])
+def test_linkage_fallback_requires_a_true_capable_source_probe(source, availability, accepted):
+    data = market()
+    calls = [({"method": "provider.yahoo.ohlcv", "error_ref": {}},
+              {"provider": "yahoo", "method": "ohlcv", "args": ["TSM"], "kwargs": {"days": 90}}, {})]
+    if availability is not None:
+        calls.append(({"method": "provider." + source + ".available"}, {"provider": source}, availability))
+    calls.append(({"method": "provider." + source + ".ohlcv"},
+        {"provider": source, "method": "ohlcv", "args": ["TSM"], "kwargs": {"days": 90}}, normalize(data["spy"])))
+    if accepted:
+        rows = _linkage(data, _Trace(calls), "yahoo", ["yahoo", source],
+                        date(2026, 10, 20), date(2026, 10, 20))
+        assert any(row.ticker == "TSM" for row in rows)
+    else:
+        with pytest.raises(ExecutionContractError, match="availability"):
+            _linkage(data, _Trace(calls), "yahoo", ["yahoo", source],
+                     date(2026, 10, 20), date(2026, 10, 20))

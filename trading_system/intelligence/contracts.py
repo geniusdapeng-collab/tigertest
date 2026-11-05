@@ -114,8 +114,14 @@ def safe_value(value: object, secrets: tuple[str, ...] = (), depth: int = 0):
         value = _JWT.sub("[REDACTED_TOKEN]", value)
         return _URL_TEXT.sub(lambda match: match[0] if credential_free_url(match[0]) else "[REDACTED_URL]", value)
     if isinstance(value, dict):
-        return {str(k): "[REDACTED_SECRET]" if _SECRET_KEY.fullmatch(str(k)) else
-                safe_value(v, secrets, depth + 1) for k, v in value.items()}
+        result = {}
+        for key, child in value.items():
+            original_key = str(key)
+            safe_key = safe_value(original_key, secrets, depth + 1)
+            if safe_key in result:
+                raise IntelligenceError("CONTRACT_INVALID", "Metadata keys collide after sanitization")
+            result[safe_key] = "[REDACTED_SECRET]" if _SECRET_KEY.fullmatch(original_key) else safe_value(child, secrets, depth + 1)
+        return result
     if isinstance(value, (list, tuple)):
         return [safe_value(v, secrets, depth + 1) for v in value]
     if value is None or isinstance(value, (bool, int)):

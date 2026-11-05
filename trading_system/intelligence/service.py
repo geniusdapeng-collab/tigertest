@@ -77,11 +77,11 @@ class IntelligenceService:
 
     def _safe_raw(self, raw):
         original = raw
-        for secret in self._secrets():
-            raw = raw.replace(secret.encode(), b"[REDACTED_SECRET]")
         try:
             parsed = json.loads(raw)
         except (ValueError, UnicodeError, RecursionError):
+            for secret in self._secrets():
+                raw = raw.replace(secret.encode(), b"[REDACTED_SECRET]")
             try:
                 text = raw.decode("utf-8")
             except UnicodeError:
@@ -103,14 +103,14 @@ class IntelligenceService:
             raw, redacted = self._safe_raw(raw)
             ref = self.archive.put_blob(raw, "application/json" if spec.kind in {"search", "sec_submissions", "sec_directory", "fred"} else "application/octet-stream")
             normalized = safe_value(result.to_dict(), secrets)
-            metadata = result.response_metadata
+            metadata = safe_value(result.response_metadata, secrets)
             received = metadata.get("received_at") or timestamp(self.clock())
             transport_sha = metadata.get("transport_sha256") or hashlib.sha256(raw).hexdigest()
             count = metadata.get("request_count", 1)
             if isinstance(self.adapters[source_id], DeepSeekBridge):
                 receipt = metadata.get("receipt") or {}
                 count = 1 + len(receipt.get("retry_diagnostics", []))
-            return {"schema": "tiger.intelligence-source-response/v1", "source_id": source_id,
+            return safe_value({"schema": "tiger.intelligence-source-response/v1", "source_id": source_id,
                 "operation": operation, "request_sha256": digest(parameters), "raw_response_ref": ref,
                 "transport_sha256": transport_sha, "raw_redacted": redacted,
                 "response_url": metadata.get("response_url", spec.endpoint),
@@ -118,14 +118,29 @@ class IntelligenceService:
                 "actual_request": safe_value(result.request, secrets), "normalized": normalized,
                 "usage": safe_value(result.usage, secrets), "request_count": count,
                 "bytes_received": len(result.raw_bytes) if result.raw_bytes else len(raw),
-                "normalization_kind": "deepseek_bridge" if isinstance(self.adapters[source_id], DeepSeekBridge) else "registered_adapter"}
+                "normalization_kind": "deepseek_bridge" if isinstance(self.adapters[source_id], DeepSeekBridge) else "registered_adapter"}, secrets)
         if not isinstance(result, FetchResult):
             raise SourceError("CONTRACT_INVALID", delivery="returned")
+        original_bytes = len(result.raw_bytes)
         raw, redacted = self._safe_raw(result.raw_bytes)
-        ref = self.archive.put_blob(raw, result.media_type)
         metadata = safe_value(result.metadata, secrets)
+        if redacted and metadata.get("extractor") == "tiger-main-text/v1":
+            from .extract import extract_response
+            from .transport import HttpResponse
+            original_usage = result.usage
+            reparsed = extract_response(HttpResponse(safe_value(result.final_url, secrets), metadata.get("http_status", 200),
+                metadata.get("http_headers", {"content-type": safe_value(result.media_type, secrets)}), raw,
+                metadata.get("retrieved_at", timestamp(self.clock())),
+                metadata.get("transport_sha256", hashlib.sha256(result.raw_bytes).hexdigest()),
+                metadata.get("request_count", 1)), original_url=safe_value(result.url, secrets),
+                trusted_filing=metadata.get("trusted_filing_extraction") is True)
+            result = replace(reparsed, usage=original_usage, completeness="partial")
+            metadata = safe_value(result.metadata, secrets)
+        elif redacted:
+            result = replace(result, completeness="partial")
+        ref = self.archive.put_blob(raw, result.media_type)
         normalized = safe_value({k: v for k, v in asdict(result).items() if k != "raw_bytes"}, secrets)
-        return {"schema": "tiger.intelligence-source-response/v1", "source_id": source_id,
+        return safe_value({"schema": "tiger.intelligence-source-response/v1", "source_id": source_id,
             "operation": operation, "request_sha256": digest(parameters), "raw_response_ref": ref,
             "transport_sha256": metadata.get("transport_sha256", hashlib.sha256(raw).hexdigest()),
             "raw_redacted": redacted, "response_url": result.final_url,
@@ -133,8 +148,8 @@ class IntelligenceService:
             "received_at": metadata.get("retrieved_at", timestamp(self.clock())),
             "actual_request": parameters, "normalized": normalized,
             "usage": safe_value(result.usage, secrets), "request_count": metadata.get("request_count", 1),
-            "bytes_received": len(result.raw_bytes),
-            "normalization_kind": "deepseek_bridge" if isinstance(self.adapters[source_id], DeepSeekBridge) else "registered_adapter"}
+            "bytes_received": original_bytes,
+            "normalization_kind": "deepseek_bridge" if isinstance(self.adapters[source_id], DeepSeekBridge) else "registered_adapter"}, secrets)
 
     def _call(self, job_id, source_id, operation, parameters, *, ordinal=0):
         self._write()

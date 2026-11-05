@@ -661,3 +661,84 @@ def test_official_only_research_is_audited_partial_and_preserves_present_and_con
     with pytest.raises(IntelligenceError) as error:
         svc.research(job["job_id"])
     assert error.value.code == "FROZEN_BUNDLE"
+
+
+@pytest.mark.parametrize("etag", ["public-version-v1", "fixture-secret"])
+def test_response_header_echo_is_sanitized_in_outer_and_normalized_receipts(tmp_path, web, etag):
+    svc, reg, observed = service(tmp_path, web)
+    for path in ("/ds/search", "/article"):
+        status, media, value = web[1][path]
+        web[1][path] = (status, media, value, {"ETag": etag})
+    p = plan(reg); job = svc.create_job(p, "header-echo"); acquired = svc.collect(job["job_id"])
+    expected = "[REDACTED_SECRET]" if etag == "fixture-secret" else etag
+    assert len(observed) == 2
+    for _, _, observation in observed:
+        assert observation["http_headers"]["etag"] == expected
+        metadata = observation["normalized"].get("response_metadata", observation["normalized"].get("metadata", {}))
+        assert metadata["http_headers"]["etag"] == expected
+    all_files = b"".join(path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+    assert b"fixture-secret" not in all_files
+    assert next(doc for doc in acquired["documents"] if doc["text_kind"] == "html_main")["completeness"] == "complete"
+    frozen = svc.freeze(job["job_id"], expected_plan_hash=p["plan_hash"], expected_revision=svc.status(job["job_id"])["revision"], expected_frontier_hash=p["frontier_manifest_hash"])
+    assert len(verify_bundle(tmp_path, frozen["bundle_id"])["documents"]) == 2
+
+
+@pytest.mark.parametrize("operation", ["search", "fetch"])
+def test_source_projection_cleans_all_outer_urls_headers_and_metadata_keys(tmp_path, web, operation):
+    from trading_system.intelligence.contracts import FetchResult, SearchResult, canonical
+    svc, _, _ = service(tmp_path, web)
+    echoed_url = "https://example.com/fixture-secret/public"
+    headers = {"content-type": "text/plain", "etag": "fixture-secret", "last-modified": "public-date"}
+    if operation == "search":
+        result = SearchResult([], {"query": "public"}, {"response_url": echoed_url, "received_at": NOW.isoformat(),
+            "http_headers": headers, "extension": {"fixture-secret": "public-value"}}, raw_bytes=b'{"results":[]}')
+        source_id, parameters = "deepseek", {"query": "public"}
+    else:
+        result = FetchResult("https://example.com/public", echoed_url, "Public", "public body", b"public body", "text/plain", "plain_text", "complete",
+            metadata={"http_headers": headers, "retrieved_at": NOW.isoformat(), "extension": {"fixture-secret": "public-value"}})
+        source_id, parameters = "web_page", {"url": "https://example.com/public"}
+    observation = svc._observe_result(source_id, operation, parameters, result)
+    assert b"fixture-secret" not in canonical(observation)
+    assert observation["http_headers"] == {**headers, "etag": "[REDACTED_SECRET]"}
+    assert "[REDACTED_SECRET]" in observation["response_url"]
+    assert b"fixture-secret" not in b"".join(path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+
+
+def test_json_field_name_echo_is_sanitized_before_blob_storage_and_replays(tmp_path, web):
+    svc, reg, _ = service(tmp_path, web)
+    payload = web[1]["/ds/search"][2]
+    payload["fixture-secret"] = "provider metadata field-name echo"
+    p = plan(reg); job = svc.create_job(p, "field-name-echo"); acquired = svc.collect(job["job_id"])
+    assert len(acquired["documents"]) == 2
+    assert b"fixture-secret" not in b"".join(path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+    frozen = svc.freeze(job["job_id"], expected_plan_hash=p["plan_hash"], expected_revision=svc.status(job["job_id"])["revision"], expected_frontier_hash=p["frontier_manifest_hash"])
+    assert len(verify_bundle(tmp_path, frozen["bundle_id"])["documents"]) == 2
+
+
+def test_sanitized_metadata_key_collision_is_explicit_and_never_merges_source_fields(tmp_path, web):
+    svc, reg, _ = service(tmp_path, web)
+    payload = web[1]["/ds/search"][2]
+    payload.update({"fixture-secret": "first", "[REDACTED_SECRET]": "second"})
+    job = svc.create_job(plan(reg), "field-name-collision"); acquired = svc.collect(job["job_id"])
+    assert acquired["documents"] == [] and acquired["gaps"][0]["reason"] == "CONTRACT_INVALID"
+    assert b"fixture-secret" not in b"".join(path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+
+
+@pytest.mark.parametrize("value", ["public value", "fixture-secret"])
+def test_json_fetch_reextracts_redacted_entity_and_clean_control_keeps_original_bytes(tmp_path, web, value):
+    svc, reg, _ = service(tmp_path, web)
+    original = ('{ "public": "' + value + '", "value": 1 }\n').encode()
+    web[1]["/article"] = (200, "application/json", original)
+    p = plan(reg); job = svc.create_job(p, "json-fetch-replay"); acquired = svc.collect(job["job_id"])
+    document = next(doc for doc in acquired["documents"] if doc["text_kind"] == "data")
+    stored = svc.archive.read_blob(document["raw_blob"])
+    assert document["text"] == stored.decode()
+    if value == "fixture-secret":
+        assert stored != original and document["completeness"] == "partial"
+        assert document["normalization"]["raw_redacted"] is True
+        assert b"fixture-secret" not in b"".join(path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+    else:
+        assert stored == original and document["completeness"] == "complete"
+        assert document["normalization"]["raw_redacted"] is False
+    frozen = svc.freeze(job["job_id"], expected_plan_hash=p["plan_hash"], expected_revision=svc.status(job["job_id"])["revision"], expected_frontier_hash=p["frontier_manifest_hash"])
+    assert len(verify_bundle(tmp_path, frozen["bundle_id"])["documents"]) == 2

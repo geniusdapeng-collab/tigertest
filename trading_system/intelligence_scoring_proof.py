@@ -31,6 +31,10 @@ from .intelligence_workflow import qualify_candidates, restore_frame
 from .market_close import _snapshot_window, requires_foreign_calendar, verify_close_evidence
 from .markets import get_market
 from .options_metrics import OptionsHistoryStore
+from .providers.eastmoney import EastMoneyProvider
+from .providers.official import OfficialMacroProvider
+from .providers.sina import SinaProvider
+from .providers.tencent import TencentProvider
 from .redline.execution import ExecutionContractError
 from .tech_chain.agents import CycleLinkageAgent, TechChainMonitorAgent
 from .tech_chain.fusion import StructuredTechChainSignal, signals_to_bonus_map
@@ -40,6 +44,8 @@ from .tech_chain.universe import TECH_SUBCHAINS
 CONTRACT = "tiger.intelligence-scoring-proof/v1"
 STAGES = ("tech.monitor", "tech.cycle_linkage", "layer1.mrs", "layer2.sector",
           "layer2b.chain", "layer0.scan", "layer3.tss", "layer4.risk")
+_LINKAGE_CHANNELS = {"official": OfficialMacroProvider, "tencent": TencentProvider,
+                     "sina": SinaProvider, "eastmoney": EastMoneyProvider}
 
 
 def _fail(stage=None):
@@ -277,6 +283,7 @@ def _linkage(market, tape, provider, allowed_providers, session, day):
         if requires_foreign_calendar(symbol):
             return None
         first = True
+        available, attempted, fallback_started = {}, set(), False
         while tape.cursor < len(tape.calls):
             call, request, _ = tape.calls[tape.cursor]
             match = re.fullmatch(r"provider\.([a-z]+)\.(available|ohlcv)", call["method"])
@@ -284,19 +291,32 @@ def _linkage(market, tape, provider, allowed_providers, session, day):
                 raise ExecutionContractError("Unexpected linkage provider receipt")
             source, method = match.groups()
             if method == "available":
-                if first:
+                if first or fallback_started or source not in _LINKAGE_CHANNELS or source in available:
                     raise ExecutionContractError("Linkage omitted its primary provider observation")
                 try:
-                    available = tape.take(call["method"], {"provider": source})
+                    observed = tape.take(call["method"], {"provider": source})
                 except _ObservedProviderFailure:
+                    available[source] = False
                     continue
-                if type(available) is not bool:
+                if type(observed) is not bool:
                     raise ExecutionContractError("Invalid provider availability evidence")
+                available[source] = observed
                 continue
             if request.get("args") != [symbol]:
                 break
             if first and source != provider:
                 raise ExecutionContractError("Linkage primary source differs from admission")
+            if source in attempted:
+                raise ExecutionContractError("Linkage repeated an unadmitted source attempt")
+            if not first:
+                fallback_started = True
+                cls = _LINKAGE_CHANNELS.get(source)
+                caps = getattr(cls, "CAPABILITIES", None) if cls is not None else None
+                direct_stooq = source == "stooq" and provider == "yahoo"
+                if not direct_stooq and (cls is None or source == provider
+                        or available.get(source) is not True or caps is not None and "ohlcv" not in caps):
+                    raise ExecutionContractError("Linkage source has no successful capable availability probe")
+            attempted.add(source)
             first = False
             try:
                 packet = tape.packet(call["method"], {"provider": source, "method": "ohlcv",

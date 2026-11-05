@@ -266,6 +266,10 @@ class _Replay:
                 transport_sha256=response["transport_sha256"], request_count=response["request_count"])
             normalized = replayed.to_dict() if isinstance(replayed, SearchResult) else {
                 key: value for key, value in asdict(replayed).items() if key != "raw_bytes"}
+            if request["operation"] == "fetch" and response["raw_redacted"]:
+                # Sanitized bytes remain replayable but cannot prove an intact
+                # original. This downgrade is independent of parser success.
+                normalized["completeness"] = "partial"
             _same(response["usage"], response["normalized"]["usage"], stage)
             if response["raw_redacted"] and normalized["usage"].get("state") == "public_unmetered":
                 # Removed credential bytes cannot be reconstructed from the
