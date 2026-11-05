@@ -275,7 +275,8 @@ def _intelligence_gap_reason(row: dict) -> str:
               "SOURCE_IDENTITY_REQUIRED": "来源要求的访问身份未配置",
               "FETCH_DENIED": "来源拒绝原文访问", "RATE_LIMITED": "来源访问限速",
               "SOURCE_UNAVAILABLE": "来源暂时不可用", "BUDGET_EXHAUSTED": "资料采集额度已用尽",
-              "TEXT_EXTRACTION_FAILED": "原文内容未能完整提取"}
+              "TEXT_EXTRACTION_FAILED": "原文内容未能完整提取",
+              "SOURCE_CREDENTIAL_ECHO": "原文包含无法安全移除的敏感信息，已拒绝保存"}
     return reason + "；来源：" + labels.get(source, source)
 
 

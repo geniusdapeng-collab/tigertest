@@ -7,6 +7,7 @@ from io import BytesIO
 import hashlib
 import json
 import socket
+import zlib
 from urllib.parse import urlsplit
 
 import pytest
@@ -23,13 +24,15 @@ from trading_system.intelligence.transport import HttpResponse, HttpTransport
 from test_intelligence_acquisition import NOW, plan, web
 
 
-def _pdf_bytes():
+def _pdf_bytes(content_text="Revenue 10 million USD", *, compressed=False):
     """A self-contained PDF fixture whose text is known before extraction."""
-    content = b"BT /F1 12 Tf 50 100 Td (Revenue 10 million USD) Tj ET"
+    content = ("BT /F1 12 Tf 50 100 Td (" + content_text + ") Tj ET").encode()
+    if compressed:
+        content = zlib.compress(content)
     objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
-        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+        b"<< /Length " + str(len(content)).encode() + (b" /Filter /FlateDecode" if compressed else b"") + b" >>\nstream\n" + content + b"\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         b"<< /Title (Quarterly supplement) >>"]
     body, offsets = b"%PDF-1.4\n", [0]
@@ -290,3 +293,61 @@ def test_dns_rebinding_cannot_replace_pinned_socket_target(monkeypatch):
     assert adapter.request_url(proxied, {"http": "http://127.0.0.1:7890"}) == "http://93.184.216.34/release"
     with pytest.raises(SourceError):
         transport._validate("https://example.com/next")
+
+
+@pytest.mark.parametrize("kind", ["compressed_pdf", "entity_html", "mixed_html", "entity_metadata"])
+def test_decoded_credential_echo_is_refused_before_any_blob(tmp_path, web, kind):
+    from test_intelligence_acquisition import service
+    from pypdf import PdfReader
+    svc, _, _ = service(tmp_path, web)
+    secret = "fixture-secret"
+    encoded = "".join("&#" + str(ord(character)) + ";" for character in secret)
+    if kind == "compressed_pdf":
+        raw, media = _pdf_bytes(secret, compressed=True), "application/pdf"
+        assert secret.encode() not in raw and secret in PdfReader(BytesIO(raw)).pages[0].extract_text()
+    else:
+        content = ("<article>Public " + (secret + " " if kind == "mixed_html" else "") + encoded + "</article>")
+        if kind == "entity_metadata":
+            content = '<meta name="description" content="' + encoded + '"><article>Public body</article>'
+        raw, media = content.encode(), "text/html"
+    response = HttpResponse("https://example.com/public", 200, {"content-type": media}, raw,
+        NOW.isoformat(), hashlib.sha256(raw).hexdigest(), request_count=2)
+    extracted = extract_response(response)
+    assert secret in extracted.text or secret in json.dumps(extracted.metadata)
+    with pytest.raises(SourceError) as error:
+        svc._observe_result("web_page", "fetch", {"url": response.url}, extracted)
+    assert error.value.code == "SOURCE_CREDENTIAL_ECHO" and error.value.delivery == "returned"
+    assert error.value.bytes_received == len(raw) and error.value.details["request_count"] == 2
+    assert secret not in str(error.value) and secret not in json.dumps(error.value.to_dict())
+    assert not [path for path in (tmp_path / "blobs").rglob("*") if path.is_file()]
+
+
+@pytest.mark.parametrize("echo", [False, True])
+def test_actual_compressed_pdf_collect_rejects_echo_and_preserves_clean_header_control(tmp_path, web, echo):
+    from test_intelligence_acquisition import service
+    from pypdf import PdfReader
+    svc, reg, _ = service(tmp_path, web)
+    content = "fixture-secret" if echo else "Revenue 10 million USD"
+    raw = _pdf_bytes(content, compressed=True)
+    assert b"fixture-secret" not in raw
+    web[1]["/article"] = (302, "text/plain", b"", {"Location": web[0] + "/compressed.pdf"})
+    web[1]["/compressed.pdf"] = (200, "application/pdf", raw, {"ETag": "fixture-secret"})
+    p = plan(reg); job = svc.create_job(p, "compressed-pdf-echo"); acquired = svc.collect(job["job_id"])
+    assert acquired["usage"]["requests"] == 3 and len(web[2]) == 3
+    fetch = next(attempt for attempt in acquired["attempts"] if attempt["operation"] == "fetch")
+    assert fetch["result"]["request_count"] == 2 and fetch["result"]["bytes_received"] == len(raw)
+    blobs = [path.read_bytes() for path in (tmp_path / "blobs").rglob("*") if path.is_file()]
+    assert all(b"fixture-secret" not in body for body in blobs)
+    pdf_blobs = [body for body in blobs if body.startswith(b"%PDF-")]
+    assert all("fixture-secret" not in PdfReader(BytesIO(body)).pages[0].extract_text() for body in pdf_blobs)
+    if echo:
+        assert pdf_blobs == [] and acquired["gaps"][0]["reason"] == "SOURCE_CREDENTIAL_ECHO"
+        assert fetch["status"] == "failed" and fetch["result"]["error"]["details"]["request_count"] == 2
+        assert "fixture-secret" not in json.dumps(fetch["result"]["error"])
+    else:
+        assert pdf_blobs == [raw]
+        document = next(doc for doc in acquired["documents"] if doc["text_kind"] == "pdf_text")
+        assert document["text"] == content and document["completeness"] == "complete"
+        assert document["normalization"]["http_headers"]["etag"] == "[REDACTED_SECRET]"
+    frozen = svc.freeze(job["job_id"], expected_plan_hash=p["plan_hash"], expected_revision=svc.status(job["job_id"])["revision"], expected_frontier_hash=p["frontier_manifest_hash"])
+    verify_bundle(tmp_path, frozen["bundle_id"])

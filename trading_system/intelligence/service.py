@@ -95,15 +95,64 @@ class IntelligenceService:
                 raw = canonical(cleaned)
         return raw, raw != original
 
+    @staticmethod
+    def _decoded_body(result):
+        transport_fields = {"http_headers", "received_at", "retrieved_at", "response_url", "transport_sha256",
+            "request_count", "http_status", "receipt", "bridge"}
+        if isinstance(result, SearchResult):
+            return {"hits": result.hits, "metadata": {key: value for key, value in result.response_metadata.items()
+                if key not in transport_fields}}
+        return {"text": result.text, "title": result.title, "published": result.published,
+            "updated": result.updated, "attachments": result.attachments,
+            "metadata": {key: value for key, value in result.metadata.items() if key not in transport_fields}}
+
+    @staticmethod
+    def _contains_secret(value, secrets):
+        if isinstance(value, str):
+            return any(secret in value for secret in secrets)
+        if isinstance(value, dict):
+            return any(IntelligenceService._contains_secret(str(key), secrets)
+                or IntelligenceService._contains_secret(child, secrets) for key, child in value.items())
+        if isinstance(value, (list, tuple)):
+            return any(IntelligenceService._contains_secret(child, secrets) for child in value)
+        return False
+
+    def _guard_decoded_body(self, source_id, operation, parameters, result, raw, metadata):
+        secrets = self._secrets()
+        decoded_echo = self._contains_secret(self._decoded_body(result), secrets)
+        pdf = isinstance(result, FetchResult) and (result.media_type == "application/pdf" or result.raw_bytes.startswith(b"%PDF-"))
+        def reject():
+            raise SourceError("SOURCE_CREDENTIAL_ECHO", delivery="returned", bytes_received=len(result.raw_bytes),
+                details={"reason": "DECODED_CREDENTIAL_NOT_SAFE_TO_ARCHIVE",
+                    "request_count": metadata.get("request_count", 1 + len((metadata.get("receipt") or {}).get("retry_diagnostics", []))
+                        if isinstance(self.adapters[source_id], DeepSeekBridge) else 1)})
+        if pdf and (decoded_echo or any(secret.encode() in result.raw_bytes for secret in secrets)):
+            reject()
+        if not decoded_echo:
+            return
+        from .replay import replay_observation
+        try:
+            replayed = replay_observation(self.registry.get(source_id), operation, parameters, raw,
+                response_url=metadata.get("response_url", result.final_url if isinstance(result, FetchResult) else self.registry.get(source_id).endpoint),
+                headers=metadata.get("http_headers", {"content-type": result.media_type} if isinstance(result, FetchResult) else {}),
+                received_at=metadata.get("received_at", metadata.get("retrieved_at", timestamp(self.clock()))),
+                normalization_kind="deepseek_bridge" if isinstance(self.adapters[source_id], DeepSeekBridge) else "registered_adapter",
+                transport_sha256=metadata.get("transport_sha256"), request_count=metadata.get("request_count", 1))
+        except (IntelligenceError, ValueError, TypeError, KeyError):
+            reject()
+        if self._contains_secret(self._decoded_body(replayed), secrets):
+            reject()
+
     def _observe_result(self, source_id, operation, parameters, result):
         spec = self.registry.get(source_id)
         secrets = self._secrets()
         if isinstance(result, SearchResult):
             raw = result.raw_bytes or canonical(result.to_dict())
             raw, redacted = self._safe_raw(raw)
+            metadata = safe_value(result.response_metadata, secrets)
+            self._guard_decoded_body(source_id, operation, parameters, result, raw, metadata)
             ref = self.archive.put_blob(raw, "application/json" if spec.kind in {"search", "sec_submissions", "sec_directory", "fred"} else "application/octet-stream")
             normalized = safe_value(result.to_dict(), secrets)
-            metadata = safe_value(result.response_metadata, secrets)
             received = metadata.get("received_at") or timestamp(self.clock())
             transport_sha = metadata.get("transport_sha256") or hashlib.sha256(raw).hexdigest()
             count = metadata.get("request_count", 1)
@@ -124,6 +173,7 @@ class IntelligenceService:
         original_bytes = len(result.raw_bytes)
         raw, redacted = self._safe_raw(result.raw_bytes)
         metadata = safe_value(result.metadata, secrets)
+        self._guard_decoded_body(source_id, operation, parameters, result, raw, metadata)
         if redacted and metadata.get("extractor") == "tiger-main-text/v1":
             from .extract import extract_response
             from .transport import HttpResponse
