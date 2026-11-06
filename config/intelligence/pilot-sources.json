@@ -1,0 +1,37 @@
+{
+  "schema": "tiger.intelligence-pilot-sources/v1",
+  "verified_by": "Current Codex task official-page research, 2026-11-06 Asia/Shanghai",
+  "purpose": "Three public original channels for a bounded AI infrastructure research pilot; this file is provenance, not a connectivity or production acceptance receipt.",
+  "sources": [
+    {
+      "source_id": "nvidia_official_releases",
+      "title": "NVIDIA official Press Releases RSS",
+      "origin": "https://nvidianews.nvidia.com/cats/press_release.xml",
+      "documentation": "https://nvidianews.nvidia.com/rss",
+      "material": "Issuer investor-relations and operating releases",
+      "scope": "Use the official Press Releases category. The All News feed also includes blogs on another hostname; this contract remains limited to newsroom releases. The finite current feed is discovery, not complete historical statutory filing coverage."
+    },
+    {
+      "source_id": "fed_g17_industry_summary",
+      "title": "Federal Reserve G.17 current monthly industrial production and capacity utilization",
+      "origin": "https://www.federalreserve.gov/releases/g17/current/g17.txt",
+      "documentation": "https://www.federalreserve.gov/releases/g17/current/default.htm",
+      "material": "Industry output statistics",
+      "scope": "Preserve 2017=100 index units, percent-change columns, observation periods and preliminary/revision flags. The official current ASCII file contains summary and Tables1/2 including semiconductor industry detail. Source release date observed2026-10-16; not a3-7day news catalyst. A newly retrieved current table cannot prove a past vintage."
+    },
+    {
+      "source_id": "goldman_data_center_power_transcript",
+      "title": "The outlook for data center power demand as AI token use grows",
+      "origin": "https://www.goldmansachs.com/insights/goldman-sachs-exchanges/the-outlook-for-data-center-power-demand-as-ai-token-use-grows",
+      "publication_date": "2026-09-01",
+      "material": "Public institutional commentary and attributed original statements",
+      "scope": "Historical/background episode. It is not a current formal entitled investment research report. Speaker attribution is bound to this original source, not a claim about present employment or role.",
+      "extraction": "One original transcript scroll container; explicit Brian Singer/Carly Davenport terms; no related cards, navigation or footer."
+    }
+  ],
+  "explicit_gaps": [
+    "No paid bank/broker research entitlement is configured by these examples.",
+    "No consensus-forecast subscription, private earnings-call transcript or all-industry coverage is implied.",
+    "The host must load the two example files through trusted TIGER_INTEL_REGISTRY_FILE and TIGER_INTEL_CATALOG_FILE paths; normal tool requests cannot register URLs or credentials."
+  ]
+}

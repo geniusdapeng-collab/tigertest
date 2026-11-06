@@ -11,6 +11,28 @@
 - 新 AI 研究显式选择 `us-public-intelligence-paper-v2` 与 `public-usd`。旧 profile 用于其原有或历史语义，不用省略 profile、演示数据或透传结果代替新研究。
 - 外层平台模型不等于内层研究模型。真实模型配置与 key 必须由可信启动环境提供，不能出现在聊天、请求 JSON、源码或配置示例中。生成配置不验证凭据或付费调用是否可用。
 
+### 可选的完整研究运行时限
+
+公开情报 paper 研究默认仍为 2400 秒。操作者可在可信启动环境设置
+`TIGER_AGENT_RUNTIME_POLICY_FILE`，指向仅含下面两项的本地 JSON；它只适用于
+`us-public-intelligence-paper-v2`，秒数须为 2400–7200 的整数。
+[5400 秒示例](../config/agent-clients/paper-runtime-5400.json.example)用于完整五阶段研究的实测，
+不是新的默认值。
+
+```json
+{"schema":"tiger.agent-runtime-policy/v1","business_deadline_seconds":5400}
+```
+
+启动 CLI/MCP 前由已授权的宿主导出该变量；业务请求仍保持原四字段，不能指定时限或配置路径。
+doctor 的 `business_runtime` 和 v2 describe 的 policy 会显示实际秒数与内容哈希。
+接单时先固定可信时钟，再读取和冻结配置；锁等待、来源准备、归档和 worker 启动都计入同一业务截止。
+每次新运行保存 `runtime-input.json`，policy、admission 和最终 receipt 绑定同一哈希。
+配置文件之后被修改、移走或未提供给只读查询，不会改变原运行的截止与验真。
+未配置该文件的旧运行继续按原 2400 秒合同验证。
+
+该配置不改变模型、五阶段顺序、完整原文、合法输出窗口或风险上限。
+客户端 `--wait` 的等待窗口独立；观察超时后继续查询原 `run_id`，不要换键重跑。
+
 ## 场景一：只检查能否使用
 
 用户可以说：“检查 Tiger 后端是否就绪，告诉我目前能做什么，先不要启动研究。”
@@ -97,3 +119,11 @@ Codex 项目配置由 `--client codex` 生成；Qoder CLI 项目本地配置由 
 交付时分别说明：**配置文件生成/解析**、**原始 STDIO 协议调用**、**实际平台宿主工具发现或调用**。三者不能相互代替。原生工具发现不表示当前聊天已加载，更不证明付费研究已完成；Qoder 宿主是否加载须以所用宿主现场回执证明。
 
 MCP 不可用但 Agent 有本地执行工具时，可按上述同权限 CLI 流程继续。两种执行工具均不可用时，明确报告尚未接通执行入口，不能只生成一份研究文案冒充后端结果。
+
+## 场景四：主题研究与持续情报
+
+当用户要研究产业、比较机构观点、确认人物原话或跟踪来源变化，而没有要求更新 paper 账户时，使用独立 [主题研究入口](INTELLIGENCE-TOPICS.md)：`scripts/tiger-topic.mjs` 或 `scripts/tiger-topic-mcp.mjs`。这类任务不按上文的 paper 四字段请求提交。
+
+外层 Agent 先调用 health，按可信来源目录把问题、主体、期限和资料维度固定为 topic，再在已有 research 部署下提交 research。保存 topic_id/version、幂等键和 job_id；轮询 status 后读 report 独立验真，只从已核验的 readable_report 整理结论。partial 必须同时说明必需缺口，不能称全面研究已经完成。watch/tick 只采集、检测变化并标记待复核，不自动启动付费分析。
+
+主题命名空间的模式为 readonly/acquire/research，paper 入口仍为 readonly/paper，二者不可混用。默认 readonly 不升权；source IDs 和主体必须审定，不接受任意 URL、key 或 provider。断线后保留原请求恢复同一 job；明确的阶段和模型响应检查点只在同 job 内复用，未知付费投递则先对账，不盲目重发。来源、权限或必需原文不可用时按 report 列出缺口，不用宿主文案替代实际后端研究。

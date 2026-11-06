@@ -25,3 +25,7 @@
 若 MCP 未连接，但你有本地执行能力，可按 docs/TIGER-OPERATOR.md 使用同一解释器、mode 和 state-root 的 CLI。由你执行，不把可自主完成的命令拼装和轮询交给用户。没有任何可用执行入口时，准确报告未接通，不假装执行。
 
 分别披露配置生成、原始协议验证、实际宿主发现/调用；不要因为文件存在、工具列出或另一个原生进程可见，就声称当前聊天已挂载或业务已完成。
+
+主题、机构观点、人物原话和来源跟踪任务使用独立 docs/INTELLIGENCE-TOPICS.md 及 scripts/tiger-topic.mjs / tiger-topic-mcp.mjs；它们不写账户，不用 paper 四字段请求。按可信部署的 readonly/acquire/research 能力运行 health→create→research→status→report；保存 topic_id/version、原幂等键、job_id。主题 completed 只说明该主题合同通过独立验真；partial 需列必需缺口，不等于严格 paper 完成。watch/tick 不自动触发付费分析。新资料属于后续固定快照，不能延长原 cutoff。恢复同一 job 的已知检查点，不复用旧语义冒充新研究；付费投递未知则保持预占、先对账。
+
+主题 report 的 data 是独立 report-view：从 data.report 读取封存报告及 state、cutoff、receipt_sha256、readable_report；同时披露 data.current_source_status 的当前本地来源警告。后续 source_unavailable/needs_review 不改原封存字节或摘要，也不自动说明历史事实为假。unknown/no_known_warning 都不等于刚刚联网核验或来源健康，不用旧 completed 隐藏当前待复核提醒。

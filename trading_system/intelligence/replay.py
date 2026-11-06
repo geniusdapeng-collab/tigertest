@@ -28,7 +28,7 @@ class _FrozenTransport:
 
 def replay_observation(spec, operation, parameters, raw_response, *, response_url,
                        headers=None, received_at, normalization_kind="registered_adapter",
-                       transport_sha256=None, request_count=1):
+                       transport_sha256=None, request_count=1, parse_failure=None):
     """Re-run the actual adapter parser against exact frozen bytes and parameters.
 
     A compatibility Bridge stores a sanitized projection with lower evidentiary
@@ -54,12 +54,13 @@ def replay_observation(spec, operation, parameters, raw_response, *, response_ur
             payload["content"], raw_response, "application/json", "provider_markdown", "unknown",
             source_time(payload.get("published")))
     response = HttpResponse(response_url, 200, headers or {}, raw_response, received_at,
-                            transport_sha256 or hashlib.sha256(raw_response).hexdigest(), request_count)
+                            transport_sha256 or hashlib.sha256(raw_response).hexdigest(), request_count, parse_failure)
     transport = _FrozenTransport(response)
     parser_spec = replace(spec, credential_env="TIGER_OFFLINE_REPLAY") if spec.kind in {"search", "fred"} else spec
     registry = SourceRegistry([parser_spec])
     env = {name: "replay-only-not-a-credential" for name in [parser_spec.credential_env, "TIGER_INTEL_SEC_USER_AGENT"] if name}
-    adapter = registry.build_adapters(transport=transport, environment=env)[spec.source_id]
+    parse_policy = parameters.get("_parse_policy", parameters.get("context", {}).get("_parse_policy"))
+    adapter = registry.build_adapters(transport=transport, environment=env, parser_policy=parse_policy)[spec.source_id]
     if operation == "search":
         request = SearchRequest(**{k: tuple(v) if k in {"domains", "entities", "targets"} else v for k, v in parameters.items()})
         result = adapter.search(request)
@@ -83,6 +84,13 @@ def reconstruct_document(document, read_blob, source_manifest):
         raise IntelligenceError("HASH_MISMATCH", "Document source is not in the frozen registry")
     if document.get("source_id") != recipe.get("source_id") or document.get("source_version") != source.get("version"):
         raise IntelligenceError("HASH_MISMATCH", "Document source identity/version differs from normalization policy")
+    contract_hash = recipe.get("source_contract_sha256")
+    if contract_hash is not None and contract_hash != digest(source):
+        raise IntelligenceError("HASH_MISMATCH", "Document registered source contract differs")
+    if "material_types" in document and (not contract_hash
+            or document.get("material_basis") != "registered_source_policy"
+            or document["material_types"] != list(source.get("options", {}).get("material_types", []))):
+        raise IntelligenceError("HASH_MISMATCH", "Document materials are not bound to registered source policy")
     try:
         discovery_recipe = recipe["discovery"]
         discovery_spec = specs[discovery_recipe["source_id"]]
@@ -90,18 +98,22 @@ def reconstruct_document(document, read_blob, source_manifest):
             read_blob(discovery_recipe["raw_response_ref"]), response_url=discovery_recipe["response_url"],
             headers=discovery_recipe["http_headers"], received_at=discovery_recipe["received_at"],
             normalization_kind=discovery_recipe.get("normalization_kind", "registered_adapter"),
-            transport_sha256=discovery_recipe.get("transport_sha256"), request_count=discovery_recipe.get("request_count", 1))
+            transport_sha256=discovery_recipe.get("transport_sha256"), request_count=discovery_recipe.get("request_count", 1),
+            parse_failure=discovery_recipe.get("parse_failure"))
         hit = discovery.hits[recipe["hit_index"]]
         attachment = recipe.get("attachment")
         if attachment:
             parent = attachment["parent_normalization"]
             parent_source = specs[parent["source_id"]]
-            parent_fetch = replay_observation(parent_source, "fetch", parent["parameters"],
+            parent_fetch = replay_observation(parent_source, parent.get("operation", "fetch"), parent["parameters"],
                 read_blob(parent["raw_response_ref"]), response_url=parent["response_url"],
                 headers=parent["http_headers"], received_at=parent["received_at"],
                 normalization_kind=parent.get("kind", "registered_adapter"),
-                transport_sha256=parent.get("transport_sha256"), request_count=parent.get("request_count", 1))
-            if not any(row["url"] == attachment["url"] and row.get("label", "") == attachment["label"] for row in parent_fetch.attachments):
+                transport_sha256=parent.get("transport_sha256"), request_count=parent.get("request_count", 1),
+                parse_failure=parent.get("parse_failure"))
+            parent_attachments = (parent_fetch.hits[parent["hit_index"]].get("attachments", [])
+                                  if isinstance(parent_fetch, SearchResult) else parent_fetch.attachments)
+            if not any(row["url"] == attachment["url"] and row.get("label", "") == attachment["label"] for row in parent_attachments):
                 raise IntelligenceError("HASH_MISMATCH", "Attachment is not linked by the original parent bytes")
             hit = {**hit, "url": attachment["url"], "title": attachment["label"] or hit["title"]}
             if source["kind"] != "sec_submissions":
@@ -111,7 +123,8 @@ def reconstruct_document(document, read_blob, source_manifest):
             fetched = replay_observation(source, "fetch", recipe["parameters"], read_blob(recipe["raw_response_ref"]),
                 response_url=recipe["response_url"], headers=recipe["http_headers"], received_at=recipe["received_at"],
                 normalization_kind=recipe.get("kind", "registered_adapter"),
-                transport_sha256=recipe.get("transport_sha256"), request_count=recipe.get("request_count", 1))
+                transport_sha256=recipe.get("transport_sha256"), request_count=recipe.get("request_count", 1),
+                parse_failure=recipe.get("parse_failure"))
             text, kind, completeness = fetched.text, fetched.text_kind, fetched.completeness
             published = fetched.published or hit.get("published") or source_time(None)
             if published.get("value") is None and hit.get("published", {}).get("value") is not None:
@@ -162,9 +175,45 @@ def reconstruct_document(document, read_blob, source_manifest):
             or document["times"]["event"] != (expected_metadata.get("event_time") or source_time(None))
             or document["times"]["retrieved"] != source_time(recipe["received_at"], evidence={"kind": "source_transport"})):
         raise IntelligenceError("HASH_MISMATCH", "Document origin/event/source metadata differs from raw parser replay")
-    expected_version = digest({"canonical_url": document["canonical_url"], "source_id": document["source_id"],
+    version_input = {"canonical_url": document["canonical_url"], "source_id": document["source_id"],
         "text_sha256": content_hash, "text_kind": kind, "published": published,
-        "updated": (fetched.updated if fetched else hit.get("updated")), "completeness": completeness})
+        "updated": (fetched.updated if fetched else hit.get("updated")), "completeness": completeness,
+        **({"extractor_config_sha256": (fetched.metadata if fetched else hit.get("metadata", {}))["extractor_config_sha256"]}
+           if (fetched.metadata if fetched else hit.get("metadata", {})).get("extractor_config_sha256") else {}),
+        **({"source_contract_sha256": contract_hash} if contract_hash else {})}
+    expected_version = digest(version_input)
+    # Before redacted-html-links/v1, default builtin HTML extraction did not
+    # include a parser configuration hash. The new placeholder-link omission
+    # can add that metadata even when the exact archived text, time, URL and
+    # attachments above still reconstruct identically. Recognize only this
+    # historical shape; explicit policies and recorded hashes remain strict.
+    # No failed/partial extraction is upgraded and no source byte is changed.
+    recorded_metadata = document.get("extraction_metadata", {})
+    parameters = recipe.get("parameters", {})
+    observed_metadata = fetched.metadata if fetched else hit.get("metadata", {})
+    if (not isinstance(recorded_metadata, dict)
+            or "extractor_config_sha256" in recorded_metadata
+            and recorded_metadata["extractor_config_sha256"] != observed_metadata.get("extractor_config_sha256")
+            or expected_version == document["version"] and observed_metadata.get("extractor_config_sha256")
+            and "extractor_config_sha256" not in recorded_metadata):
+        raise IntelligenceError("HASH_MISMATCH", "Recorded parser configuration differs from raw replay")
+    legacy_default_redaction = (
+        source.get("kind") == "web_fetch" and not source.get("options", {}).get("extractor")
+        and recipe.get("operation") == "fetch" and recipe.get("raw_redacted") is True
+        and "_parse_policy" not in parameters
+        and "_parse_policy" not in parameters.get("context", {})
+        and isinstance(recorded_metadata, dict)
+        and recorded_metadata.get("extractor") == "tiger-main-text/v1"
+        and "extractor_config_sha256" not in recorded_metadata
+        and "redaction_markup_policy" not in recorded_metadata
+        and observed_metadata.get("extractor") == "tiger-main-text/v1"
+        and observed_metadata.get("redaction_markup_policy") == "tiger.redacted-html-links/v1"
+        and kind in {"html_main", "html_text"} and completeness == "partial")
+    version_contract = "recorded_normalization"
+    if expected_version != document["version"] and legacy_default_redaction:
+        expected_version = digest({key: value for key, value in version_input.items()
+                                   if key != "extractor_config_sha256"})
+        version_contract = "legacy-default-redacted-html-without-parser-hash/v1"
     expected_doc_id = "intel_" + hashlib.sha256(document["canonical_url"].encode()).hexdigest()[:24]
     if (document["version"] != expected_version or document["doc_id"] != expected_doc_id
             or document["id"] != "docver_" + digest({"doc_id": expected_doc_id, "version": expected_version})[:32]):
@@ -195,7 +244,10 @@ def reconstruct_document(document, read_blob, source_manifest):
     if document["authority"]["proof_ref"].get("content_sha256") != content_hash:
         raise IntelligenceError("HASH_MISMATCH", "Authority proof is not bound to normalized text")
     return {"text_sha256": content_hash, "text_kind": kind, "completeness": completeness,
-            "published": published, "source_id": document["source_id"], "raw_response_sha256": recipe["raw_response_ref"]["sha256"]}
+            "published": published, "source_id": document["source_id"],
+            "raw_response_sha256": recipe["raw_response_ref"]["sha256"],
+            **({"version_contract": version_contract}
+               if version_contract != "recorded_normalization" else {})}
 
 
 def verify_bundle(root, bundle_id, *, tenant="public", expected_plan_hash=None, expected_registry_sha256=None):

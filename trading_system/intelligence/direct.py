@@ -44,6 +44,27 @@ def _metadata(observed, **extra):
             "http_headers": observed.headers, "request_count": observed.request_count, **extra}
 
 
+def _conditional(request):
+    value = request.context.get("conditional", {})
+    if not isinstance(value, dict) or set(value) - {"etag", "last_modified"}:
+        raise SourceError("CONTRACT_INVALID", delivery="not_sent")
+    headers = {}
+    for key, header in (("etag", "If-None-Match"), ("last_modified", "If-Modified-Since")):
+        if value.get(key) is not None:
+            text = value[key]
+            if not isinstance(text, str) or not text or len(text) > 2048 or any(ord(x) < 32 for x in text):
+                raise SourceError("CONTRACT_INVALID", delivery="not_sent")
+            headers[header] = text
+    return headers
+
+
+def _not_modified(response, request):
+    return SearchResult([], {"url": response.url, "conditional": request.context.get("conditional", {})},
+        _metadata(response, http_status=304, not_modified=True, complete_history=False),
+        {"state": "public_unmetered", "requests": response.request_count,
+         "bytes": 0, "requires_reconciliation": False}, ["NOT_MODIFIED_CHECK_ONLY"], b"")
+
+
 def _windowed(hits, request):
     matching, unknown = [], 0
     for hit in hits:
@@ -62,11 +83,24 @@ def _windowed(hits, request):
 
 
 class FeedSource(WebFetch):
-    def __init__(self, spec, transport, *, user_agent=None):
+    def __init__(self, spec, transport, *, user_agent=None, credential=None):
         super().__init__(transport)
-        self.spec, self.user_agent = spec, user_agent
+        self.spec, self.user_agent, self.credential = spec, user_agent, credential
+
+    def _headers(self, url):
+        headers = {"User-Agent": self.user_agent or "WorkLoom-Tiger-Research/1.0"}
+        def origin(value):
+            parsed = urlsplit(value)
+            return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+        # Content hosts are an allowlist for fetching public attachments, not an
+        # authorization grant to receive the registered endpoint's credential.
+        if self.credential and origin(url) == origin(self.spec.endpoint):
+            headers["Authorization"] = "Bearer " + self.credential
+        return headers
 
     def available(self):
+        if self.spec.credential_env and not self.credential:
+            return {"available": False, "reason": "SOURCE_AUTH_REQUIRED"}
         configured = bool(self.spec.endpoint) and (self.spec.kind != "issuer_rss" or bool(self.spec.options.get("issuer_id")))
         if any(host in {"sec.gov", "www.sec.gov", "data.sec.gov"} for host in self.spec.allowed_hosts) and not self.user_agent:
             configured = False
@@ -74,10 +108,14 @@ class FeedSource(WebFetch):
 
     def search(self, request: SearchRequest):
         if not self.available()["available"]:
-            raise SourceError("SOURCE_IDENTITY_REQUIRED", delivery="not_sent")
-        headers = {"User-Agent": self.user_agent or "WorkLoom-Tiger-Research/1.0"}
+            raise SourceError(self.available()["reason"], delivery="not_sent")
+        headers = self._headers(self.spec.endpoint)
+        conditional = _conditional(request)
+        headers.update(conditional)
         response = self.transport.request("GET", self.spec.endpoint, headers=headers,
-                                          allowed_hosts=self.spec.allowed_hosts)
+            allowed_hosts=self.spec.allowed_hosts, allow_not_modified=bool(conditional))
+        if response.status == 304:
+            return _not_modified(response, request)
         root = _xml(response.body)
         items = [e for e in root.iter() if _local(e) in {"item", "entry"}]
         hits = []
@@ -112,12 +150,63 @@ class FeedSource(WebFetch):
                 "Date filtering retains unknown precision entries and cannot prove an entire historical window is covered"], response.body)
 
     def fetch(self, url):
+        if not self.available()["available"]:
+            raise SourceError(self.available()["reason"], delivery="not_sent")
         response = self.transport.request("GET", url,
-            headers={"User-Agent": self.user_agent or "WorkLoom-Tiger-Research/1.0"},
+            headers=self._headers(url),
             allowed_hosts=self.spec.allowed_hosts)
         filing = (self.spec.kind == "sec_submissions" and re.fullmatch(
             r"/Archives/edgar/data/\d{1,10}/\d{18}/[^/]+", urlsplit(url).path) is not None)
-        return extract_response(response, original_url=url, trusted_filing=filing)
+        return extract_response(response, original_url=url, trusted_filing=filing,
+            policy=self.parse_policy, deadline=getattr(self.transport, "deadline", None))
+
+
+class RegisteredPageSource(FeedSource):
+    """A trusted fixed original page/PDF/table, not a user-supplied URL tool."""
+    def __init__(self, spec, transport, *, credential=None, user_agent=None):
+        super().__init__(spec, transport, user_agent=user_agent, credential=credential)
+
+    def available(self):
+        if self.spec.credential_env and not self.credential:
+            return {"available": False, "reason": "SOURCE_AUTH_REQUIRED"}
+        return super().available()
+
+    def fetch(self, url):
+        if not self.available()["available"]:
+            raise SourceError(self.available()["reason"], delivery="not_sent")
+        headers = self._headers(url)
+        response = self.transport.request("GET", url, headers=headers, allowed_hosts=self.spec.allowed_hosts)
+        return extract_response(response, original_url=url, policy=self.parse_policy,
+                                deadline=getattr(self.transport, "deadline", None))
+
+    def search(self, request):
+        if not self.available()["available"]:
+            raise SourceError(self.available()["reason"], delivery="not_sent")
+        conditional = _conditional(request)
+        headers = {**self._headers(self.spec.endpoint), **conditional}
+        response = self.transport.request("GET", self.spec.endpoint, headers=headers,
+            allowed_hosts=self.spec.allowed_hosts, allow_not_modified=bool(conditional))
+        if response.status == 304:
+            return _not_modified(response, request)
+        fetched = extract_response(response, original_url=self.spec.endpoint, policy=self.parse_policy,
+                                   deadline=getattr(self.transport, "deadline", None))
+        authority = {"scope": self.spec.authority_scopes[0], "issuer_id": self.spec.options.get("issuer_id"),
+            "series_ids": self.spec.options.get("series_ids", []), "proof_type": "unverified",
+            "proof_ref": {"source_id": self.spec.source_id, "source_url": response.url,
+                          "response_sha256": response.transport_sha256}}
+        hit = {"url": fetched.final_url, "title": fetched.title or self.spec.options.get("title", self.spec.source_id),
+            "snippet": "", "text": fetched.text, "text_kind": fetched.text_kind,
+            "completeness": fetched.completeness, "published": fetched.published, "updated": fetched.updated,
+            "metadata": fetched.metadata, "attachments": fetched.attachments,
+            "raw_metadata": {"authority": authority, "original_material": True,
+                "material_types": self.spec.options.get("material_types", []),
+                "publisher": self.spec.options.get("publisher"), "business_unit": self.spec.options.get("business_unit"),
+                "author_ids": self.spec.options.get("author_ids", []),
+                "entitlement_ref": self.spec.options.get("entitlement_ref")}}
+        return SearchResult([hit], {"url": self.spec.endpoint, "conditional": request.context.get("conditional", {})},
+            _metadata(response, http_status=response.status, not_modified=False),
+            {"state": "public_unmetered", "requests": response.request_count, "bytes": len(response.body),
+             "requires_reconciliation": False}, [], response.body)
 
 
 class SecSubmissionsSource(FeedSource):

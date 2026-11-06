@@ -69,6 +69,9 @@ def answer(stage, schema, payload):
 def intelligence_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt=None, long_body=False,
                          authoritative=False):
     original, root, args, provider, denied = daily_fixture(tmp_path, monkeypatch)
+    # Prompt replay selects only a recognized frozen implementation, exactly
+    # as the real admitted worker does; a mutable checkout is not its authority.
+    freeze_source(root)
     (original.paths.work_dir / "universe.txt").write_text("AAPL\nMU\nNVDA\n")
     allowed = {"AAPL", "MU", "NVDA"}
     from trading_system.markets import get_market

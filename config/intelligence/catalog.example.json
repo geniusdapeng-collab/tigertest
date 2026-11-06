@@ -1,0 +1,34 @@
+{
+  "schema": "tiger.intelligence-catalog/v1",
+  "version": "operator-reviewed-example-v1",
+  "sources": {
+    "sec_submissions": {
+      "material_types": ["issuer_disclosure", "capital_positions"],
+      "publisher": "US Securities and Exchange Commission",
+      "business_unit": "EDGAR",
+      "author_ids": [],
+      "entitlement": {"kind": "public"},
+      "allowed_uses": ["discovery", "topic_analysis", "historical_baseline"],
+      "cadence_seconds": 300,
+      "priority": 5,
+      "maximum_requests_per_day": 5000
+    },
+    "fed_policy": {
+      "material_types": ["macro_policy", "person_statement"],
+      "publisher": "Board of Governors of the Federal Reserve System",
+      "business_unit": "Public monetary policy releases",
+      "entitlement": {"kind": "public"},
+      "cadence_seconds": 900,
+      "priority": 10
+    },
+    "fred": {
+      "material_types": ["macro_policy", "industry_data"],
+      "publisher": "Federal Reserve Bank of St. Louis",
+      "business_unit": "FRED",
+      "entitlement": {"kind": "public"},
+      "cadence_seconds": 86400,
+      "priority": 20
+    }
+  },
+  "entities": {}
+}

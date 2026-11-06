@@ -2,7 +2,7 @@
   "meta": {
     "name": "WorkLoom 开源组件清单（oss-watch）",
     "version": 1,
-    "updated": "2026-10-03",
+    "updated": "2026-11-06",
     "rule": "凡进入运行时的开源组件必须登记于此；四仓底座公共段保持一致；AGPL 仅独立进程形态"
   },
   "components": [
@@ -371,11 +371,13 @@
       "name": "scrapling",
       "repo": "https://github.com/D4Vinci/Scrapling",
       "channel": "github",
-      "current": "选型入库（技能市场执行面技能）",
+      "current": "历史签名技能包（本轮未升级或运行）",
       "cadence": "weekly",
       "gate": "standard",
       "scope": "skills/registry/scrapling-collector",
-      "notes": "BSD-3-Clause；纯本地零出站；经 skill:forge 集成"
+      "notes": "保留技能市场 1.0.0 既有 HMAC 包与 registry manifest；目录登记不证明安装或执行。Tiger 根 Python requirements.txt 固定 scrapling==0.5.1，原生链路仅解析已获取 HTML 字节；普通 HTTP 采集由 Tiger transport 独立执行，动态浏览器/stealth/XHR/Spider/代理/MCP 未启用。旧 SKILL.md 中 DynamicFetcher、capture_xhr 等示例不作为本轮入口；不得从 egressDomains=[] 推断采集任务零出站。授权依赖来源继续按合同与真实凭据就绪状态披露。详见 skills/registry/scrapling-collector/NATIVE-INTEGRATION.md",
+      "license": "BSD-3-Clause",
+      "usage": "watch"
     },
     {
       "name": "kaykit-adventurers",

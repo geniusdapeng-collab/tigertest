@@ -25,6 +25,9 @@ def build_plan(request: dict, registry) -> dict:
         raise IntelligenceError("CONTRACT_INVALID", "Plan request must be an object")
     if safe_value(request) != request:
         raise IntelligenceError("POLICY_DENIED", "Credentials or unsafe source URLs cannot be persisted in a plan")
+    acquisition_mode = request.get("acquisition_mode", "live")
+    if not isinstance(acquisition_mode, str) or acquisition_mode not in {"live", "snapshot_only"}:
+        raise IntelligenceError("CONTRACT_INVALID", "Unknown acquisition mode")
     run_id = identifier(request.get("run_id"), "run id")
     cutoff = aware(request.get("as_of"))
     if request.get("market", "us") != "us":
@@ -173,7 +176,7 @@ def build_plan(request: dict, registry) -> dict:
                     start_date=(cutoff.date() - timedelta(days=450)).isoformat(), end_date=cutoff.date().isoformat(),
                     entities=tuple(universe[x] for x in selected), targets=targets,
                     context={"material_type": spec.kind, "vintage_date": cutoff.date().isoformat()}).to_dict()})
-    priority = {"sec_directory": 0, "sec_submissions": 1, "feed": 2, "issuer_rss": 2,
+    priority = {"sec_directory": 0, "sec_submissions": 1, "feed": 2, "issuer_rss": 2, "page": 2,
                 "bls_calendar": 3, "fred": 3, "cboe_csv": 3, "search": 4}
     queries.sort(key=lambda q: priority[registry.get(q["source_id"]).kind])
     result = {"schema": PLAN_SCHEMA, "run_id": run_id, "market": "us", "as_of": cutoff.isoformat(),
@@ -189,6 +192,11 @@ def build_plan(request: dict, registry) -> dict:
             "reason": "Bounded serial dispatch preserves main-thread execution evidence writes"}}
     if result["as_of_basis"] not in {"strict_observed_version", "historical_reconstruction"}:
         raise IntelligenceError("CONTRACT_INVALID", "Unknown historical evidence basis")
+    if acquisition_mode == "snapshot_only":
+        # Keep the complete decision scope and source policy. This is a trusted
+        # no-dispatch choice, never permission to shrink required coverage.
+        result["acquisition_mode"] = acquisition_mode
+        result["query_plan"] = []
     return {**result, "plan_hash": digest(result)}
 
 

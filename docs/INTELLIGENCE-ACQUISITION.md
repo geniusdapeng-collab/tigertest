@@ -120,6 +120,33 @@ node scripts/tiger-intelligence.mjs evidence \
 原文档案作为基线。基线只复用截止前已观察的原文版本，不复用模型标注或旧语义分。
 独立采集 CLI 只开放内置来源 ID 的启用，不从请求加载任意配置文件或 IR URL。
 
+### 只用已观察原文完成新一轮研究
+
+可信启动者可在同一 registry JSON 顶层设置 `"acquisition_mode": "snapshot_only"`，
+与 `sources`、`registered_sources`、`policy_version` 并列；示例见
+[snapshot-only.json.example](../config/intelligence/snapshot-only.json.example)。它仍须通过
+`TIGER_INTEL_ARCHIVE_ROOT` 显式绑定原文档案。启动时封存审定股票池与共享主题的有限
+原文快照，快照为空、来源身份不匹配、原文损坏或未知 mode 都拒绝接纳。普通业务请求
+继续只有原四字段，不能选择采集模式、路径或扩大来源权限。
+
+该模式保留完整审定池、行情候选、研究问题、来源许可、请求与 Fetch 预算、两轮研究
+及五个必需语义模型阶段。采集计划明确记录 `acquisition_mode` 并绑定 plan hash，
+采集不构造可联网的来源适配器，所有来源调用在占用请求预算之前被拒绝；初次收集只读入已经
+验证的原文版本。后续补查记录 `SNAPSHOT_ONLY_NO_LIVE_ACQUISITION` 和零来源调用，
+资料不足仍为 partial/null；不能由已有一篇文章推断其他目标已经覆盖。模型仍需重新
+读取这些原文并完成结构化、舆情、风险、板块叙事与决策，旧模型标注或结论不会复用。
+
+新模式的 admission 快照仅将元数据读取预算设为 32 MiB，以容纳多个完整原文的
+索引与关联回执；仍限制最多 256 原文、2048 候选扫描、64 MiB 原文加文本、8192
+关联和 30 秒准备时限。这些实际 limits 随 manifest 冻结并在离线证明中重验。
+缺省和显式 `live` 保留原 8 MiB 元数据预算与原采集计划字节合同。达到任一边界仍
+披露快照缺口，不裁剪文章或把 partial 改成 completed。
+
+返回的 `intelligence.acquisition_mode`、零来源用量、已封存 baseline 和重新生成的
+五阶段模型回执分别可核查。零来源请求不表示模型免费，也不消除另一轮任务已存在
+的未知计费用量；原失败运行和未知回执应保留原身份，新的 snapshot-only 研究使用
+新的 admission、任务与回执。离线证明只使用本轮封存原文，不要求旧档案一直在线。
+
 可信配置可以只启用官方直接源而不启用搜索工具。必需资料不足时，补查仍留下
 `research_unavailable` 回执并冻结 partial 包，五个必需语义阶段照常调用模型；
 不能把「没有可用搜索工具」当成模型失败或改用规则代替。最终资料状态与来源诊断

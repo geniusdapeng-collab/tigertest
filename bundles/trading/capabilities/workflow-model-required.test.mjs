@@ -58,6 +58,23 @@ test("trusted required startup keeps model settings and SEC contact while stripp
   assert.equal(required.PYTHONPATH, undefined);
 });
 
+test("trusted runtime policy can reach readonly inspection without forwarding model credentials or accepting API paths", async t => {
+  const fixture = await runnerFixture(t);
+  const key = "TIGER_AGENT_RUNTIME_POLICY_FILE";
+  const previous = process.env[key];
+  process.env[key] = "/fixture-config/runtime-5400.json";
+  t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  const inspection = runtimeEnvironment({ [key]: process.env[key], LLM_API_KEY: "fixture-model-key" });
+  assert.equal(inspection[key], process.env[key]);
+  assert.equal(inspection.LLM_API_KEY, undefined);
+  await invokeWorkflow("doctor", {}, fixture.options);
+  await invokeWorkflow("describe", { profile: REQUIRED_PROFILE }, fixture.options);
+  assert.deepEqual((await fixture.calls()).map(call => call.envNames.includes(key)), [true, true]);
+  for (const field of ["runtime_policy", "runtime_policy_file", "runtime_input", key]) {
+    assert.throws(() => validateRequest("run", { ...REQUEST, [field]: "/untrusted-policy.json" }), { code: "INVALID_REQUEST" });
+  }
+});
+
 test("required startup environment is selected by the fixed profile and run operation", async t => {
   const fixture = await runnerFixture(t);
   const settings = { LLM_BACKEND: "api", LLM_BASE_URL: "https://api.deepseek.com",

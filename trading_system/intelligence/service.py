@@ -52,8 +52,35 @@ class IntelligenceService:
         if self.readonly:
             raise IntelligenceError("ACCESS_DENIED", "Acquisition service is read only")
 
+    def use_host_limits(self, root):
+        self._write()
+        from .host_limits import HostRequestPolicy, bind_host_policy
+        exemptions = [spec.options["public_data_contract"] for spec in self.registry.sources.values()
+                      if spec.enabled and "public_data_contract" in spec.options]
+        bind_host_policy(self.adapters, HostRequestPolicy(root, tenant=self.archive.tenant,
+            respect_robots=True, public_api_exemptions=exemptions))
+        return self
+
+    @staticmethod
+    def _acquisition_mode(plan):
+        if not isinstance(plan, dict):
+            raise IntelligenceError("CONTRACT_INVALID", "Acquisition plan must be an object")
+        if "acquisition_mode" not in plan:
+            return "live"
+        if plan["acquisition_mode"] != "snapshot_only":
+            raise IntelligenceError("CONTRACT_INVALID", "Unknown frozen acquisition mode")
+        if plan.get("query_plan") != []:
+            raise IntelligenceError("PLAN_CONFLICT", "Snapshot-only plans cannot contain source dispatches")
+        refs = plan.get("baseline_refs")
+        if (not isinstance(refs, list) or not refs or any(not isinstance(ref, dict)
+                or not isinstance(ref.get("manifest_sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", ref["manifest_sha256"]) is None for ref in refs)):
+            raise IntelligenceError("POLICY_DENIED", "Snapshot-only acquisition requires an admitted raw baseline")
+        return "snapshot_only"
+
     def create_job(self, plan, replay_key):
         self._write()
+        self._acquisition_mode(plan)
         if plan.get("source_registry_sha256") != self.registry.public_manifest()["sha256"]:
             raise IntelligenceError("PLAN_CONFLICT", "Plan uses another registered source policy")
         if safe_value(plan, self._secrets()) != plan:
@@ -147,7 +174,8 @@ class IntelligenceService:
         spec = self.registry.get(source_id)
         secrets = self._secrets()
         if isinstance(result, SearchResult):
-            raw = result.raw_bytes or canonical(result.to_dict())
+            raw = (result.raw_bytes if result.response_metadata.get("not_modified") is True
+                   else result.raw_bytes or canonical(result.to_dict()))
             raw, redacted = self._safe_raw(raw)
             metadata = safe_value(result.response_metadata, secrets)
             self._guard_decoded_body(source_id, operation, parameters, result, raw, metadata)
@@ -174,16 +202,25 @@ class IntelligenceService:
         raw, redacted = self._safe_raw(result.raw_bytes)
         metadata = safe_value(result.metadata, secrets)
         self._guard_decoded_body(source_id, operation, parameters, result, raw, metadata)
-        if redacted and metadata.get("extractor") == "tiger-main-text/v1":
+        if redacted and metadata.get("extractor") in {"tiger-main-text/v1", "tiger-scrapling/v1"}:
             from .extract import extract_response
+            from .parse_limits import redact_partial
             from .transport import HttpResponse
             original_usage = result.usage
-            reparsed = extract_response(HttpResponse(safe_value(result.final_url, secrets), metadata.get("http_status", 200),
+            response = HttpResponse(safe_value(result.final_url, secrets), metadata.get("http_status", 200),
                 metadata.get("http_headers", {"content-type": safe_value(result.media_type, secrets)}), raw,
                 metadata.get("retrieved_at", timestamp(self.clock())),
                 metadata.get("transport_sha256", hashlib.sha256(result.raw_bytes).hexdigest()),
-                metadata.get("request_count", 1)), original_url=safe_value(result.url, secrets),
-                trusted_filing=metadata.get("trusted_filing_extraction") is True)
+                metadata.get("request_count", 1))
+            parser_policy = parameters.get("_parse_policy", parameters.get("context", {}).get("_parse_policy"))
+            if metadata.get("parse_failure") is not None:
+                reparsed = redact_partial(response, original=result, original_url=safe_value(result.url, secrets),
+                    policy=parser_policy)
+            else:
+                transport = getattr(self.adapters[source_id], "transport", None)
+                reparsed = extract_response(response, original_url=safe_value(result.url, secrets),
+                    trusted_filing=metadata.get("trusted_filing_extraction") is True,
+                    policy=parser_policy, deadline=getattr(transport, "deadline", None))
             result = replace(reparsed, usage=original_usage, completeness="partial")
             metadata = safe_value(result.metadata, secrets)
         elif redacted:
@@ -204,12 +241,50 @@ class IntelligenceService:
     def _call(self, job_id, source_id, operation, parameters, *, ordinal=0):
         self._write()
         plan = self.archive.plan(job_id)
+        if self._acquisition_mode(plan) == "snapshot_only":
+            # Refuse before even inspecting an adapter, reserving an attempt,
+            # recording an observation, or touching provider-side budgets.
+            raise IntelligenceError("POLICY_DENIED", "Snapshot-only acquisition cannot dispatch sources",
+                details={"reason": "SNAPSHOT_ONLY_NO_LIVE_ACQUISITION"})
         if source_id not in plan["source_ids"]:
             raise IntelligenceError("POLICY_DENIED", "Source is not admitted by the frozen plan")
         spec = self.registry.get(source_id)
         adapter = self.adapters.get(source_id)
         if adapter is None:
             raise SourceError("SOURCE_AUTH_REQUIRED", delivery="not_sent")
+        parser = getattr(adapter, "parse_policy", None)
+        if parser is not None and (operation == "fetch" or spec.kind == "page"):
+            from .parse_limits import ParsePolicy
+            parser = ParsePolicy.from_value(parser).public()
+            parameters = ({**parameters, "context": {**parameters.get("context", {}), "_parse_policy": parser}}
+                          if operation == "search" else {**parameters, "_parse_policy": parser})
+        # Resume only the same known operation in the same job. Completed
+        # responses are durable checkpoints; an uncertain dispatch must be
+        # reconciled before any replacement request can cross the network.
+        all_attempts = self.archive.attempts(job_id)
+        previous_attempts = [row for row in all_attempts
+            if row["source_id"] == source_id and row["operation"] == operation
+            and row["ordinal"] == ordinal and row["request"].get("parameters") == parameters]
+        if previous_attempts:
+            previous_attempt = previous_attempts[-1]
+            if previous_attempt["status"] in {"completed", "empty"}:
+                return previous_attempt["attempt_id"], previous_attempt["result"]["observation"]
+            if previous_attempt["status"] in {"inflight", "unknown"}:
+                raise IntelligenceError("RECONCILIATION_REQUIRED", "Original source dispatch has no settled response",
+                    details={"attempt_id": previous_attempt["attempt_id"]})
+            saved_error = previous_attempt.get("result", {}).get("error", {})
+            details = saved_error.get("details", {})
+            raise SourceError(saved_error.get("code", "SOURCE_UNAVAILABLE"),
+                http_status=details.get("http_status"), retry_after=details.get("retry_after"),
+                delivery=details.get("delivery", "unknown"), bytes_received=details.get("bytes_received", 0),
+                details={**details, "attempt_id": previous_attempt["attempt_id"]})
+        if spec.kind == "search" or spec.credential_env:
+            unresolved = [row for row in all_attempts
+                if row["status"] in {"inflight", "unknown"}
+                or row.get("result", {}).get("usage", {}).get("requires_reconciliation")]
+            if unresolved:
+                raise IntelligenceError("RECONCILIATION_REQUIRED", "Original paid dispatch or usage must be reconciled before another request",
+                    details={"attempt_id": unresolved[0]["attempt_id"]})
         deadline = self._deadline(job_id)
         if time.monotonic() >= deadline:
             raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition deadline exhausted")
@@ -243,21 +318,31 @@ class IntelligenceService:
         previous = None
         if transport is not None:
             previous = (getattr(transport, "max_bytes", plan["limits"]["bytes"]),
-                        getattr(transport, "deadline", None), getattr(transport, "max_hops", 6))
+                        getattr(transport, "deadline", None), getattr(transport, "max_hops", 6),
+                        getattr(transport, "minimum_interval_seconds", 0.0), getattr(transport, "robots_required", True))
             transport.max_bytes = remaining_bytes
             transport.deadline, transport.max_hops = deadline, reserved
+            transport.minimum_interval_seconds = spec.minimum_interval_seconds
+            transport.robots_required = spec.kind not in {"search", "fred", "sec_directory", "sec_submissions"} or operation == "fetch"
         native_meter = None
         def invoke():
             nonlocal native_meter
+            from .parse_limits import capture_parse_runtime
             budget = getattr(adapter.client, "native_io_budget", None) if isinstance(adapter, DeepSeekBridge) else None
             context = budget(max_bytes=remaining_bytes, deadline=deadline) if callable(budget) else nullcontext(None)
-            with context as meter:
+            http_budget = getattr(transport, "io_budget", None)
+            http_context = http_budget(request_limit=reserved, byte_limit=remaining_bytes) if callable(http_budget) else nullcontext()
+            with context as meter, http_context, capture_parse_runtime() as parser_trace:
                 native_meter = meter
                 if operation == "search":
                     result = adapter.search(_parameters(parameters))
                 else:
                     result = adapter.fetch(parameters["url"])
             observation = self._observe_result(source_id, operation, parameters, result)
+            if parser_trace["records"]:
+                observation["parser_runtime_trace"] = parser_trace
+            if parser is not None:
+                observation["parameters"] = parameters
             if native_meter and native_meter.get("transport_observed"):
                 observation["bytes_received"] = native_meter["bytes_received"]
                 observation["request_count"] = native_meter["request_count"]
@@ -289,9 +374,15 @@ class IntelligenceService:
             if count is None:
                 count = 0 if error.delivery == "not_sent" else reserved if isinstance(adapter, DeepSeekBridge) else 1
             outcome = "unknown" if error.delivery == "unknown" else "failed"
+            public_get = spec.kind != "search" and not spec.credential_env
+            unbilled_native_error = (source_id == "deepseek" and urlsplit(spec.endpoint).hostname == "api.deepseek.com"
+                                     and error.delivery == "returned"
+                                     and error.http_status is not None)
+            uncertain_usage = error.delivery != "not_sent" and not public_get and not unbilled_native_error
             result = {"error": error.to_dict(), "bytes_received": error.bytes_received, "request_count": count,
-                "usage": {"state": "not_sent" if error.delivery == "not_sent" else "unknown",
-                          "requires_reconciliation": error.delivery != "not_sent"}}
+                "usage": {"state": "not_sent" if error.delivery == "not_sent" else
+                          "public_unmetered" if public_get else "not_charged" if unbilled_native_error else "unknown",
+                          "requires_reconciliation": uncertain_usage}}
             self.archive.settle_attempt(job_id, attempt_id, outcome, result)
             error.details["attempt_id"] = attempt_id
             raise
@@ -304,7 +395,8 @@ class IntelligenceService:
         finally:
             self._next_source[source_id] = time.monotonic() + spec.minimum_interval_seconds
             if transport is not None and previous is not None:
-                transport.max_bytes, transport.deadline, transport.max_hops = previous
+                (transport.max_bytes, transport.deadline, transport.max_hops,
+                 transport.minimum_interval_seconds, transport.robots_required) = previous
         hits = observation["normalized"].get("hits") if operation == "search" else None
         result = {"observation": observation, "bytes_received": observation["bytes_received"],
                   "request_count": observation["request_count"], "usage": observation["usage"]}
@@ -349,15 +441,20 @@ class IntelligenceService:
         completeness = value.get("completeness", "unknown")
         if (fetch or discovery).get("raw_redacted"):
             completeness = "partial"
+        spec = self.registry.get(source_id)
+        source_contract_hash = digest(spec.public()) if spec.kind == "page" or spec.options.get("material_types") else None
         version = digest({"canonical_url": canonicalized, "source_id": source_id,
             "text_sha256": text_ref["sha256"], "text_kind": kind, "published": published,
-            "updated": value.get("updated"), "completeness": completeness})
+            "updated": value.get("updated"), "completeness": completeness,
+            **({"extractor_config_sha256": value.get("metadata", {})["extractor_config_sha256"]}
+               if value.get("metadata", {}).get("extractor_config_sha256") else {}),
+            **({"source_contract_sha256": source_contract_hash} if source_contract_hash else {})})
         doc_id = "intel_" + hashlib.sha256(canonicalized.encode()).hexdigest()[:24]
         doc_version_id = "docver_" + digest({"doc_id": doc_id, "version": version})[:32]
         authority_source = source_id
         authority = self._authority(authority_source, hit, text_ref["sha256"], fetch=fetch, discovery=discovery)
         normalization = {"kind": (fetch or discovery)["normalization_kind"], "source_id": source_id,
-            "operation": "fetch" if fetch else "search", "parameters": {"url": original} if fetch else discovery.get("parameters", {}),
+            "operation": "fetch" if fetch else "search", "parameters": fetch.get("parameters", {"url": original}) if fetch else discovery.get("parameters", {}),
             "hit_index": hit_index, "raw_response_ref": raw_ref,
             "response_url": (fetch or discovery)["response_url"], "http_headers": (fetch or discovery)["http_headers"],
             "received_at": (fetch or discovery)["received_at"],
@@ -372,6 +469,12 @@ class IntelligenceService:
                 "request_count": discovery["request_count"],
                 "http_headers": discovery["http_headers"], "received_at": discovery["received_at"], "hit_index": hit_index}}
         normalization["discovery"]["normalization_kind"] = discovery["normalization_kind"]
+        if source_contract_hash:
+            normalization["source_contract_sha256"] = source_contract_hash
+        if value.get("metadata", {}).get("parse_failure"):
+            normalization["parse_failure"] = value["metadata"]["parse_failure"]
+        if hit.get("metadata", {}).get("parse_failure"):
+            normalization["discovery"]["parse_failure"] = hit["metadata"]["parse_failure"]
         retrieved = source_time((fetch or discovery)["received_at"], evidence={"kind": "source_transport"})
         record = {"schema": DOCUMENT_SCHEMA, "id": doc_version_id, "doc_id": doc_id, "version": version,
             "canonical_url": canonicalized, "original_url": original, "final_url": url,
@@ -385,6 +488,11 @@ class IntelligenceService:
             "attachments": value.get("attachments", []), "authority": authority,
             "normalization": normalization, "source_attempt_refs": [x for x in [discovery_attempt, fetch_attempt] if x],
             "source_metadata": hit.get("raw_metadata", {}), "extraction_metadata": value.get("metadata", {})}
+        materials = spec.options.get("material_types")
+        if materials:
+            if not isinstance(materials, (list, tuple)) or any(not isinstance(item, str) for item in materials):
+                raise IntelligenceError("CONTRACT_INVALID", "Registered source materials must be a typed list")
+            record.update(material_types=list(materials), material_basis="registered_source_policy")
         return safe_value(record, self._secrets())
 
     def _directory(self, job_id):
@@ -422,7 +530,7 @@ class IntelligenceService:
         if "fetch" not in self.registry.get(fetch_source).capabilities:
             return None
         attempt, observation = self._call(job_id, fetch_source, "fetch", {"url": hit["url"]})
-        observation["parameters"] = {"url": hit["url"]}
+        observation.setdefault("parameters", {"url": hit["url"]})
         # Authority belongs to the registered direct source, not to a general
         # search provider. A web discovery/fetch remains discovery authority.
         authority_source = discovery_source if original_spec.kind != "search" else fetch_source
@@ -433,6 +541,13 @@ class IntelligenceService:
         if observation["normalized"].get("metadata", {}).get("extraction_error"):
             self._mark(job_id, cell_ids, status="unverifiable", reason="TEXT_EXTRACTION_FAILED",
                        attempt_refs=[attempt], document_ids=[stored["id"]])
+        self._attachments(job_id, original_spec, fetch_source, hit, discovery, index,
+                          search_attempt, request, cell_ids, stored)
+        return stored
+
+    def _attachments(self, job_id, original_spec, fetch_source, hit, discovery, index,
+                     search_attempt, request, cell_ids, stored):
+        document = stored
         for attachment in document["attachments"]:
             # Attachments are bounded by the same explicit tool/byte/deadline
             # quota. Their absence stays a visible gap; no text is truncated.
@@ -442,6 +557,7 @@ class IntelligenceService:
                 if original_spec.kind != "sec_submissions":
                     extra_hit["published"] = source_time(None, evidence={"kind": "attachment_publication_unknown",
                         "parent_document_id": stored["id"]})
+                authority_source = original_spec.source_id if original_spec.kind != "search" else fetch_source
                 extra = self._document(authority_source, extra_hit, discovery, hit_index=index,
                     fetch=extra_observation, discovery_attempt=search_attempt, fetch_attempt=extra_attempt)
                 extra["parent_document_id"] = stored["id"]
@@ -449,12 +565,14 @@ class IntelligenceService:
                     "parent_document_id": stored["id"], "parent_normalization": stored["normalization"]}
                 self.archive.put_document(job_id, extra, attempt_id=extra_attempt, rank=index,
                     targets=request.targets, entities=request.entities, hit={"attachment_of": stored["id"]})
+                if extra_observation["normalized"].get("metadata", {}).get("extraction_error"):
+                    self._mark(job_id, cell_ids, status="unverifiable", reason="ATTACHMENT_TEXT_EXTRACTION_FAILED",
+                        attempt_refs=[extra_attempt], document_ids=[stored["id"], extra["id"]])
             except (SourceError, IntelligenceError) as error:
                 if error.code in {"ARCHIVE_UNAVAILABLE", "HASH_MISMATCH", "FROZEN_BUNDLE"}:
                     raise
                 self._mark(job_id, cell_ids, status="unverifiable", reason="ATTACHMENT_" + error.code,
                     document_ids=[stored["id"]])
-        return stored
 
     def _query(self, job_id, source_id, request, cell_ids):
         spec = self.registry.get(source_id)
@@ -467,12 +585,16 @@ class IntelligenceService:
                 try:
                     attempt, observation = self._call(job_id, source_id, "search", compiled.to_dict(), ordinal=ordinal)
                     attempts.append(attempt)
-                    observation["parameters"] = compiled.to_dict()
+                    observation.setdefault("parameters", compiled.to_dict())
                     break
                 except SourceError as error:
                     if error.details.get("attempt_id"):
                         attempts.append(error.details["attempt_id"])
                     retryable = error.code in {"RATE_LIMITED", "SOURCE_UNAVAILABLE", "SOURCE_TIMEOUT"}
+                    if retryable and error.delivery == "unknown" and (spec.kind == "search" or spec.credential_env):
+                        self._mark(job_id, cell_ids, status="unverifiable", reason="RECONCILIATION_REQUIRED", attempt_refs=attempts)
+                        raise IntelligenceError("RECONCILIATION_REQUIRED", "Paid source response is unknown; retain original attempt",
+                            details={"attempt_id": error.details.get("attempt_id")}) from None
                     delay = error.retry_after if error.retry_after is not None else float(2**ordinal)
                     if not retryable or ordinal >= spec.max_retries or time.monotonic() + delay >= self._deadline(job_id):
                         self._mark(job_id, cell_ids, status="unverifiable", reason=error.code, attempt_refs=attempts)
@@ -497,6 +619,11 @@ class IntelligenceService:
                     compiled_requests.append(replace(compiled, context={**compiled.context,
                         "issuer_name": parent["issuer_name"], "submissions_file": {"name": older["name"], "parent_ref": parent}}))
             hits = observation["normalized"]["hits"]
+            if observation["normalized"].get("response_metadata", {}).get("not_modified") is True:
+                self.archive.append(job_id, "source_check_not_modified", {"source_id": source_id,
+                    "attempt_id": attempts[-1], "received_at": observation["received_at"],
+                    "http_headers": observation["http_headers"]})
+                continue
             if not hits:
                 self._mark(job_id, cell_ids, status="missing", reason="NO_RESULTS_NOT_NO_EVENT", attempt_refs=attempts)
                 continue
@@ -506,7 +633,13 @@ class IntelligenceService:
                 stored = self.archive.put_document(job_id, document, attempt_id=attempts[-1], rank=index,
                     targets=compiled.targets, entities=compiled.entities, hit=hit)
                 collected.append(stored["id"])
-                if hit.get("text_kind") not in {"data", "calendar", "identity_directory"}:
+                if spec.kind == "page":
+                    self._attachments(job_id, spec, source_id, hit, observation, index,
+                                      attempts[-1], compiled, cell_ids, stored)
+                    if hit.get("metadata", {}).get("extraction_error"):
+                        self._mark(job_id, cell_ids, status="unverifiable", reason="TEXT_EXTRACTION_FAILED",
+                                   attempt_refs=attempts, document_ids=[stored["id"]])
+                if spec.kind != "page" and hit.get("text_kind") not in {"data", "calendar", "identity_directory"}:
                     try:
                         full = self._fetch(job_id, source_id, hit, observation, index, attempts[-1], compiled, cell_ids)
                         if full:
@@ -529,17 +662,22 @@ class IntelligenceService:
     def collect(self, job_id):
         self._write()
         plan = self.archive.plan(job_id)
+        if self._acquisition_mode(plan) == "snapshot_only":
+            return self._collect_snapshot(job_id, plan)
         self.archive.set_state(job_id, "running")
         for entry in plan["query_plan"]:
             request_hash = digest(entry["request"])
-            completed = [row for row in self.archive.attempts(job_id) if row["source_id"] == entry["source_id"]
-                         and row["operation"] == "search" and row["request"].get("parameters", {}).get("context", {}).get("plan_request_hash") == request_hash]
+            completed = [row for row in self.archive.events(job_id, kind="query_completed")
+                         if row["payload"].get("source_id") == entry["source_id"]
+                         and row["payload"].get("plan_request_hash") == request_hash]
             if completed:
                 continue
             request = _parameters(entry["request"])
             request = replace(request, context={**request.context, "plan_request_hash": request_hash})
             try:
                 self._query(job_id, entry["source_id"], request, entry["cell_ids"])
+                self.archive.append(job_id, "query_completed", {"source_id": entry["source_id"],
+                    "plan_request_hash": request_hash})
             except IntelligenceError as error:
                 if error.code not in {"BUDGET_EXHAUSTED", "CONTRACT_INVALID", "SOURCE_AUTH_REQUIRED", "SOURCE_IDENTITY_REQUIRED"}:
                     raise
@@ -553,6 +691,135 @@ class IntelligenceService:
                     reason=cell.get("connection_reason", "HOLDINGS_NOT_CONNECTED"))
         self.archive.set_state(job_id, "partial")
         return self._acquired(job_id)
+
+    def _snapshot_documents(self, job_id, plan):
+        """Only completed, admitted raw imports may enter a no-dispatch job."""
+        try:
+            return self._verified_snapshot_documents(job_id, plan)
+        except IntelligenceError:
+            raise
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise IntelligenceError("HASH_MISMATCH", "Snapshot-only import evidence is malformed") from None
+
+    def _verified_snapshot_documents(self, job_id, plan):
+        admitted = {ref.get("manifest_sha256") for ref in plan["baseline_refs"] if isinstance(ref, dict)}
+        versions = {}
+        for event in self.archive.events(job_id, kind="baseline_import"):
+            receipt = event["payload"]
+            manifest = receipt.get("manifest")
+            scoped = isinstance(manifest, dict) and manifest.get("schema") == "topic_snapshot/v1"
+            exclusions = {"manifest_sha256", "snapshot_id"} if scoped else {"manifest_sha256"}
+            if (not isinstance(manifest, dict) or manifest.get("schema") not in {"tiger.intelligence-baseline/v1", "topic_snapshot/v1"}
+                    or receipt.get("manifest_sha256") not in admitted
+                    or manifest.get("manifest_sha256") != receipt.get("manifest_sha256")
+                    or digest({key: value for key, value in manifest.items() if key not in exclusions}) != receipt["manifest_sha256"]
+                    or manifest.get("as_of") != plan["as_of"] or manifest.get("tenant") != self.archive.tenant
+                    or manifest.get("archive_id") != receipt.get("archive_id") or manifest.get("event_head") != receipt.get("event_head")
+                    or receipt.get("reused_semantic_annotations") is not False or receipt.get("reused_search_results") is not False):
+                raise IntelligenceError("HASH_MISMATCH", "Snapshot-only import lacks its admitted raw manifest")
+            if scoped and (manifest.get("snapshot_id") != receipt.get("snapshot_id")
+                    or manifest.get("snapshot_id") != "snapshot_" + receipt["manifest_sha256"][:32]
+                    or manifest.get("fixed_event_frontier") != receipt.get("event_head")
+                    or manifest.get("registry_hash") not in {"", plan["source_registry_sha256"]}):
+                raise IntelligenceError("HASH_MISMATCH", "Snapshot-only import differs from its fixed snapshot")
+            eligible = {row["id"]: row for row in manifest["versions"]}
+            for version in receipt.get("versions", []):
+                if eligible.get(version.get("id")) != version:
+                    raise IntelligenceError("HASH_MISMATCH", "Snapshot-only version is not admitted")
+                if version["id"] in versions and versions[version["id"]] != version:
+                    raise IntelligenceError("HASH_MISMATCH", "Snapshot-only version has conflicting import bindings")
+                versions[version["id"]] = version
+        if not versions:
+            raise IntelligenceError("POLICY_DENIED", "Snapshot-only acquisition requires imported raw originals")
+        documents = self.archive.documents(job_id)
+        if {row["id"] for row in documents} != set(versions):
+            raise IntelligenceError("HASH_MISMATCH", "Snapshot-only documents differ from completed raw imports")
+        for document in documents:
+            original = {key: value for key, value in document.items()
+                if key not in {"target_ids", "requested_entity_ids", "query_hit_ids"}}
+            if (digest(original) != versions[document["id"]].get("document_sha256")
+                    or document["source_id"] not in plan["source_ids"]
+                    or document["source_version"] != self.registry.get(document["source_id"]).version):
+                raise IntelligenceError("HASH_MISMATCH", "Snapshot-only original differs from its admitted version")
+        return documents
+
+    def _collect_snapshot(self, job_id, plan):
+        current = self.status(job_id)
+        if current["bundle"]:
+            raise IntelligenceError("FROZEN_BUNDLE", "Frozen jobs cannot acquire")
+        previous = self.archive.events(job_id, kind="snapshot_collection_completed")
+        deadline = self._deadline(job_id)
+        expired = time.monotonic() >= deadline
+        documents = self._snapshot_documents(job_id, plan)
+        document_ids = sorted(row["id"] for row in documents)
+        if previous:
+            checkpoint = previous[-1]["payload"]
+            if (set(checkpoint) != {"mode", "document_ids", "documents_sha256", "state", "request_count", "bytes_received"}
+                    or checkpoint.get("mode") != "snapshot_only" or checkpoint.get("request_count") != 0
+                    or checkpoint.get("bytes_received") != 0 or checkpoint.get("state") not in {"partial", "budget_exhausted"}
+                    or checkpoint.get("document_ids") != document_ids or checkpoint.get("documents_sha256") != digest(documents)):
+                raise IntelligenceError("PLAN_CONFLICT", "Snapshot-only collection changed after its checkpoint")
+            return self._acquired(job_id)
+        expired = expired or time.monotonic() >= deadline
+        self.archive.set_state(job_id, "running")
+        gaps = {row["cell_id"]: row for row in current["gaps"]}
+        for cell in plan["coverage_cells"]:
+            if cell["material_type"] == "connection":
+                outside = cell.get("connection_reason") in {"HOLDING_OUTSIDE_REVIEWED_ROSTER", "PENDING_OUTSIDE_REVIEWED_ROSTER"}
+                self._mark(job_id, [cell["cell_id"]], status="unverifiable" if outside else "not_connected",
+                    reason=cell.get("connection_reason", "HOLDINGS_NOT_CONNECTED"))
+            elif gaps[cell["cell_id"]]["status"] not in {"present", "conflicting"}:
+                refs = [row["id"] for row in documents if cell["target_id"] in row.get("target_ids", [])
+                    or cell.get("entity_id") in row.get("requested_entity_ids", [])]
+                self._mark(job_id, [cell["cell_id"]], status="unverifiable" if expired else "pending" if refs else "missing",
+                    reason="BUDGET_EXHAUSTED" if expired else "SEMANTIC_ASSESSMENT_REQUIRED" if refs else "SNAPSHOT_ONLY_NO_IMPORTED_MATERIAL",
+                    document_ids=refs)
+        self.archive.set_state(job_id, "partial")
+        self.archive.append(job_id, "snapshot_collection_completed", {"mode": "snapshot_only",
+            "document_ids": document_ids, "documents_sha256": digest(documents), "state": "budget_exhausted" if expired else "partial",
+            "request_count": 0, "bytes_received": 0})
+        return self._acquired(job_id)
+
+    def monitor_outcome(self, job_id):
+        """Credential-free receipt projection for the persistent watch worker."""
+        status = self.status(job_id)
+        observations = []
+        cursor = {}
+        for attempt in status["attempts"]:
+            result = attempt.get("result", {})
+            observed = result.get("observation", {})
+            normalized = observed.get("normalized", {})
+            metadata = normalized.get("response_metadata", normalized.get("metadata", {}))
+            error = result.get("error", {})
+            details = error.get("details", {})
+            headers = observed.get("http_headers", {})
+            http_status = metadata.get("http_status", 200 if observed else details.get("http_status"))
+            if attempt["operation"] == "search" and observed:
+                for key, header in (("etag", "etag"), ("last_modified", "last-modified")):
+                    if headers.get(header):
+                        cursor[key] = headers[header]
+            observations.append({"attempt_id": attempt["attempt_id"], "source_id": attempt["source_id"],
+                "status": attempt["status"], "http_status": http_status,
+                "retry_after": details.get("retry_after"), "received_at": observed.get("received_at"),
+                "etag": headers.get("etag"), "last_modified": headers.get("last-modified"),
+                "not_modified": metadata.get("not_modified", False), "error": error.get("code"),
+                "delivery": details.get("delivery", "returned" if observed else "unknown"),
+                "usage": result.get("usage", {"state": "unknown", "requires_reconciliation": True}),
+                "request_count": result.get("request_count", attempt["request"].get("reserved_requests", 1))})
+        documents = self.archive.documents(job_id)
+        unknown = any(row["status"] in {"inflight", "unknown"}
+                      or row["usage"].get("requires_reconciliation") for row in observations)
+        successful = any(row["status"] in {"completed", "empty"} for row in observations)
+        errors = [row for row in observations if row["error"]]
+        return {"job_id": job_id, "state": status["state"], "acquisition_complete": not unknown,
+            "success": successful and not errors and not unknown, "usage": status["usage"],
+            "document_versions": [{"id": doc["id"], "doc_id": doc["doc_id"], "version": doc["version"],
+                "raw_sha256": doc["raw_blob"]["sha256"], "text_sha256": doc["text_blob"]["sha256"],
+                "extractor_config_sha256": doc.get("extraction_metadata", {}).get("extractor_config_sha256")}
+                for doc in documents], "observations": observations, "cursor": cursor,
+            "not_modified": bool(observations) and all(row["not_modified"] for row in observations),
+            "retry_after": max((row["retry_after"] or 0 for row in observations), default=0),
+            "requires_reconciliation": unknown, "gaps": status["gaps"]}
 
     def _acquired(self, job_id):
         return {**self.status(job_id), "documents": self.archive.documents(job_id),
@@ -597,12 +864,18 @@ class IntelligenceService:
             if receipt.get("manifest_sha256") not in admitted_baselines:
                 continue
             manifest = receipt.get("manifest")
-            if (not isinstance(manifest, dict) or manifest.get("schema") != "tiger.intelligence-baseline/v1"
+            scoped = isinstance(manifest, dict) and manifest.get("schema") == "topic_snapshot/v1"
+            hash_exclusions = {"manifest_sha256", "snapshot_id"} if scoped else {"manifest_sha256"}
+            if (not isinstance(manifest, dict) or manifest.get("schema") not in {"tiger.intelligence-baseline/v1", "topic_snapshot/v1"}
                     or manifest.get("manifest_sha256") != receipt["manifest_sha256"]
-                    or digest({key: value for key, value in manifest.items() if key != "manifest_sha256"}) != receipt["manifest_sha256"]
+                    or digest({key: value for key, value in manifest.items() if key not in hash_exclusions}) != receipt["manifest_sha256"]
                     or manifest.get("tenant") != self.archive.tenant or manifest.get("as_of") != plan["as_of"]
                     or manifest.get("archive_id") != receipt.get("archive_id") or manifest.get("event_head") != receipt.get("event_head")):
                 raise IntelligenceError("HASH_MISMATCH", "Completed baseline import is not bound to its original admitted manifest")
+            if scoped and (manifest.get("snapshot_id") != receipt.get("snapshot_id")
+                    or manifest.get("snapshot_id") != "snapshot_" + receipt["manifest_sha256"][:32]
+                    or manifest.get("fixed_event_frontier") != receipt.get("event_head")):
+                raise IntelligenceError("HASH_MISMATCH", "Scoped import is not bound to its fixed snapshot")
             eligible_versions = {version["id"]: version for version in manifest["versions"]}
             for version in receipt.get("versions", []):
                 if eligible_versions.get(version.get("id")) != version:
@@ -665,29 +938,84 @@ class IntelligenceService:
     def research(self, job_id, gap_ids=None, replay_key=None):
         self._write()
         plan = self.archive.plan(job_id)
+        acquisition_mode = self._acquisition_mode(plan)
         current = self.status(job_id)
         if current["bundle"]:
             raise IntelligenceError("FROZEN_BUNDLE", "Frozen jobs cannot start research")
+        if acquisition_mode == "snapshot_only":
+            self._snapshot_documents(job_id, plan)
         previous = self.archive.events(job_id, kind="research_started")
-        if replay_key and any(row["payload"].get("replay_key") == replay_key for row in previous):
+        matching = [row["payload"] for row in previous
+                    if replay_key and row["payload"].get("replay_key") == replay_key]
+        completed = {row["payload"]["round"] for row in self.archive.events(job_id, kind="research_completed")}
+        if matching and "requested_gap_ids" in matching[-1] and matching[-1]["requested_gap_ids"] != gap_ids:
+            raise IntelligenceError("IDEMPOTENCY_CONFLICT", "Research key is bound to another gap request")
+        if matching and matching[-1]["round"] in completed:
             return self._acquired(job_id)
-        if len(previous) >= plan["limits"]["rounds"] - 1:
-            raise IntelligenceError("BUDGET_EXHAUSTED", "Research round quota exhausted")
-        gaps = [g for g in current["gaps"] if g["status"] != "present"]
-        if gap_ids is not None:
-            if not isinstance(gap_ids, list) or any(not isinstance(value, str) for value in gap_ids):
-                raise IntelligenceError("CONTRACT_INVALID", "Research gap ids must be a typed array")
-            unknown = set(gap_ids) - {g["cell_id"] for g in gaps}
-            if unknown:
-                raise IntelligenceError("CONTRACT_INVALID", "Research gap is not unresolved")
-            gaps = [g for g in gaps if g["cell_id"] in gap_ids]
+        if matching:
+            frozen = matching[-1]
+            if "requested_gap_ids" in frozen and frozen["requested_gap_ids"] != gap_ids:
+                raise IntelligenceError("IDEMPOTENCY_CONFLICT", "Research key is bound to another gap request")
+            gaps = frozen.get("gaps", [g for g in current["gaps"] if g["cell_id"] in frozen["gap_ids"]])
+            round_number = frozen["round"]
+        else:
+            if len(previous) >= plan["limits"]["rounds"] - 1:
+                raise IntelligenceError("BUDGET_EXHAUSTED", "Research round quota exhausted")
+            gaps = [g for g in current["gaps"] if g["status"] != "present"]
+            if gap_ids is not None:
+                if not isinstance(gap_ids, list) or any(not isinstance(value, str) for value in gap_ids):
+                    raise IntelligenceError("CONTRACT_INVALID", "Research gap ids must be a typed array")
+                unknown = set(gap_ids) - {g["cell_id"] for g in gaps}
+                if unknown:
+                    raise IntelligenceError("CONTRACT_INVALID", "Research gap is not unresolved")
+                gaps = [g for g in gaps if g["cell_id"] in gap_ids]
+            round_number = len(previous) + 2
+            frozen = None
+        if acquisition_mode == "snapshot_only":
+            if frozen is None:
+                frozen = {"round": round_number, "gap_ids": [gap["cell_id"] for gap in gaps],
+                    "gaps": gaps, "replay_key": replay_key, "requested_gap_ids": gap_ids, "query_plan": [], "mode": "snapshot_only"}
+                self.archive.append(job_id, "research_started", frozen)
+            elif frozen.get("query_plan") != [] or frozen.get("mode") != "snapshot_only":
+                raise IntelligenceError("PLAN_CONFLICT", "Snapshot-only research cannot resume source dispatches")
+            expired = time.monotonic() >= self._deadline(job_id)
+            latest = {row["cell_id"]: row for row in current["gaps"]}
+            cells = {cell["cell_id"]: cell for cell in plan["coverage_cells"]}
+            affected = [gap for gap in gaps if cells[gap["cell_id"]]["material_type"] != "connection"
+                and latest[gap["cell_id"]]["status"] != "present"]
+            reason = "BUDGET_EXHAUSTED" if expired else "SNAPSHOT_ONLY_NO_LIVE_ACQUISITION"
+            self.archive.append(job_id, "research_unavailable", {"round": round_number,
+                "mode": acquisition_mode, "reason": reason, "code": "BUDGET_EXHAUSTED" if expired else "POLICY_DENIED",
+                "gap_ids": [gap["cell_id"] for gap in affected], "request_count": 0, "bytes_received": 0})
+            for gap in affected:
+                if latest[gap["cell_id"]]["status"] != "conflicting":
+                    self._mark(job_id, [gap["cell_id"]], status="unverifiable", reason=reason,
+                        attempt_refs=gap.get("attempt_refs", []), document_ids=gap.get("document_ids", []))
+            self.archive.append(job_id, "research_completed", {"round": round_number,
+                "state": "budget_exhausted" if expired else "unavailable", "mode": "snapshot_only"})
+            return self._acquired(job_id)
         providers = [s for s in plan["source_ids"] if self.registry.get(s).kind == "search"]
-        self.archive.append(job_id, "research_started", {"round": len(previous) + 2,
-            "gap_ids": [g["cell_id"] for g in gaps], "replay_key": replay_key})
         cells = {c["cell_id"]: c for c in plan["coverage_cells"]}
+        queries = []
+        for gap in sorted(gaps, key=lambda g: not g["required"]):
+            cell = cells[gap["cell_id"]]
+            if cell["material_type"] == "connection" or not providers:
+                continue
+            request = SearchRequest(cell["query"] + " primary source correction withdrawal contrary evidence", count=10,
+                start_date=(aware(plan["as_of"]).date() - timedelta(days=cell["window_days"])).isoformat(),
+                end_date=aware(plan["as_of"]).date().isoformat(), topic="news", targets=(cell["target_id"],),
+                entities=(cell["entity_id"],) if cell["entity_id"] else (), context={"research_round": round_number})
+            queries.append({"source_id": providers[min(round_number - 1, len(providers) - 1)],
+                "request": request.to_dict(), "cell_ids": [cell["cell_id"]]})
+        if frozen is None:
+            frozen = {"round": round_number, "gap_ids": [g["cell_id"] for g in gaps],
+                "gaps": gaps, "replay_key": replay_key, "requested_gap_ids": gap_ids, "query_plan": queries}
+            self.archive.append(job_id, "research_started", frozen)
+        else:
+            queries = frozen.get("query_plan", queries)
         if not providers:
             affected = [gap for gap in gaps if cells[gap["cell_id"]]["material_type"] != "connection"]
-            self.archive.append(job_id, "research_unavailable", {"round": len(previous) + 2,
+            self.archive.append(job_id, "research_unavailable", {"round": round_number,
                 "reason": "NO_REGISTERED_DISCOVERY_PROVIDER", "code": "SOURCE_AUTH_REQUIRED",
                 "gap_ids": [gap["cell_id"] for gap in affected], "request_count": 0, "bytes_received": 0})
             for gap in affected:
@@ -695,28 +1023,32 @@ class IntelligenceService:
                     self._mark(job_id, [gap["cell_id"]], status="unverifiable",
                         reason="NO_REGISTERED_DISCOVERY_PROVIDER", attempt_refs=gap.get("attempt_refs", []),
                         document_ids=gap.get("document_ids", []))
+            self.archive.append(job_id, "research_completed", {"round": round_number, "state": "unavailable"})
             return self._acquired(job_id)
-        for gap in sorted(gaps, key=lambda g: not g["required"]):
-            cell = cells[gap["cell_id"]]
-            if cell["material_type"] == "connection":
+        done = {row["payload"]["query_sha256"] for row in self.archive.events(job_id, kind="research_query_completed")
+                if row["payload"].get("round") == round_number}
+        state = "completed"
+        for entry in queries:
+            query_sha = digest(entry)
+            if query_sha in done:
                 continue
-            query = cell["query"] + " primary source correction withdrawal contrary evidence"
-            request = SearchRequest(query, count=10,
-                start_date=(aware(plan["as_of"]).date() - timedelta(days=cell["window_days"])).isoformat(),
-                end_date=aware(plan["as_of"]).date().isoformat(), topic="news", targets=(cell["target_id"],),
-                entities=(cell["entity_id"],) if cell["entity_id"] else (), context={"research_round": len(previous) + 2})
-            provider = providers[min(len(previous) + 1, len(providers) - 1)]
             try:
-                self._query(job_id, provider, request, [cell["cell_id"]])
+                self._query(job_id, entry["source_id"], _parameters(entry["request"]), entry["cell_ids"])
             except IntelligenceError as error:
                 if error.code != "BUDGET_EXHAUSTED":
                     raise
-                self._mark(job_id, [cell["cell_id"]], status="unverifiable", reason=error.code)
+                self._mark(job_id, entry["cell_ids"], status="unverifiable", reason=error.code)
+                state = "budget_exhausted"
                 break
+            self.archive.append(job_id, "research_query_completed", {"round": round_number, "query_sha256": query_sha})
+        self.archive.append(job_id, "research_completed", {"round": round_number, "state": state})
         return self._acquired(job_id)
 
     def freeze(self, job_id, *, expected_plan_hash, expected_revision, expected_frontier_hash):
         self._write()
+        plan = self.archive.plan(job_id)
+        if self._acquisition_mode(plan) == "snapshot_only":
+            self._snapshot_documents(job_id, plan)
         return self.archive.freeze(job_id, expected_plan_hash=expected_plan_hash,
             expected_revision=expected_revision, expected_frontier_hash=expected_frontier_hash,
             source_manifest=self.registry.public_manifest(),
@@ -725,21 +1057,35 @@ class IntelligenceService:
     def archive_versions(self, as_of, entities=()):
         return self.archive.archive_versions(as_of, entities)
 
-    def import_baseline(self, job_id, baseline_archive_root, *, version_ids, expected_manifest_hash):
+    def import_baseline(self, job_id, baseline_archive_root, *, version_ids, expected_manifest_hash, snapshot_id=None):
         self._write()
         plan = self.archive.plan(job_id)
         origin = Archive(baseline_archive_root, tenant=self.archive.tenant, readonly=True)
-        manifest = origin.archive_versions(plan["as_of"])
+        if snapshot_id is not None:
+            from .snapshots import read_snapshot
+            manifest, originals = read_snapshot(origin, snapshot_id, documents=True)
+            original_documents = {row["id"]: row for row in originals}
+            if (manifest["as_of"] != plan["as_of"]
+                    or manifest.get("registry_hash") not in {"", plan["source_registry_sha256"]}):
+                raise IntelligenceError("PLAN_CONFLICT", "Scoped snapshot cutoff or source policy differs")
+        else:
+            # Retain historical baseline semantics for frozen pre-snapshot runs.
+            manifest = origin.archive_versions(plan["as_of"])
+            original_documents = None
         if manifest["manifest_sha256"] != expected_manifest_hash:
             raise IntelligenceError("PLAN_CONFLICT", "Baseline manifest changed")
         if not any(ref.get("manifest_sha256") == expected_manifest_hash for ref in plan["baseline_refs"]):
             raise IntelligenceError("PLAN_CONFLICT", "Baseline was not bound to this plan")
         eligible = {row["id"]: row for row in manifest["versions"]}
+        if (not isinstance(version_ids, (list, tuple))
+                or any(not isinstance(value, str) for value in version_ids)
+                or len(set(version_ids)) != len(version_ids)):
+            raise IntelligenceError("CONTRACT_INVALID", "Baseline versions must be a unique typed array")
         if set(version_ids) - eligible.keys():
             raise IntelligenceError("TIME_UNVERIFIED", "Baseline version was not observed before cutoff")
         imported = []
         for version_id in version_ids:
-            doc = origin.document(version_id)
+            doc = original_documents[version_id] if original_documents is not None else origin.document(version_id)
             if doc["source_id"] not in plan["source_ids"] or doc["source_version"] != self.registry.get(doc["source_id"]).version:
                 raise IntelligenceError("PLAN_CONFLICT", "Baseline source contract changed")
             from .replay import reconstruct_document
@@ -753,6 +1099,8 @@ class IntelligenceService:
             "event_head": manifest["event_head"], "versions": [eligible[x] for x in imported],
             "imported_at": timestamp(self.clock()), "reused_semantic_annotations": False,
             "reused_search_results": False}
+        if snapshot_id is not None:
+            receipt["snapshot_id"] = snapshot_id
         self.archive.append(job_id, "baseline_import", receipt)
         return receipt
 

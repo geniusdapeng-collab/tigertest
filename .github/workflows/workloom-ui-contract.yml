@@ -123,6 +123,7 @@ jobs:
             scripts/tiger-agent.test.mjs scripts/tiger-agent-mcp.test.mjs \
             scripts/tiger-agent-config.test.mjs \
             scripts/tiger-intelligence.test.mjs scripts/tiger-intelligence-workflow.test.mjs \
+            scripts/tiger-topic.test.mjs \
             scripts/agent-capabilities.test.mjs governance/scripts/agent-capabilities.test.mjs
       - name: 三端逐一类型检查与生产构建
         run: |

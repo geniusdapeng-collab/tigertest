@@ -8,8 +8,11 @@ import json
 import re
 from urllib.parse import urljoin, urlsplit
 
-from .contracts import FetchResult, SourceError, source_time
+from .contracts import FetchResult, SourceError, digest, source_time
 from .transport import HttpResponse
+
+_REDACTED_LINK_POLICY = "tiger.redacted-html-links/v1"
+_REDACTION_MARKERS = ("[REDACTED_URL]", "[REDACTED_SECRET]", "[REDACTED_TOKEN]")
 
 
 class _Page(HTMLParser):
@@ -21,6 +24,7 @@ class _Page(HTMLParser):
         self.title_depth = self.h1_depth = 0
         self.meta, self.attachments, self.jsonld = {}, [], []
         self.script_type, self.script_data, self.anchor = None, [], None
+        self.redacted_links_omitted = False
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -40,8 +44,13 @@ class _Page(HTMLParser):
             name = attrs.get("property") or attrs.get("name") or attrs.get("itemprop")
             if name and attrs.get("content"):
                 self.meta[name.lower()] = attrs["content"]
-        if tag == "a" and attrs.get("href"):
-            self.anchor = {"url": urljoin(self.url, attrs["href"]), "label": ""}
+        if tag == "a":
+            self.anchor = None
+            if attrs.get("href"):
+                if any(marker in attrs["href"] for marker in _REDACTION_MARKERS):
+                    self.redacted_links_omitted = True
+                else:
+                    self.anchor = {"url": urljoin(self.url, attrs["href"]), "label": ""}
         if tag in {"p", "div", "h1", "h2", "h3", "h4", "li", "tr", "br", "section"}:
             self._add("\n")
         if tag in {"td", "th"}:
@@ -111,8 +120,9 @@ def _date_fields(value, found=None):
     return found
 
 
-def extract_response(response: HttpResponse, *, original_url: str | None = None,
-                     trusted_filing: bool = False) -> FetchResult:
+def _extract_response_inner(response: HttpResponse, *, original_url: str | None = None,
+                            trusted_filing: bool = False, max_pages: int | None = None,
+                            max_text_bytes: int | None = None) -> FetchResult:
     media = response.headers.get("content-type", "application/octet-stream").split(";", 1)[0].strip().lower()
     body, url = response.body, response.url
     metadata = {"http_status": response.status, "http_headers": response.headers,
@@ -132,9 +142,16 @@ def extract_response(response: HttpResponse, *, original_url: str | None = None,
             pdf = PdfReader(BytesIO(body), strict=True)
             if pdf.is_encrypted:
                 raise ValueError
-            pages, offset, locations = [], 0, []
+            if max_pages is not None and len(pdf.pages) > max_pages:
+                return finish(original_url or url, url, "", "", body, "application/pdf",
+                    "attachment", "partial", metadata={**metadata, "extraction_error": "PARSER_PAGE_LIMIT"})
+            pages, offset, locations, text_bytes = [], 0, [], 0
             for index, page in enumerate(pdf.pages, 1):
                 text = page.extract_text() or ""
+                text_bytes += len(text.encode()) + 2
+                if max_text_bytes is not None and text_bytes > max_text_bytes:
+                    return finish(original_url or url, url, "", "", body, "application/pdf",
+                        "attachment", "partial", metadata={**metadata, "extraction_error": "PARSER_TEXT_LIMIT"})
                 pages.append(text)
                 locations.append({"page": index, "start": offset, "end": offset + len(text)})
                 offset += len(text) + 2
@@ -169,6 +186,11 @@ def extract_response(response: HttpResponse, *, original_url: str | None = None,
         published = parser.meta.get("article:published_time") or dates.get("datePublished") or parser.meta.get("datepublished")
         updated = parser.meta.get("article:modified_time") or dates.get("dateModified") or parser.meta.get("datemodified")
         attachments = list({row["url"]: row for row in parser.attachments}.values())
+        if parser.redacted_links_omitted:
+            # The same deterministic rule runs during source normalization
+            # and offline replay. Placeholders never become relative GETs.
+            metadata.update(redaction_markup_policy=_REDACTED_LINK_POLICY,
+                extractor_config_sha256=digest({"engine": "builtin", "redaction_markup_policy": _REDACTED_LINK_POLICY}))
         paywall = any('"isAccessibleForFree": false' in json.dumps(item) for item in parser.jsonld)
         complete = bool(content) and (bool(main) or trusted_filing) and not paywall
         return finish(original_url or url, url,
@@ -182,3 +204,23 @@ def extract_response(response: HttpResponse, *, original_url: str | None = None,
     kind = "data" if media in {"application/json", "text/csv", "application/csv", "application/xml", "text/xml", "text/calendar"} else "plain_text"
     return finish(original_url or url, url, "", text, body, media, kind, "complete" if text.strip() else "partial",
                        metadata={**metadata, **({"extraction_error": "EMPTY_BODY"} if not text.strip() else {})})
+
+
+def extract_response(response: HttpResponse, *, original_url: str | None = None,
+                     trusted_filing: bool = False, policy=None, deadline=None) -> FetchResult:
+    """Preserve legacy normalization while isolating expensive/untrusted parsers.
+
+    Successful default extraction keeps its existing deterministic recipe, so
+    historical evidence replays without silently changing its schema.
+    """
+    from .parse_limits import ParsePolicy, isolated_extract
+    selected = ParsePolicy.from_value(policy)
+    if response.parse_failure_receipt is not None:
+        from .parse_limits import replay_partial
+        return replay_partial(response, original_url=original_url, policy=selected,
+                              receipt=response.parse_failure_receipt)
+    media = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if policy is not None or media == "application/pdf" or response.body.startswith(b"%PDF-"):
+        return isolated_extract(response, original_url=original_url, trusted_filing=trusted_filing,
+                                policy=selected, deadline=deadline)
+    return _extract_response_inner(response, original_url=original_url, trusted_filing=trusted_filing)

@@ -40,6 +40,11 @@ POLICY_ID = "tiger.public-paper-policy.v1"
 RUN_RE = re.compile(r"run-[0-9a-f]{32}\Z")
 KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{7,95}\Z")
 DEADLINE_SECONDS = 2400
+MAX_DEADLINE_SECONDS = 7200
+RUNTIME_POLICY_ENV = "TIGER_AGENT_RUNTIME_POLICY_FILE"
+RUNTIME_POLICY_SCHEMA = "tiger.agent-runtime-policy/v1"
+RUNTIME_INPUT_SCHEMA = "tiger.agent-runtime-input/v1"
+MAX_RUNTIME_POLICY_BYTES = 4096
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_ACCOUNT_FILES = frozenset({
     "journal.json", "sim_portfolio.json", "calibration_samples.json",
@@ -62,12 +67,66 @@ PAPER_LEDGER_CONTRACT = "tiger.paper-execution.v1"
 LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
 
 
+def validate_runtime_input(value: object, profile: str) -> dict:
+    """Validate the complete frozen extension, never an arbitrary policy flag."""
+    if (profile != INTELLIGENCE_PROFILE or not isinstance(value, dict)
+            or set(value) != {"schema", "profile", "business_deadline_seconds"}
+            or value.get("schema") != RUNTIME_INPUT_SCHEMA or value.get("profile") != profile
+            or type(value.get("business_deadline_seconds")) is not int
+            or not DEADLINE_SECONDS <= value["business_deadline_seconds"] <= MAX_DEADLINE_SECONDS):
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen business runtime input is invalid")
+    return dict(value)
+
+
+def startup_runtime_input(profile: str | None = None) -> dict | None:
+    """Only a trusted startup file can extend the intelligence-paper wall.
+
+    The two-field file contains no path, credential, model, stage or request
+    override. Its path is not persisted or passed to the detached engine.
+    """
+    location = os.environ.get(RUNTIME_POLICY_ENV)
+    if location is None:
+        return None
+    if profile is not None and profile != INTELLIGENCE_PROFILE:
+        raise EvidenceInvalid("INVALID_REQUEST", "Custom business runtime is restricted to the intelligence paper profile")
+    try:
+        if (not isinstance(location, str) or not location or len(location) > 4096
+                or any(ord(char) < 32 for char in location)):
+            raise ValueError
+        path = Path(location)
+        if not path.is_absolute():
+            raise ValueError
+        value = strict_json(read_bytes(path.parent, path.name, limit=MAX_RUNTIME_POLICY_BYTES))
+        if (not isinstance(value, dict) or set(value) != {"schema", "business_deadline_seconds"}
+                or value.get("schema") != RUNTIME_POLICY_SCHEMA):
+            raise ValueError
+        return validate_runtime_input({"schema": RUNTIME_INPUT_SCHEMA, "profile": INTELLIGENCE_PROFILE,
+            "business_deadline_seconds": value["business_deadline_seconds"]}, INTELLIGENCE_PROFILE)
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as exc:
+        raise EvidenceInvalid("RESULT_INVALID", "Trusted business runtime policy is unavailable or invalid") from exc
+
+
+def frozen_runtime_input(run: Path, profile: str) -> dict | None:
+    path = run / "runtime-input.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        content = read_bytes(run, "runtime-input.json", limit=MAX_RUNTIME_POLICY_BYTES)
+        value = validate_runtime_input(strict_json(content), profile)
+        if content != json_bytes(value):
+            raise ValueError
+        return value
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as exc:
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen business runtime input is unavailable or invalid") from exc
+
+
 def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None,
                     source_content_contract: str = SOURCE_CONTENT_CONTRACT,
                     company_evidence_contract: str = SEC_COMPANY_CONTRACT,
                     event_contract: str = EVENT_EVIDENCE_CONTRACT,
                     risk_evidence_contract: str = RISK_EVIDENCE_CONTRACT,
-                    authoritative_paper: bool = True, intelligence_input: dict | None = None) -> dict:
+                    authoritative_paper: bool = True, intelligence_input: dict | None = None,
+                    runtime_input: dict | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
@@ -101,6 +160,10 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "Local cooperative processes; no hostile same-user or external rollback anchoring guarantee.",
         ],
     }
+    if runtime_input is not None:
+        runtime_input = validate_runtime_input(runtime_input, profile)
+        value["business_deadline_seconds"] = runtime_input["business_deadline_seconds"]
+        value["runtime_input_sha256"] = digest(json_bytes(runtime_input))
     if required:
         if authoritative_paper:
             value["paper_ledger_contract"] = PAPER_LEDGER_CONTRACT
@@ -182,7 +245,9 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
     return value
 
 
-def frozen_clock(instant: datetime | None = None) -> dict:
+def frozen_clock(instant: datetime | None = None, *, seconds: int = DEADLINE_SECONDS) -> dict:
+    if type(seconds) is not int or not DEADLINE_SECONDS <= seconds <= MAX_DEADLINE_SECONDS:
+        raise EvidenceInvalid("RESULT_INVALID", "Invalid business runtime duration")
     instant = instant or datetime.now().astimezone()
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise EvidenceInvalid("RESULT_INVALID", "Admission requires an aware timestamp")
@@ -194,15 +259,15 @@ def frozen_clock(instant: datetime | None = None) -> dict:
             "market_timezone": "America/New_York",
             "market_timestamp": market.isoformat(), "run_date": market.date().isoformat(),
             "deadline_at_utc": datetime.fromtimestamp(
-                utc.timestamp() + DEADLINE_SECONDS, timezone.utc).isoformat()}
+                utc.timestamp() + seconds, timezone.utc).isoformat()}
 
 
-def validate_clock(clock: dict) -> None:
+def validate_clock(clock: dict, *, expected_seconds: int = DEADLINE_SECONDS) -> None:
     if not isinstance(clock, dict):
         raise EvidenceInvalid("RESULT_INVALID", "Missing admission clock")
     try:
         host = datetime.fromisoformat(clock["host_timestamp"])
-        expected = frozen_clock(host)
+        expected = frozen_clock(host, seconds=expected_seconds)
     except (TypeError, ValueError, KeyError) as exc:
         raise EvidenceInvalid("RESULT_INVALID", "Invalid admission clock") from exc
     if clock != expected:
@@ -528,8 +593,9 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     admission = read_json(run, "admission.json")
     request = read_json(run, "request.json")
     policy = read_json(run, "policy.json")
-    if (not isinstance(admission, dict) or set(admission) != {
-            "schema", "run_id", "clock", "parent", "request_sha256", "policy_sha256", "source_sha256"}
+    base_fields = {"schema", "run_id", "clock", "parent", "request_sha256", "policy_sha256", "source_sha256"}
+    if (not isinstance(admission, dict) or set(admission) not in (
+            base_fields, base_fields | {"runtime_input_sha256"})
             or not isinstance(request, dict) or not isinstance(policy, dict)
             or admission.get("schema") != "tiger.admission.v1"
             or admission.get("run_id") != run.name or not RUN_RE.fullmatch(run.name)
@@ -543,7 +609,12 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     if (request != expected or not isinstance(request.get("idempotency_key"), str)
             or not KEY_RE.fullmatch(request["idempotency_key"])):
         raise EvidenceInvalid("RESULT_INVALID", "Stored request differs from fixed profile")
-    validate_clock(admission["clock"])
+    runtime_input = frozen_runtime_input(run, request["profile"])
+    if (("runtime_input_sha256" in admission) != (runtime_input is not None)
+            or runtime_input is not None and admission["runtime_input_sha256"] != digest(json_bytes(runtime_input))):
+        raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission runtime input binding differs")
+    validate_clock(admission["clock"], expected_seconds=(runtime_input["business_deadline_seconds"]
+                                                       if runtime_input else DEADLINE_SECONDS))
     source = verify_source(run)
     if admission.get("source_sha256") != digest(read_bytes(run, "source-manifest.json")):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission source identity differs")
@@ -568,7 +639,8 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
                                       company_evidence_contract=company_evidence_contract,
                                       authoritative_paper=any(ref["path"] == PAPER_LEDGER_RELATIVE for ref in source["files"]),
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
-                                      intelligence_input=intelligence_input)
+                                      intelligence_input=intelligence_input,
+                                      runtime_input=runtime_input)
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
@@ -824,6 +896,12 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
         "process_exit": "process-exit.json", "log_summary": "log-summary.json",
         "engine_log": "engine.log",
     }
+    configured_runtime = "runtime_input_sha256" in policy
+    if ("runtime_input" in receipt) != configured_runtime:
+        raise EvidenceInvalid("RESULT_INVALID", "Receipt runtime input binding differs")
+    if configured_runtime:
+        verify_ref(run, receipt["runtime_input"], schema=RUNTIME_INPUT_SCHEMA)
+        expected_paths["runtime_input"] = "runtime-input.json"
     if any(receipt[key]["path"] != path for key, path in expected_paths.items()):
         raise EvidenceInvalid("RESULT_INVALID", "Receipt references unexpected artifacts")
     engine = read_json(run, "engine-result.json")
@@ -994,6 +1072,8 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         ("engine_log", "engine.log", "text/plain"),
     ):
         receipt[name] = file_ref(run, path, schema)
+    if "runtime_input_sha256" in policy:
+        receipt["runtime_input"] = file_ref(run, "runtime-input.json", RUNTIME_INPUT_SCHEMA)
     atomic_json(run, "receipt.json", receipt, exclusive=True)
     prepared = verify_run(state, run.name, require_committed=False, current_source=None)
     check_account_parent()

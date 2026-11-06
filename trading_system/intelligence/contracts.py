@@ -103,6 +103,33 @@ def identifier(value: object, label: str = "identity") -> str:
     return value
 
 
+def _safe_text_url(match):
+    value = match[0]
+    candidate = value
+    if value.endswith("\\") and match.string[match.end():match.end() + 1] in {"\"", "'"}:
+        candidate = value.rstrip("\\")
+    decoded = re.sub(r"\\+u([0-9a-fA-F]{4})", lambda item: chr(int(item[1], 16)), candidate)
+    decoded = html.unescape(decoded)
+    # Inspect the complete decoded token before choosing its display boundary.
+    # Removing whitespace for this check cannot hide a later credential key.
+    compact = re.sub(r"\s+", "", decoded)
+    if len(compact) > 8192 or not credential_free_url(compact):
+        return "[REDACTED_URL]"
+    starts = list(re.finditer(r"https?://", compact, re.I))
+    if len(starts) > 32:
+        return "[REDACTED_URL]"
+    for start in starts:
+        # Overlapping starts matter: a second URL can be embedded in a path,
+        # or introduced by encoded markup inside the same raw text token.
+        nested = re.split(r"[<>\"'\x60]", compact[start.start():], maxsplit=1)[0]
+        if not credential_free_url(nested):
+            return "[REDACTED_URL]"
+    # Only after every credential check may decoded HTML end a public URL.
+    public = re.split(r"[\s<>\"'\x60]", decoded, maxsplit=1)[0]
+    return value if credential_free_url(public) else "[REDACTED_URL]"
+
+
+
 def safe_value(value: object, secrets: tuple[str, ...] = (), depth: int = 0):
     """Sanitize persisted metadata; raw content hashes describe the original bytes."""
     if depth > 48:
@@ -112,7 +139,7 @@ def safe_value(value: object, secrets: tuple[str, ...] = (), depth: int = 0):
             if secret:
                 value = value.replace(secret, "[REDACTED_SECRET]")
         value = _JWT.sub("[REDACTED_TOKEN]", value)
-        return _URL_TEXT.sub(lambda match: match[0] if credential_free_url(match[0]) else "[REDACTED_URL]", value)
+        return _URL_TEXT.sub(_safe_text_url, value)
     if isinstance(value, dict):
         result = {}
         for key, child in value.items():

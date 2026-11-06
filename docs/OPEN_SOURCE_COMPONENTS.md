@@ -6,7 +6,7 @@
 > 仓库：workloom-ai/workroom-tiger ｜ 最近一次成功扫描：尚未记录已核实成功（运行 `pnpm oss:watch`） ｜ 最近尝试：未记录
 > 历史全量扫描/尝试（未核实）：2026-09-18T16:05:51.000Z
 > 每项上游版本按成功时间、查询状态和 TTL 单独判定；历史缓存与失败查询不作本次最新版本结论。
-> 统计：登记组件 97 个 ｜ npm 直接依赖 155 个 ｜ Python 依赖 10 个 ｜ 容器镜像 2 个
+> 统计：登记组件 97 个 ｜ npm 直接依赖 156 个 ｜ Python 依赖 13 个 ｜ 容器镜像 2 个
 
 ## 0. 维护机制（四件事）
 
@@ -64,7 +64,7 @@
 | 39 | Electron | [github.com/electron/electron](https://github.com/electron/electron) · MIT | 44.1.1 | 44.4.2（历史记录；未核实或已过期） | 运行时 | apps/desktop | 桌面壳（正式产品形态）；升级必须过打包载荷校验、真实窗口响应式与托盘/夜班行为验收 |
 | 40 | electron-builder | [github.com/electron-userland/electron-builder](https://github.com/electron-userland/electron-builder) · MIT | 26.15.3 | 26.15.3（历史记录；未核实或已过期） | 开发/构建 | apps/desktop（打包/签名） | 安装包与签名链路；升级后过 app:pack / app:dist 与发布资产校验 |
 | 41 | Playwright | [github.com/microsoft/playwright](https://github.com/microsoft/playwright) · Apache-2.0 | 1.63.0 | 1.63.0（历史记录；未核实或已过期） | 开发/构建 | 三端 E2E（apps/*）、packages/base/computer-use/toolkit（Python 版，随工具链安装） | E2E 与 computer-use 浏览器驱动共用；升级必须重建 Linux 视觉基线（CNB ui-gate 在同一镜像内跑）；Python 侧版本由 toolkit/requirements.txt 约束 |
-| 42 | @axe-core/playwright | [github.com/dequelabs/axe-core-npm](https://github.com/dequelabs/axe-core-npm) · MPL-2.0 | 未引入 | 4.13.0（历史记录；未核实或已过期） | 开发/构建 | 三端无障碍门禁 | 与 @playwright/test 版本矩阵敏感，同批升级 |
+| 42 | @axe-core/playwright | [github.com/dequelabs/axe-core-npm](https://github.com/dequelabs/axe-core-npm) · MPL-2.0 | 4.13.0 | 4.13.0（历史记录；未核实或已过期） | 开发/构建 | 三端无障碍门禁 | 与 @playwright/test 版本矩阵敏感，同批升级 |
 | 43 | Vitest | [github.com/vitest-dev/vitest](https://github.com/vitest-dev/vitest) · MIT | 4.1.11 / 5.0.1 | 5.0.1（历史记录；未核实或已过期） | 开发/构建 | packages/*、apps/server | 各 workspace 版本需对齐（历史存在 v3/v4 混用）；升级后全量跑 pnpm test |
 | 44 | tsx | [github.com/privatenumber/tsx](https://github.com/privatenumber/tsx) · MIT | 4.23.12 / 4.23.13 | 4.23.13（历史记录；未核实或已过期） | 开发/构建 | 根脚本、apps/server | TS 直跑器；升级后过 db:migrate/db:seed 与 server 启动 |
 | 45 | TypeScript | [github.com/microsoft/TypeScript](https://github.com/microsoft/TypeScript) · Apache-2.0 | 5.9.3 / 7.0.2 | 7.0.2（历史记录；未核实或已过期） | 开发/构建 | 全仓 typecheck | 7.0 原生化工具链；部分包仍锁 5.9（治理/UI 消费校验），升级按包分批，避免一次全仓 |
@@ -89,7 +89,7 @@
 | 64 | SRT Whiteboard Animation（手绘白板渲染器，随仓分发） | [github.com/geeklee/srt-whiteboard-animation](https://github.com/geeklee/srt-whiteboard-animation) · MIT | kit-696a724 | —（未扫描） | 运行时 | scripts/whiteboard/engine（补丁后的上游渲染脚本：parse_srt / render_stream_whiteboard / stream_render / merge_scenes / render_annotation_preview / prepare_env）、scripts/whiteboard/lib + film.mts（本仓扩展：编排 / 分句配音 / 分幕 / 标注 / 混流）、scripts/whiteboard/lineart_tools.py（本仓扩展：sketch / analyze / check / hand） | 字幕驱动的手绘白板渲染器：本地确定性 CPU 渲染、零 API 依赖、MIT 可商用。Python 依赖闭包见 scripts/whiteboard/engine/requirements.txt（opencv-python/numpy/PyAV/Pillow，全部宽松许可）；venv 由 scripts/whiteboard/engine-install.mts 幂等安装、不入库。本能力自带全部依赖，不要求宿主仓有视频制作子系统 |
 | 65 | BrowserAct 技能包 | [github.com/browser-act/skills](https://github.com/browser-act/skills) · MIT | 观察项（技能市场执行面技能，L2 审批安装） | —（未扫描） | 观察项 | skills/registry/browser-act（执行面技能·可选） | freemium 云依赖（stealth/代理/打码付费）：适配纪律 proxyMode=custom-only、凭据留在客户本机、出站 api.browseract.com 全声明；未进入默认运行时 |
 | 66 | Tencent BrowserSkill | [github.com/Tencent/BrowserSkill](https://github.com/Tencent/BrowserSkill) · MIT | 观察项（2026-08-26 评估：Borrow 协议可借鉴） | cli-v0.3.0（历史记录；未核实或已过期） | 观察项 | 浏览器桥接对照组（publish-rpa 权限模型参照） | 只作对照评估，暂不入运行时；publish-rpa 真机发布的权限模型参照对象 |
-| 67 | Scrapling | [github.com/D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling) · BSD-3-Clause | 观察项（技能市场执行面技能） | v0.4.15（历史记录；未核实或已过期） | 观察项 | skills/registry/scrapling-collector（纯本地零出站） | 纯本地零出站采集技能；经 skill:forge 集成，随技能市场分发 |
+| 67 | Scrapling | [github.com/D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling) · BSD-3-Clause | 0.5.1 | 0.5.1（历史记录；未核实或已过期） | 运行时 | trading_system/intelligence/scrapling_parser.py（既有字节的可选 HTML 解析）、trading_system/intelligence/parse_worker.py（有界子进程）、governance/skills/registry/scrapling-collector（历史签名技能包，未升级） | Tiger 原生链路仅在可信 parser_policy 选择 scrapling 时解析既有 HTML 字节；普通 HTTP 由 Tiger transport 执行，解析器不自行联网。动态浏览器、stealth、XHR 捕获、Spider、代理轮换和 Scrapling MCP 未接入。技能市场 1.0.0 历史签名包未升级、未在本轮装配，不能作为新链路回执；旧 API 示例不适用本轮。官方 PyPI 本轮查得 0.5.1；oss-watch 成功状态未刷新。详见 governance/skills/registry/scrapling-collector/NATIVE-INTEGRATION.md |
 | 68 | OpenAdapt | [github.com/OpenAdaptAI/OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) · MIT | 停车场（录制回放/流程固化规划位） | v1.16.0（历史记录；未核实或已过期） | 停车场（已选型未引入） | 流程固化（人工流程→确定性剧本） | 与意识系统构成「检测高频任务→建议固化→录制编译→剧本上线」管道，未接运行时 |
 | 69 | Agent-S3（gui-agents） | [github.com/simular-ai/Agent-S](https://github.com/simular-ai/Agent-S) · Apache-2.0 | 停车场（桌面 GUI 操控对照实现） | v0.3.2（历史记录；未核实或已过期） | 停车场（已选型未引入） | 桌面 GUI 操控（对照/备选） | 与自有 computer-use 能力对照复核；若引入只作独立进程，虚拟输入通道不得劫持真实鼠标 |
 | 70 | WrenAI | [github.com/Canner/WrenAI](https://github.com/Canner/WrenAI) · Apache-2.0 | 停车场（G1 消息图谱 NL 检索：现走薄自译 NL→结构化过滤器） | wren-core-py-v0.8.0（历史记录；未核实或已过期） | 停车场（已选型未引入） | 消息图谱 NL 检索（规划位） | 只允许使用其 governed text-to-SQL 引擎能力，且必须独立进程；现网结构回归由薄自译实现承担 |
@@ -123,11 +123,12 @@
 
 ## 2. 全量直接依赖（本仓事实，含上游最新）
 
-### 2.1 npm 直接依赖（155 个，解析自 pnpm-lock.yaml）
+### 2.1 npm 直接依赖（156 个，解析自 pnpm-lock.yaml）
 
 | 包 | 当前版本 | 声明 | 类型 | 出现位置 | 上游最新 |
 |---|---|---|---|---|---|
 | `@agentclientprotocol/sdk` | 1.4.0（声明） | 1.4.0 | 开发 | governance/vendor/dsh/package.json | 1.4.0（历史记录；未核实或已过期） |
+| `@axe-core/playwright` | 4.13.0 | 4.13.0 | 开发 | governance/package.json | 4.13.0（历史记录；未核实或已过期） |
 | `@deepseek-ai/cordis` | 4.0.2（声明） | ^4.0.2 | 生产 | governance/vendor/dsh/package.json | 4.0.2（历史记录；未核实或已过期） |
 | `@deepseek-ai/cordis-plugin-hmr` | 1.0.17（声明） | ^1.0.17 | 生产 | governance/vendor/dsh/package.json | 1.0.17（历史记录；未核实或已过期） |
 | `@deepseek-ai/cordis-plugin-include` | 1.0.7（声明） | ^1.0.7 | 生产 | governance/vendor/dsh/package.json | 1.0.7（历史记录；未核实或已过期） |
@@ -283,7 +284,7 @@
 | `yaml-governance → npm:yaml` | 2.9.0 | npm:yaml@2.9.0 | 开发 | governance/package.json | 2.9.1（历史记录；未核实或已过期） |
 | `zod` | 4.6.5 | 4.6.5 / ^4.6.5 | 生产 | governance/.workloom-runtime-deps/package.json、governance/apps/server/package.json、governance/packages/base/package.json 等 6 处 | 4.6.5（历史记录；未核实或已过期） |
 
-### 2.2 Python 依赖（10 个）
+### 2.2 Python 依赖（13 个）
 
 | 包 | 当前版本 | 声明 | 出现位置 | 上游最新 |
 |---|---|---|---|---|
@@ -293,9 +294,12 @@
 | `pandas` | >=2.0（下限声明） | >=2.0 | requirements.txt | 2.2.2（历史记录；未核实或已过期） |
 | `Pillow` | 12.3.0 | ==12.3.0 | governance/scripts/whiteboard/engine/requirements.txt、scripts/whiteboard/engine/requirements.txt | —（未扫描） |
 | `playwright` | >=1.40.0（下限声明） | >=1.40.0 | governance/packages/base/computer-use/toolkit/requirements.txt | 1.46.0（历史记录；未核实或已过期） |
+| `pypdf` | >=6.21.4（下限声明） | >=6.21.4 | requirements.txt | —（未扫描） |
 | `pytest` | >=8.0（下限声明） | >=8.0 | requirements.txt | 8.3.2（历史记录；未核实或已过期） |
 | `PyYAML` | >=6.0（下限声明） | >=6.0 | requirements.txt | 6.0.3（历史记录；未核实或已过期） |
 | `requests` | >=2.31（下限声明） | >=2.31 | requirements.txt | 2.32.3（历史记录；未核实或已过期） |
+| `scrapling` | 0.5.1 | ==0.5.1 | requirements.txt | —（未扫描） |
+| `tokenizers` | 0.23.3 | ==0.23.3 | requirements.txt | —（未扫描） |
 | `yfinance` | >=0.2.40（下限声明） | >=0.2.40 | requirements.txt | 0.2.41（历史记录；未核实或已过期） |
 
 ### 2.3 容器镜像（2 个）

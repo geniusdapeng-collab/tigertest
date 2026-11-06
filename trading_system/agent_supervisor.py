@@ -30,9 +30,10 @@ from trading_system.agent_evidence import (
     read_bytes, read_json, safe_path, strict_json,
 )
 from trading_system.agent_runtime import (
-    POLICY_ID, dependency_identity, run_environment, seal_and_publish,
+    POLICY_ID, DEADLINE_SECONDS, dependency_identity, run_environment, seal_and_publish,
     validate_admission, verify_source,
 )
+from trading_system.admission_guards import BOOTSTRAP_SECONDS, PreparationDeadline, PreparationExpired
 from trading_system.redline.execution import (
     EvidenceWriteError, ExecutionContext, ExecutionContractError,
     ExecutionPolicy, RuntimePaths,
@@ -49,7 +50,7 @@ class SupervisorInterrupted(RuntimeError):
 
 def error_record(exc: BaseException, *, run_id: str, stage: str | None = None) -> dict:
     name = type(exc).__name__
-    if isinstance(exc, EvidenceInvalid):
+    if isinstance(exc, (EvidenceInvalid, PreparationExpired)):
         code = exc.code
         stage = exc.stage or stage
     elif (name, getattr(exc, "code", None)) in {
@@ -471,8 +472,11 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
                ack_fd: int) -> int:
     run = state / "runs" / run_id
     acknowledged = False
-    timer_started = False
+    bootstrap_guard = None
+    business_guard = None
     try:
+        bootstrap_guard = PreparationDeadline(BOOTSTRAP_SECONDS, stage="supervisor.bootstrap")
+        bootstrap_guard.__enter__()
         _check_lock_descriptor(account_fd, state / "account.lock")
         _check_lock_descriptor(run_fd, run / "run.lock")
         admission, _policy, _source = validate_admission(run)
@@ -480,12 +484,13 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
                      - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
             raise TimeoutError("Admission deadline elapsed")
-        deadline = time.monotonic() + min(remaining, 2400)
-        def timed_out(_signum, _frame):
-            raise TimeoutError("Business deadline elapsed")
-        signal.signal(signal.SIGALRM, timed_out)
-        signal.setitimer(signal.ITIMER_REAL, min(remaining, 2400))
-        timer_started = True
+        # validate_admission re-derived this upper bound from the frozen
+        # runtime input; it never accepts a saved policy flag as authority.
+        business_remaining = min(remaining, _policy.get("business_deadline_seconds", DEADLINE_SECONDS))
+        deadline = time.monotonic() + business_remaining
+        bootstrap_guard.__exit__(None, None, None)
+        business_guard = PreparationDeadline(business_remaining, stage="supervisor.business", deadline=deadline)
+        business_guard.__enter__()
         atomic_json(run, "processes.json", {"supervisor_pid": os.getpid(),
                                           "supervisor_process_group": os.getpgrp()},
                     exclusive=True)
@@ -544,8 +549,10 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
             sys.stderr.write("Unable to persist terminal status; inspect run evidence.\n")
         return 1
     finally:
-        if timer_started:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+        if business_guard is not None:
+            business_guard.__exit__(None, None, None)
+        if bootstrap_guard is not None:
+            bootstrap_guard.__exit__(None, None, None)
         for fd in (account_fd, run_fd, ack_fd):
             if fd >= 0:
                 os.close(fd)  # Never LOCK_UN an inherited open-file description.

@@ -9,11 +9,13 @@ No provider, source adapter or model may open a network connection here.
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+import ast
 from datetime import date, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from ..agent_evidence import (EvidenceInvalid, normalize, read_bytes, read_json,
@@ -24,10 +26,12 @@ from ..intelligence import (build_plan, default_registry,
 from ..intelligence.archive import Archive
 from ..intelligence.contracts import IntelligenceError, SearchRequest, SearchResult, safe_value, source_time
 from ..intelligence.planner import compile_requests
+from ..intelligence.registry import acquisition_mode
 from ..intelligence.adapters import deepseek_query, _hit
 from ..intelligence_workflow import (ACQUISITION_CONTRACT, SOURCE_CONTENT_CONTRACT,
     SEARCH_MODE, TOOL_LIMITS, entity_registry, restore_frame, validate_input_packet,
     verify_frontier, acquisition_policy, value_hash)
+from ..intelligence_workflow import validate_baseline_manifest
 from ..redline import LLMUnavailable
 from ..redline.execution import (REQUIRED_MODEL_STAGES, RequiredModelFailed,
                                  daily_stage_contract, ExecutionContractError)
@@ -52,6 +56,9 @@ from .required_proof import (_hash, _plain, _same_watch_facts, _verify_search_re
                              _verify_search_rows)
 from .scene_policy import KERNEL_SCENE_MAP, scene_config, ScenePolicyError
 
+LEGACY_CLEAN_SOURCE_SHA256 = "dc15de6306fe8e134df343ea42a0bf8073b4a7408e8c6eca2b3e418022a61c3f"
+SUMMARY_CLEAN_SOURCE_SHA256 = "3db582964bbfa8a709ff3c40c5f72ec4012b1f6a06b74f6c5e57e5a4771b5008"
+
 
 def _fail(stage=None):
     raise EvidenceInvalid("MODEL_REQUIRED_FAILED", "V2 frozen intelligence evidence is missing or differs", stage=stage)
@@ -62,9 +69,58 @@ def _same(actual, expected, stage=None):
         _fail(stage)
 
 
+def frozen_clean_format_contract(run):
+    """Recognize only known frozen prompt code, without importing/executing it."""
+    stage = "clean.llm_semantic"
+    content = read_bytes(Path(run), "source/trading_system/llm/intelligence_required.py")
+    observed = hashlib.sha256(content).hexdigest()
+    if observed == LEGACY_CLEAN_SOURCE_SHA256:
+        return semantic.LEGACY_CLEAN_FORMAT_CONTRACT
+    if observed == SUMMARY_CLEAN_SOURCE_SHA256:
+        return semantic.CLEAN_FORMAT_CONTRACT
+    trusted = Path(semantic.__file__).read_bytes()
+    if observed != hashlib.sha256(trusted).hexdigest():
+        _fail(stage)
+    try:
+        tree = ast.parse(content.decode("utf-8"))
+        values = [node.value for node in tree.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "CLEAN_FORMAT_CONTRACT"
+                    for target in node.targets)]
+        if (len(values) != 1 or not isinstance(values[0], ast.Constant)
+                or values[0].value != semantic.CLEAN_FORMAT_CONTRACT):
+            _fail(stage)
+    except (UnicodeError, SyntaxError, TypeError, ValueError):
+        _fail(stage)
+    return semantic.CLEAN_FORMAT_CONTRACT
+
+
 def _request(parameters):
     return SearchRequest(**{key: tuple(value) if key in {"domains", "entities", "targets"} else value
                             for key, value in parameters.items()})
+
+
+def _source_parameters(spec, operation, parameters):
+    """Remove only the internally recorded, trusted extractor policy field.
+
+    Every other field remains in the request identity and must still match the
+    independently compiled plan. A page cannot nominate its own parser policy.
+    """
+    if operation == "search":
+        context = parameters.get("context", {})
+        if "_parse_policy" not in context:
+            return parameters
+        recorded = context["_parse_policy"]
+        result = {**parameters, "context": {key: value for key, value in context.items() if key != "_parse_policy"}}
+    else:
+        if "_parse_policy" not in parameters:
+            return parameters
+        recorded = parameters["_parse_policy"]
+        result = {key: value for key, value in parameters.items() if key != "_parse_policy"}
+    from ..intelligence.parse_limits import ParsePolicy
+    trusted = spec.options.get("extractor")
+    if trusted is None or recorded != ParsePolicy.from_value(trusted).public():
+        _fail()
+    return result
 
 
 class _Replay:
@@ -121,7 +177,9 @@ class _Replay:
         thinking = scene_config(KERNEL_SCENE_MAP[stage], self.scene_policy_path)["thinking"]
         mode, effort = thinking["type"], thinking.get("effort")
         def plan(payload, schema):
-            args = semantic.chat_arguments(stage, payload, schema, self.assessment)
+            args = semantic.chat_arguments(stage, payload, schema, self.assessment,
+                clean_format_contract=frozen_clean_format_contract(self.run)
+                    if stage == "clean.llm_semantic" else semantic.CLEAN_FORMAT_CONTRACT)
             system = sanitize_model_text(args["system"])
             user = sanitize_model_text(args["user"]) + "\n" + json.dumps(
                 sanitize_model_value(args["public_payload"]), ensure_ascii=False,
@@ -263,7 +321,11 @@ class _Replay:
             replayed = replay_observation(source, request["operation"], parameters, raw,
                 response_url=response["response_url"], headers=response["http_headers"],
                 received_at=response["received_at"], normalization_kind=response["normalization_kind"],
-                transport_sha256=response["transport_sha256"], request_count=response["request_count"])
+                transport_sha256=response["transport_sha256"], request_count=response["request_count"],
+                parse_failure=(response["normalized"].get("metadata", {}).get("parse_failure")
+                    if request["operation"] == "fetch" else
+                    next((hit.get("metadata", {}).get("parse_failure") for hit in response["normalized"].get("hits", [])
+                          if hit.get("metadata", {}).get("parse_failure")), None)))
             normalized = replayed.to_dict() if isinstance(replayed, SearchResult) else {
                 key: value for key, value in asdict(replayed).items() if key != "raw_bytes"}
             if request["operation"] == "fetch" and response["raw_redacted"]:
@@ -287,6 +349,13 @@ class _Replay:
                 ncall, nrequest, nproof = matching[0]
                 self.native_fetch(nrequest, nproof, parameters["url"], stage)
                 self.bind_native_usage(nproof, response, stage)
+                # A bound valid success receipt establishes exactly one
+                # successful native request. Historical unknown accounting is
+                # retained only for its exact old representation.
+                successful_usage = {"state": "reported_requests", "successful_requests": 1, "requires_reconciliation": False}
+                if response["usage"] != normalized["usage"]:
+                    _same(response["usage"], successful_usage, stage)
+                    normalized["usage"] = successful_usage
                 _same(strict_json(raw), nproof["page"], stage)
                 normalized["metadata"] = {"bridge": "admitted-deepseek-client",
                     "receipt": {key: value for key, value in nproof.items() if key not in {"schema", "page"}},
@@ -303,6 +372,9 @@ class _Replay:
                     _fail(stage)
                 self.native_search(nrequest, nproof, deepseek_query(_request(parameters)), stage, parameters["count"])
                 self.bind_native_usage(nproof, response, stage)
+                if response["usage"] != {"state": "unknown", "requires_reconciliation": True}:
+                    _same(response["usage"], {"state": "reported_requests", "successful_requests": 1,
+                        "requires_reconciliation": False}, stage)
                 rows = nproof["results"]
                 expected_hits = [_hit(row, url=row.get("url"), title=row.get("title", ""),
                     snippet=row.get("summary", ""), text=row.get("content", ""), text_kind="provider_text",
@@ -322,7 +394,8 @@ class _Replay:
                 and row["source_id"] == "deepseek" and row["operation"] == operation
                 and row["status"] in {"failed", "unknown"}
                 and (deepseek_query(_request(row["request"]["parameters"])) == request["request"]["query"]
-                     if operation == "search" else row["request"]["parameters"] == request["request"])]
+                     if operation == "search" else _source_parameters(registry.get(row["source_id"]), operation,
+                         row["request"]["parameters"]) == request["request"])]
             if not matches:
                 _fail(stage)
             row = matches[0]
@@ -332,7 +405,20 @@ class _Replay:
                 self.fetch_request(request, row["request"]["parameters"]["url"], stage)
             if response.get("error_type") != "RequiredModelUnavailable":
                 _fail(stage)
-            validate_model_diagnostic(response["diagnostic"])
+            diagnostic = validate_model_diagnostic(response["diagnostic"])
+            result = row["result"]
+            usage = result["usage"]
+            if usage == {"state": "not_charged", "requires_reconciliation": False}:
+                if (diagnostic["code"] != "HTTP_ERROR"
+                        or urlsplit(registry.get(row["source_id"]).endpoint).hostname != "api.deepseek.com"
+                        or result["error"]["details"].get("http_status") != diagnostic["http_status"]
+                        or result["error"]["details"].get("delivery") != "returned"):
+                    _fail(stage)
+            elif usage == {"state": "not_sent", "requires_reconciliation": False}:
+                if result["request_count"] != 0 or result["error"]["details"].get("delivery") != "not_sent":
+                    _fail(stage)
+            else:
+                _same(usage, {"state": "unknown", "requires_reconciliation": True}, stage)
             seen.append(row["attempt_id"])
             self.attempt_stages[row["attempt_id"]] = stage
         return seen
@@ -456,17 +542,82 @@ def _verify_baseline(packet, bundle):
             _fail("intelligence.freeze")
         return
     manifest = baseline["manifest"]
-    if (manifest["schema"] != "tiger.intelligence-baseline/v1" or manifest["tenant"] != "public"
-            or manifest["manifest_sha256"] != _hash({key: value for key, value in manifest.items() if key != "manifest_sha256"})
-            or manifest["as_of"] != bundle["as_of"] or len(bundle["baseline_refs"]) != 1):
+    validate_baseline_manifest(manifest)
+    scoped = manifest["schema"] == "topic_snapshot/v1"
+    if manifest["as_of"] != bundle["as_of"] or len(bundle["baseline_refs"]) != 1:
         _fail("intelligence.freeze")
+    selected_ids = {row["id"] for row in manifest["versions"]}
+    if scoped:
+        # Recompute membership independently of the runtime selection helper.
+        # Only labels in this admitted artifact can nominate a raw original;
+        # those labels never establish semantic scoring/action eligibility.
+        entities = set(bundle["allowed_entities"])
+        targets = {row["target_id"] for row in bundle["gaps"] if not row["target_id"].startswith("security:")}
+        targets.update(value.split(":", 1)[-1] for value in tuple(targets)
+            if value.startswith(("chain:", "sector:", "topic:")))
+        selected_ids = set()
+        for member in manifest["members"]:
+            subjects = {row if isinstance(row, str) else row.get("entity_id", row.get("id"))
+                for row in member["validated_subjects"] if isinstance(row, (str, dict))}
+            if (entities.intersection(member["requested_entity_ids"]) or entities.intersection(subjects)
+                    or targets.intersection(member["topic_ids"])):
+                selected_ids.add(member["id"])
+    selected_versions = [row for row in manifest["versions"] if row["id"] in selected_ids]
     receipt = bundle["baseline_refs"][0]
     expected = {"archive_id": manifest["archive_id"], "manifest_sha256": manifest["manifest_sha256"],
-        "manifest": manifest, "event_head": manifest["event_head"], "versions": manifest["versions"],
+        "manifest": manifest, "event_head": manifest["fixed_event_frontier"] if scoped else manifest["event_head"],
+        "versions": selected_versions,
         "imported_at": receipt["imported_at"], "reused_semantic_annotations": False, "reused_search_results": False}
+    if scoped:
+        expected["snapshot_id"] = manifest["snapshot_id"]
+        if manifest["registry_hash"] not in {"", packet["registry"]["sha256"]}:
+            _fail("intelligence.freeze")
+        head = manifest["fixed_event_frontier"]
+        cutoff = datetime.fromisoformat(manifest["cutoff"])
+        for member in manifest["members"]:
+            creation = member["creation_event"]
+            provenance = [creation, *(row["event"] for row in member["membership_provenance"])]
+            for event in provenance:
+                value = {key: value for key, value in event.items() if key not in {"sequence", "sha256"}}
+                if (event["tenant"] != manifest["tenant"] or event["sha256"] != _hash(value)
+                        or event["sequence"] > head["sequence"] or datetime.fromisoformat(event["at"]) > cutoff
+                        or event["payload"].get("document_id") != member["id"]):
+                    _fail("intelligence.freeze")
+            if (creation["kind"] != "document_version" or creation["payload"].get("document_sha256") != member["document_sha256"]
+                    or datetime.fromisoformat(member["first_seen_at"]) > cutoff):
+                _fail("intelligence.freeze")
+            requested = set()
+            topics = set()
+            for association in member["membership_provenance"]:
+                event = association["event"]
+                kind = association["kind"]
+                if kind == "requested_entity":
+                    if event["kind"] != "query_hit" or association["value"] not in event["payload"]["entities"]:
+                        _fail("intelligence.freeze")
+                    requested.add(association["value"])
+                elif kind in {"topic", "target"}:
+                    targets = event["payload"].get("targets", [])
+                    if (event["kind"] != "query_hit" or association["value"] not in targets
+                            and not any(value.split(":", 1)[-1] == association["value"] for value in targets)):
+                        _fail("intelligence.freeze")
+                    topics.add(association["value"])
+                elif kind == "receipt":
+                    if event["kind"] != "query_hit" or association["value"] != str(event["sequence"]):
+                        _fail("intelligence.freeze")
+                elif kind in {"source", "material", "validated_subject"}:
+                    subject_ids = {row if isinstance(row, str) else row.get("entity_id", row.get("id"))
+                        for row in member["validated_subjects"] if isinstance(row, (str, dict))}
+                    expected_values = {member["source_id"]} if kind == "source" else {member["material_type"]} if kind == "material" else subject_ids
+                    if event != creation or association["value"] not in expected_values:
+                        _fail("intelligence.freeze")
+                else:
+                    _fail("intelligence.freeze")
+            if member["requested_entity_ids"] != sorted(requested) or member["topic_ids"] != sorted(topics):
+                _fail("intelligence.freeze")
     _same(receipt, expected, "intelligence.freeze")
     by_id = {doc["id"]: doc for doc in bundle["documents"]}
-    for version in manifest["versions"]:
+    members = {member["id"]: member for member in manifest.get("members", [])}
+    for version in selected_versions:
         document = by_id[version["id"]]
         original = {key: value for key, value in document.items()
                     if key not in {"target_ids", "requested_entity_ids", "query_hit_ids"}}
@@ -477,12 +628,17 @@ def _verify_baseline(packet, bundle):
                 or version["first_seen_at"] != document["times"]["first_seen"]["value"]
                 or datetime.fromisoformat(version["first_seen_at"]) > datetime.fromisoformat(bundle["as_of"])):
             _fail("intelligence.freeze")
+        if scoped:
+            member = members[version["id"]]
+            for key in ("source_id", "source_version", "raw_blob", "text_blob"):
+                _same(member[key], original[key], "intelligence.freeze")
+            _same(member["validated_subjects"], original.get("validated_subjects", []), "intelligence.freeze")
 
 
 def _verify_document_attempts(bundle, packet):
     attempts = {row["attempt_id"]: row for row in bundle["attempts"]}
-    baseline_ids = ({row["id"] for row in packet["baseline"]["manifest"]["versions"]}
-                    if packet["baseline"] is not None else set())
+    registry = default_registry(packet["config"])
+    baseline_ids = {row["id"] for receipt in bundle["baseline_refs"] for row in receipt["versions"]}
     def bind(recipe, attempt, *, discovery=False):
         observation = attempt["result"].get("observation")
         if observation is None or attempt["status"] not in {"completed", "empty"}:
@@ -526,14 +682,17 @@ def _verify_document_attempts(bundle, packet):
             bind(recipe, attempts[refs[1]])
             parent = recipe.get("attachment", {}).get("parent_normalization")
             if parent is not None:
-                matches = [row for row in bundle["attempts"] if row["operation"] == "fetch"
+                parent_operation = parent.get("operation", "fetch")
+                matches = [row for row in bundle["attempts"] if row["operation"] == parent_operation
                     and row["source_id"] == parent["source_id"]
                     and row["request"]["parameters"] == parent["parameters"]
                     and row["result"].get("observation", {}).get("raw_response_ref") == parent["raw_response_ref"]]
                 if len(matches) != 1:
                     _fail()
-                bind(parent, matches[0])
-            elif recipe["parameters"] != {"url": hits[index]["url"]}:
+                parent_recipe = {**parent, "normalization_kind": parent["kind"]} if parent_operation == "search" else parent
+                bind(parent_recipe, matches[0], discovery=parent_operation == "search")
+            elif _source_parameters(registry.get(recipe["source_id"]),
+                    "fetch", recipe["parameters"]) != {"url": hits[index]["url"]}:
                 _fail()
         else:
             # The search-only document's principal recipe is the same captured
@@ -547,6 +706,10 @@ def _verify_document_attempts(bundle, packet):
 
 def _verify_attempt_plan(replay, registry, bundle, plan, initial_documents, rounds):
     """Recompile admitted questions; arbitrary journal URLs cannot create a plan."""
+    if plan.get("acquisition_mode") == "snapshot_only":
+        if plan["query_plan"] or bundle["attempts"]:
+            _fail()
+        return
     directory = next((doc for doc in reversed(initial_documents) if doc["text_kind"] == "identity_directory"), None)
     allowed = {"search.collect": set(), "clean.llm_semantic": set()}
     for entry in plan["query_plan"]:
@@ -624,12 +787,15 @@ def _verify_attempt_plan(replay, registry, bundle, plan, initial_documents, roun
                         "web_page" if "web_page" in plan["source_ids"] else source)
         for hit in attempt["result"]["observation"]["normalized"]["hits"]:
             fetches.add((fetch_source, hit["url"]))
+            if spec.kind == "page":
+                fetches.update((fetch_source, attachment["url"]) for attachment in hit.get("attachments", []))
     for attempt in bundle["attempts"]:
         if attempt["operation"] == "fetch" and "observation" in attempt["result"]:
             for attachment in attempt["result"]["observation"]["normalized"].get("attachments", []):
                 fetches.add((attempt["source_id"], attachment["url"]))
     for attempt in bundle["attempts"]:
-        source, parameters = attempt["source_id"], attempt["request"]["parameters"]
+        source = attempt["source_id"]
+        parameters = _source_parameters(registry.get(source), attempt["operation"], attempt["request"]["parameters"])
         if source not in plan["source_ids"] or attempt["request_sha256"] != _hash(attempt["request"]):
             _fail()
         stage = replay.attempt_stages.get(attempt["attempt_id"])
@@ -675,6 +841,12 @@ def _verify_phase_status(archive, snapshot, bundle, plan):
 
 def _verify_acquisition(replay):
     packet = validate_input_packet(read_json(replay.run, "intelligence-input.json"))
+    mode = acquisition_mode(packet["config"])
+    if mode == "snapshot_only":
+        for stage, output in replay.outputs.items():
+            if any(call["method"] in {"model.deepseek.search", "model.deepseek.fetch", "intelligence.source.request"}
+                   for call in output["io_calls"]):
+                _fail(stage)
     if replay.policy is not None:
         _same(replay.policy["intelligence"], {**acquisition_policy(), "input_sha256": value_hash(packet)})
         for key, expected in {"source_content_contract": SOURCE_CONTENT_CONTRACT,
@@ -705,7 +877,8 @@ def _verify_acquisition(replay):
         "market_snapshot_refs": frontier["market_snapshot_refs"], "holdings": frontier["holdings"], "pending": frontier["pending"],
         "watchlist": frontier["watchlist"], "topics": semantic.acquisition_topics({**CHAIN_TOPICS, **SECTOR_TOPICS}),
         "baseline_refs": ([{"manifest_sha256": packet["baseline"]["manifest"]["manifest_sha256"]}]
-                          if packet["baseline"] else []), "limits": dict(TOOL_LIMITS)}, registry)
+                          if packet["baseline"] else []), "limits": dict(TOOL_LIMITS),
+        **({"acquisition_mode": "snapshot_only"} if mode == "snapshot_only" else {})}, registry)
     freeze = replay.value("intelligence.freeze")
     archive_root = replay.run / "intelligence"
     checked_root(archive_root)
@@ -770,6 +943,8 @@ def _verify_acquisition(replay):
         _verify_phase_status(archive, snapshot, bundle, plan)
         phases.append(documents)
     _verify_attempt_plan(replay, registry, bundle, plan, phases[0], snapshots[1]["rounds"])
+    if mode == "snapshot_only":
+        _verify_snapshot_only(archive, bundle, plan, snapshots, phases)
     initial = project_to_rawdocuments(phases[0])
     collection = replay.value("search.collect")
     _same(collection, {"documents": initial, "topics": {**CHAIN_TOPICS, **SECTOR_TOPICS}, "batches": [],
@@ -783,6 +958,50 @@ def _verify_acquisition(replay):
     _same(replay.value("clean.rule_base"), {"documents": base}, "clean.rule_base")
     _same(replay.inputs["clean.llm_semantic"], {"documents": base, "assessment": replay.assessment}, "clean.llm_semantic")
     return registry, archive, bundle, frontier, plan, snapshots, phases, market
+
+
+def _verify_snapshot_only(archive, bundle, plan, snapshots, phases):
+    """Rebuild the no-dispatch record from imported raw versions and events."""
+    expected_usage = {"requests": 0, "fetches": 0, "bytes": 0, "unreconciled_attempts": 0}
+    imported = {version["id"] for receipt in bundle["baseline_refs"] for version in receipt["versions"]}
+    if (not imported or bundle["attempts"] or bundle["usage"] != expected_usage
+            or any({document["id"] for document in phase} != imported for phase in phases)):
+        _fail("intelligence.freeze")
+    events = [event for event in archive.events(bundle["job_id"])
+              if event["sequence"] <= bundle["event_head"]["sequence"]]
+    collections = [event for event in events if event["kind"] == "snapshot_collection_completed"]
+    if len(collections) != 1:
+        _fail("search.collect")
+    collection = collections[0]
+    payload = collection["payload"]
+    if (payload.get("state") not in {"partial", "budget_exhausted"}
+            or collection["sequence"] > snapshots[0]["status"]["revision"]):
+        _fail("search.collect")
+    _same(payload, {"mode": "snapshot_only", "document_ids": sorted(imported),
+        "documents_sha256": _hash(phases[0]), "state": payload["state"], "request_count": 0, "bytes_received": 0}, "search.collect")
+    starts = [event for event in events if event["kind"] == "research_started"]
+    unavailable = [event for event in events if event["kind"] == "research_unavailable"]
+    completions = [event for event in events if event["kind"] == "research_completed"]
+    if not len(starts) == len(unavailable) == len(completions) <= plan["limits"]["rounds"] - 1:
+        _fail("clean.llm_semantic")
+    cells = {cell["cell_id"]: cell for cell in plan["coverage_cells"]}
+    for index, (start, denied, complete) in enumerate(zip(starts, unavailable, completions, strict=True)):
+        number = index + 2
+        before = _project_gaps(events[:start["sequence"] - 1])
+        requested = [gap["cell_id"] for gap in before if gap["required"] and gap["status"] != "present"]
+        gaps = [gap for gap in before if gap["cell_id"] in requested]
+        _same(start["payload"], {"round": number, "gap_ids": requested, "gaps": gaps,
+            "replay_key": None, "requested_gap_ids": requested, "query_plan": [], "mode": "snapshot_only"}, "clean.llm_semantic")
+        if not collection["sequence"] < start["sequence"] < denied["sequence"] < complete["sequence"]:
+            _fail("clean.llm_semantic")
+        expired = complete["payload"].get("state") == "budget_exhausted"
+        _same(complete["payload"], {"round": number, "state": "budget_exhausted" if expired else "unavailable",
+            "mode": "snapshot_only"}, "clean.llm_semantic")
+        _same(denied["payload"], {"round": number, "mode": "snapshot_only",
+            "reason": "BUDGET_EXHAUSTED" if expired else "SNAPSHOT_ONLY_NO_LIVE_ACQUISITION",
+            "code": "BUDGET_EXHAUSTED" if expired else "POLICY_DENIED",
+            "gap_ids": [gap["cell_id"] for gap in gaps if cells[gap["cell_id"]]["material_type"] != "connection"],
+            "request_count": 0, "bytes_received": 0}, "clean.llm_semantic")
 
 
 def _verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, phases):
@@ -1049,6 +1268,16 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
                 or raw["gaps"] != disclosed_gaps or raw["source_registry_sha256"] != registry.public_manifest()["sha256"]
                 or raw["holdings_connection"] != ("unknown" if frontier["holdings"] is None else "connected")):
             _fail()
+        packet = validate_input_packet(read_json(replay.run, "intelligence-input.json"))
+        if acquisition_mode(packet["config"]) == "snapshot_only":
+            if raw.get("acquisition_mode") != "snapshot_only":
+                _fail()
+        elif "acquisition_mode" in raw:
+            _fail()
+        if packet["baseline"] and packet["baseline"]["manifest"]["schema"] == "topic_snapshot/v1":
+            manifest = packet["baseline"]["manifest"]
+            _same(raw.get("baseline_snapshot"), {key: manifest[key] for key in
+                ("snapshot_id", "manifest_sha256", "cutoff", "state", "counts", "gaps")})
         # Cheap binding failures reject before the more expensive numerical
         # replay. Every accepted proof still recomputes all eight rule stages.
         from ..intelligence_scoring_proof import verify_intelligence_scoring

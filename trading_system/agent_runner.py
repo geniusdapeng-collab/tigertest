@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import importlib.metadata
 import json
 import os
@@ -17,6 +17,7 @@ import selectors
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -27,8 +28,11 @@ from .agent_evidence import (
 from .agent_runtime import (
     ACCOUNT, DEPENDENCIES, KEY_RE, PROFILE, SUPPORTED_PROFILES, RUN_RE, SOURCE_ROOT, SCENE_POLICY_RELATIVE,
     committed_pointer, freeze_source, frozen_clock, pointer_read, policy_manifest,
-    run_environment, stage_account, stage_calendar, verify_run,
+    run_environment, stage_account, stage_calendar, startup_runtime_input, validate_clock, verify_run,
+    DEADLINE_SECONDS, INTELLIGENCE_PROFILE, RUNTIME_POLICY_ENV,
 )
+from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
+                               PreparationExpired, thread_submission)
 
 OPERATIONS = frozenset({"doctor", "describe", "run", "status", "receipt", "verify"})
 MAX_INPUT_BYTES = 65536
@@ -122,10 +126,18 @@ def _lock_fd(root: Path, name: str, *, create: bool, nonblocking: bool) -> int:
 
 
 @contextmanager
-def admission_lock(state: Path):
-    # A bounded observer can terminate this query; no accepted worker inherits
-    # the short submission lock.
-    descriptor = _lock_fd(state, "submission.lock", create=True, nonblocking=False)
+def admission_lock(state: Path, *, deadline: float | None = None):
+    # Account workers never inherit this short submission lock. Polling makes
+    # contention bounded even when flock would restart an interrupted syscall.
+    deadline = deadline if deadline is not None else time.monotonic() + PREPARATION_SECONDS
+    while True:
+        if time.monotonic() >= deadline:
+            raise EvidenceInvalid("TIMEOUT", "Preparation lock deadline elapsed", stage="admission.lock")
+        try:
+            descriptor = _lock_fd(state, "submission.lock", create=True, nonblocking=True)
+            break
+        except BlockingIOError:
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
     try:
         yield
     finally:
@@ -237,15 +249,33 @@ def _acknowledgement(fd: int, run_id: str, seconds: float = 10.0) -> None:
         raise EvidenceInvalid("RESULT_INVALID", "Worker acceptance identity differs")
 
 
-def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
-    validate_request("run", request)
-    checked_root(state, create=True)
+def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT,
+           _preparation_seconds: float = PREPARATION_SECONDS,
+           _entry_clock: dict | None = None) -> dict:
+    """Bound all preparation without cancelling an accepted detached worker."""
+    try:
+        clock = frozen_clock() if _entry_clock is None else _entry_clock
+        validate_clock(clock)
+        validate_request("run", request)
+        if threading.current_thread() is not threading.main_thread():
+            return thread_submission(state, request, source, seconds=_preparation_seconds, entry_clock=clock)
+        with PreparationDeadline(_preparation_seconds) as guard:
+            return _submit(state, request, source=source, preparation_deadline=guard.deadline,
+                           entry_clock=clock)
+    except (EvidenceInvalid, PreparationExpired) as exc:
+        return failure("run", exc.code, str(exc), stage=exc.stage)
+
+
+def _submit(state: Path, request: dict, *, source: Path,
+            preparation_deadline: float, entry_clock: dict) -> dict:
     run_id = None
     created = False
     account_fd = run_fd = ack_read = ack_write = -1
     worker = None
     try:
-        with admission_lock(state):
+        clock = entry_clock
+        checked_root(state, create=True)
+        with admission_lock(state, deadline=preparation_deadline):
             mapping_path = "keys/" + digest(request["idempotency_key"].encode("ascii")) + ".json"
             map_file = safe_path(state, mapping_path, must_exist=False)
             request_hash = digest(json_bytes(request))
@@ -263,6 +293,13 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
                 if read_json(state / "runs" / run_id, "request.json") != request:
                     raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Stored request binding differs")
                 return _replay(state, run_id)
+            # Replays above use their original frozen contract, regardless of
+            # later changes to the trusted startup file or its availability.
+            runtime_input = startup_runtime_input(request["profile"])
+            if runtime_input is not None:
+                from .agent_runtime import frozen_clock as derive_clock
+                clock = derive_clock(datetime.fromisoformat(clock["host_timestamp"]),
+                                     seconds=runtime_input["business_deadline_seconds"])
             try:
                 account_fd = _lock_fd(state, "account.lock", create=True, nonblocking=True)
             except BlockingIOError as exc:
@@ -283,9 +320,10 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
                 "schema": "tiger.status.v1", "run_id": run_id,
                 "status": "accepted", "error": None,
             })
-            clock = frozen_clock()
             parent = pointer_read(state)
             freeze_source(run, source)
+            if runtime_input is not None:
+                atomic_json(run, "runtime-input.json", runtime_input, exclusive=True)
             intelligence_input = None
             from .redline.execution import INTELLIGENCE_PROFILE
             if request["profile"] == INTELLIGENCE_PROFILE:
@@ -294,16 +332,21 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
                     as_of=datetime.fromisoformat(clock["admitted_at_utc"]))
             policy = policy_manifest(request["profile"],
                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
-                                     intelligence_input=intelligence_input)
+                                     intelligence_input=intelligence_input, runtime_input=runtime_input)
             atomic_json(run, "policy.json", policy, exclusive=True)
             stage_account(state, run, parent)
             stage_calendar(run)
-            atomic_json(run, "admission.json", {
+            admission = {
                 "schema": "tiger.admission.v1", "run_id": run_id, "clock": clock,
                 "parent": parent, "request_sha256": request_hash,
                 "policy_sha256": digest(json_bytes(policy)),
                 "source_sha256": digest(read_bytes(run, "source-manifest.json")),
-            }, exclusive=True)
+            }
+            if runtime_input is not None:
+                admission["runtime_input_sha256"] = digest(json_bytes(runtime_input))
+            if datetime.now(timezone.utc) >= datetime.fromisoformat(clock["deadline_at_utc"]):
+                raise EvidenceInvalid("TIMEOUT", "Business deadline elapsed during preparation", stage="admission.prepare")
+            atomic_json(run, "admission.json", admission, exclusive=True)
             ack_read, ack_write = os.pipe()
             entry = run / "source" / "trading_system" / "agent_supervisor.py"
             worker = subprocess.Popen(
@@ -325,11 +368,13 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
             _acknowledgement(ack_read, run_id)
             return envelope("run", run_id=run_id, status="accepted",
                             data={"idempotent_replay": False, "observed_status": "running"})
-    except (OSError, EvidenceInvalid, ValueError) as exc:
-        code = exc.code if isinstance(exc, EvidenceInvalid) else "ARTIFACT_WRITE_FAILED" if isinstance(exc, OSError) else "RUNNER_FAILED"
-        message = str(exc) if isinstance(exc, EvidenceInvalid) else "Unable to prepare the controlled run."
+    except (OSError, EvidenceInvalid, ValueError, PreparationExpired) as exc:
+        controlled = isinstance(exc, (EvidenceInvalid, PreparationExpired))
+        code = exc.code if controlled else "ARTIFACT_WRITE_FAILED" if isinstance(exc, OSError) else "RUNNER_FAILED"
+        message = str(exc) if controlled else "Unable to prepare the controlled run."
         value = failure("run", code, message, run_id=run_id,
                         status="blocked" if code == "ACCOUNT_BUSY" else "invalid",
+                        stage=exc.stage if controlled else None,
                         data={"identity_recovery": "Repeat the identical request and idempotency key."}
                         if run_id else {})
         if created and run_id is not None and worker is None:
@@ -348,6 +393,7 @@ def submit(state: Path, request: dict, *, source: Path = SOURCE_ROOT) -> dict:
 
 
 def doctor(state: Path, mode: str) -> dict:
+    runtime_input = startup_runtime_input()
     packages = {}
     for name in DEPENDENCIES:
         try:
@@ -361,6 +407,11 @@ def doctor(state: Path, mode: str) -> dict:
         "dependencies": packages, "state_root_exists": state.exists(),
         "platform": sys.platform, "state_writes": False, "network_requests": False,
         "business_workers_started": False,
+        "business_runtime": {"profile": INTELLIGENCE_PROFILE,
+            "startup_environment": RUNTIME_POLICY_ENV, "configured": runtime_input is not None,
+            "business_deadline_seconds": runtime_input["business_deadline_seconds"] if runtime_input else DEADLINE_SECONDS,
+            "input_sha256": digest(json_bytes(runtime_input)) if runtime_input else None,
+            "values_are_frozen_on_new_submission": True},
     })
     value["limitations"] = policy_manifest()["limitations"]
     if not ready:
@@ -371,10 +422,14 @@ def doctor(state: Path, mode: str) -> dict:
     return value
 
 
-def execute(operation: str, request: object, *, mode: str, state: Path) -> dict:
+def execute(operation: str, request: object, *, mode: str, state: Path,
+            _entry_clock: dict | None = None) -> dict:
     run_id = None
     observed = None
     try:
+        # Direct Python callers use the same entry boundary as the CLI. The
+        # private clock never appears among the public request fields.
+        entry_clock = (frozen_clock() if _entry_clock is None else _entry_clock) if operation == "run" else None
         request = validate_request(operation, request)
         run_id = request.get("run_id")
         if mode not in {"readonly", "paper"}:
@@ -382,16 +437,17 @@ def execute(operation: str, request: object, *, mode: str, state: Path) -> dict:
         if operation == "run" and mode != "paper":
             raise EvidenceInvalid("READ_ONLY", "Paper submission requires explicit paper startup mode")
         _platform()
+        if operation == "run":
+            # Root/path validation belongs to the bounded preparation too.
+            return submit(state, request, _entry_clock=entry_clock)
         checked_root(state)
         if operation == "doctor":
             return doctor(state, mode)
         if operation == "describe":
-            selected = policy_manifest(request["profile"])
+            selected = policy_manifest(request["profile"], runtime_input=startup_runtime_input(request["profile"]))
             value = envelope(operation, data={"profile": selected, "access_mode": mode})
             value["limitations"] = selected["limitations"]
             return value
-        if operation == "run":
-            return submit(state, request)
         observation = observe_run(state, run_id)
         observed = observation["status"]
         if operation == "status":
@@ -428,22 +484,35 @@ class _Parser(argparse.ArgumentParser):
 def main(argv: list[str] | None = None) -> int:
     operation = None
     try:
+        # Input reading, JSON validation and every preparation step consume
+        # this original wall. A trusted file may extend its duration later;
+        # it cannot reset the admitted instant.
+        entry_clock = frozen_clock()
         parser = _Parser(add_help=False)
         parser.add_argument("--mode", default="readonly")
         parser.add_argument("--state-root", required=True)
         parser.add_argument("operation")
         arguments = parser.parse_args(argv)
         operation = arguments.operation if arguments.operation in OPERATIONS else None
-        data = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-        if len(data) > MAX_INPUT_BYTES:
-            raise EvidenceInvalid("INPUT_TOO_LARGE", "Request exceeds 65536 bytes")
-        try:
-            request = strict_json(data)
-        except (ValueError, UnicodeError, RecursionError) as exc:
-            raise EvidenceInvalid("INVALID_REQUEST", "Request must be one strict UTF-8 JSON object") from exc
-        value = execute(arguments.operation, request, mode=arguments.mode, state=Path(arguments.state_root))
-    except EvidenceInvalid as exc:
-        value = failure(operation, exc.code, str(exc))
+        def read_and_execute():
+            data = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            if len(data) > MAX_INPUT_BYTES:
+                raise EvidenceInvalid("INPUT_TOO_LARGE", "Request exceeds 65536 bytes")
+            try:
+                request = strict_json(data)
+            except (ValueError, UnicodeError, RecursionError) as exc:
+                raise EvidenceInvalid("INVALID_REQUEST", "Request must be one strict UTF-8 JSON object") from exc
+            return execute(arguments.operation, request, mode=arguments.mode,
+                           state=Path(arguments.state_root), _entry_clock=entry_clock)
+        if arguments.operation == "run":
+            # The existing preparation lease also owns a blocked stdin read;
+            # nested submit guards preserve this earlier timer.
+            with PreparationDeadline(PREPARATION_SECONDS):
+                value = read_and_execute()
+        else:
+            value = read_and_execute()
+    except (EvidenceInvalid, PreparationExpired) as exc:
+        value = failure(operation, exc.code, str(exc), stage=exc.stage)
     except KeyboardInterrupt:
         value = failure(operation, "CANCELLED", "Client stopped observing; recover unknown identity with the same key.")
     except (OSError, ValueError):

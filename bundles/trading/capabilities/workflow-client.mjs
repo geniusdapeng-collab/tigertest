@@ -21,7 +21,7 @@ const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
 export const MODEL_ENV_NAMES = Object.freeze(["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
   "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
   "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
-  "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT"]);
+  "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT", "TIGER_AGENT_RUNTIME_POLICY_FILE"]);
 const EXIT_CODES = new Map([
   ...["INVALID_REQUEST", "INPUT_TOO_LARGE"].map((s) => [s, 2]),
   ...["READ_ONLY", "LIVE_FORBIDDEN", "UNAUTHORIZED"].map((s) => [s, 3]),
@@ -331,6 +331,9 @@ export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_COD
 
 export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
+  // Read-only doctor/describe may inspect this non-secret trusted config;
+  // model credentials still cross only the explicit required-model boundary.
+  if (typeof env.TIGER_AGENT_RUNTIME_POLICY_FILE === "string") result.TIGER_AGENT_RUNTIME_POLICY_FILE = env.TIGER_AGENT_RUNTIME_POLICY_FILE;
   if (modelRequired) for (const key of MODEL_ENV_NAMES) {
     if (typeof env[key] === "string") result[key] = env[key];
   }

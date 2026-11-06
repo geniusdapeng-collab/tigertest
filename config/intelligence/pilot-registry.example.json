@@ -1,0 +1,169 @@
+{
+  "policy_version": "tiger-public-ai-infrastructure-pilot-2026-11-06.6",
+  "sources": {
+    "deepseek": {
+      "enabled": false
+    },
+    "brave": {
+      "enabled": false
+    },
+    "tavily": {
+      "enabled": false
+    },
+    "exa": {
+      "enabled": false
+    },
+    "sec_directory": {
+      "enabled": false
+    },
+    "sec_current": {
+      "enabled": false
+    },
+    "sec_submissions": {
+      "enabled": false
+    },
+    "fed_policy": {
+      "enabled": false
+    },
+    "bls_calendar": {
+      "enabled": false
+    },
+    "fred": {
+      "enabled": false
+    },
+    "cboe_vix": {
+      "enabled": false
+    }
+  },
+  "registered_sources": [
+    {
+      "source_id": "nvidia_official_releases",
+      "version": "2026-11-06.3",
+      "kind": "issuer_rss",
+      "endpoint": "https://nvidianews.nvidia.com/cats/press_release.xml",
+      "allowed_hosts": [
+        "nvidianews.nvidia.com"
+      ],
+      "authority_scopes": [
+        "issuer_ir"
+      ],
+      "capabilities": [
+        "discover",
+        "fetch",
+        "attachments"
+      ],
+      "date_semantics": "issuer_feed",
+      "minimum_interval_seconds": 1,
+      "max_retries": 1,
+      "options": {
+        "issuer_id": "us:NVDA",
+        "material_types": [
+          "issuer_ir"
+        ],
+        "publisher": "NVIDIA",
+        "business_unit": "Official newsroom",
+        "cadence_seconds": 300,
+        "extractor": {
+          "html_engine": "scrapling",
+          "selector": ".article-body",
+          "expected_terms": [
+            "NVIDIA"
+          ]
+        },
+        "allowed_uses": [
+          "discovery",
+          "topic_analysis",
+          "historical_baseline"
+        ]
+      }
+    },
+    {
+      "source_id": "fed_g17_industry_summary",
+      "version": "2026-11-06.3",
+      "kind": "page",
+      "endpoint": "https://www.federalreserve.gov/releases/g17/current/g17.txt",
+      "allowed_hosts": [
+        "www.federalreserve.gov"
+      ],
+      "authority_scopes": [
+        "official_statistics"
+      ],
+      "capabilities": [
+        "discover",
+        "data"
+      ],
+      "date_semantics": "release_period_and_revision",
+      "minimum_interval_seconds": 1,
+      "max_retries": 1,
+      "options": {
+        "title": "Federal Reserve G.17 current monthly industrial production and capacity utilization",
+        "material_types": [
+          "industry_data",
+          "macro_policy"
+        ],
+        "publisher": "Board of Governors of the Federal Reserve System",
+        "business_unit": "G.17 Industrial Production and Capacity Utilization",
+        "series_ids": [
+          "G17_CURRENT_SUMMARY_TABLES_1_2"
+        ],
+        "cadence_seconds": 86400,
+        "allowed_uses": [
+          "discovery",
+          "topic_analysis",
+          "historical_baseline"
+        ],
+        "public_data_contract": {
+          "origin": "https://www.federalreserve.gov",
+          "exact_path": "/releases/g17/current/g17.txt",
+          "method": "GET",
+          "contract_sha256": "be29c74e3c2a1c578d5faaa0482c10cb9dc4642c4a564fd14100fb3c46339d64"
+        }
+      }
+    },
+    {
+      "source_id": "goldman_data_center_power_transcript",
+      "version": "2026-11-06.3",
+      "kind": "page",
+      "endpoint": "https://www.goldmansachs.com/insights/goldman-sachs-exchanges/the-outlook-for-data-center-power-demand-as-ai-token-use-grows",
+      "allowed_hosts": [
+        "www.goldmansachs.com"
+      ],
+      "authority_scopes": [
+        "discovery"
+      ],
+      "capabilities": [
+        "discover"
+      ],
+      "date_semantics": "original_public_episode",
+      "minimum_interval_seconds": 1,
+      "max_retries": 1,
+      "options": {
+        "title": "The outlook for data center power demand as AI token use grows",
+        "material_types": [
+          "institutional_commentary",
+          "person_statement"
+        ],
+        "publisher": "Goldman Sachs",
+        "business_unit": "Goldman Sachs Exchanges public episode",
+        "author_ids": [
+          "person:brian-singer-gs-episode",
+          "person:carly-davenport-gs-episode"
+        ],
+        "cadence_seconds": 3600,
+        "allowed_uses": [
+          "topic_analysis",
+          "historical_baseline"
+        ],
+        "extractor": {
+          "html_engine": "scrapling",
+          "selector": "div[style*=\"overflow:scroll\"]",
+          "expected_terms": [
+            "Brian Singer",
+            "Carly Davenport"
+          ]
+        },
+        "person_statement_basis": "original_transcript"
+      }
+    }
+  ]
+}
