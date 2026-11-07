@@ -225,7 +225,7 @@ publisher/origin、查询命中、时间精度和附件引用。HTML 优先 `<ma
 
 ### 清洗标识与历史重放
 
-新清洗提示使用 `typed-clean-identifiers/v1`。事件的 `target_ids` 只选本次输入列出的
+新清洗提示使用 `typed-clean-complete-format/v1`。事件的 `target_ids` 只选本次输入列出的
 裸产业链 ID 或 ETF 代码；采集档案里的 `global:`、`chain:`、`sector:`、`security:`
 和 `account:` 标识属于另一套命名空间，不能直接复制进事件。宏观或政策属性通过
 `event_type=macro/policy` 表达；不涉及给定产业链或 ETF 时，事件目标可以为空数组。
@@ -236,7 +236,14 @@ publisher/origin、查询命中、时间精度和附件引用。HTML 优先 `<ma
 这只是对模型输出格式和引用关系的说明，不放宽 schema，不补写或删除模型答案，
 也不改变原文分批、五阶段、合法窗口、一次执行级格式重答或逐事件证据资格规则。
 
-历史 `typed-clean-legacy/v1` 与 `typed-clean-summary-characters/v1` 的提示字节继续保留。
+摘要等纯文本说明字段不能使用 `<` 或 `>` 表达比较、排序，须写成“优于”“低于”等
+中文；原文、逐字 quote 和 value/unit/currency 的字面绑定继续保留，宿主不转义、
+替换或修补模型答案。每批提示明确写出本批真实行数，要求按输入顺序逐字复制每个 ID。
+同 URL、同故事或相同正文的不同来源和版本仍各自输出，不能去重、按相关性删行或
+添加 `_dup` 之类的新 ID；资料不足的行仍保留文档、中文摘要、反证和未解决缺口。
+
+历史 `typed-clean-legacy/v1`、`typed-clean-summary-characters/v1` 与
+`typed-clean-identifiers/v1` 的提示字节继续保留。
 独立证明按已识别的冻结模块 SHA 选择当时的提示，未知或被修改的冻结实现拒绝重放；
 新的提示不能补签旧运行，也不能让旧的不合格回答变成合格。
 

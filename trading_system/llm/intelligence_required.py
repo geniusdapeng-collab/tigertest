@@ -82,7 +82,8 @@ TASKS = {**legacy.TASKS,
 # model formatting; it never truncates source data or edits a model answer.
 LEGACY_CLEAN_FORMAT_CONTRACT = "typed-clean-legacy/v1"
 SUMMARY_CLEAN_FORMAT_CONTRACT = "typed-clean-summary-characters/v1"
-CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
+IDENTIFIERS_CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
+CLEAN_FORMAT_CONTRACT = "typed-clean-complete-format/v1"
 LEGACY_CLEAN_TASK = (
     "逐篇完成实体消歧、情感、事件与中文摘要。每个输入id恰好返回一次。"
     "每篇tickers最多8个，先去重，再按文章主题只保留直接相关且能从文档核实的股票代码。"
@@ -112,7 +113,7 @@ SUMMARY_CLEAN_TASK = LEGACY_CLEAN_TASK + (
     "各数组的项数、枚举和字符串长度逐项遵守给定schema，不多填、不漏项。"
     "quote保留完整必要原文，不能为满足摘要长度去裁切原文证据或改写引用。"
 )
-TASKS["clean.llm_semantic"] = SUMMARY_CLEAN_TASK + (
+IDENTIFIERS_CLEAN_TASK = SUMMARY_CLEAN_TASK + (
     "清洗标识使用独立命名空间：event_records[].target_ids只能从本次顶层输入target_ids"
     "原样选取给定的裸产业链ID或ETF代码，例如memory、XLK；不能复制source_metadata里的采集目标。"
     "global:、chain:、sector:、security:、account:前缀的采集标识都不能放进事件target_ids。"
@@ -124,6 +125,15 @@ TASKS["clean.llm_semantic"] = SUMMARY_CLEAN_TASK + (
     "照常完成中文摘要，在摘要明确相关事实或反证及主体未能确证的未解决缺口。"
     "能以原文span确证的主体、事件和claims必须如实提取，尤其保留负面事实和relation=refutes的反证；"
     "不能为通过schema而清空已有依据的结构化结果、删除文档或隐藏反证，也不能把未解决缺口写成没有风险。"
+)
+TASKS["clean.llm_semantic"] = IDENTIFIERS_CLEAN_TASK + (
+    "summary_zh等schema要求纯文本的说明字段不能含字符<或>、HTML或控制字符；"
+    "比较和排序写成中文，例如优于、低于，不要把原文的排序符号复制进说明。"
+    "这不允许改写content、evidence_spans[].quote或claims的value/unit/currency；"
+    "原文和quote逐字保留，字面值继续遵守原schema和原文绑定，不能为格式通过而替换、转义、裁切或猜造。"
+    "每个输入文档行都必须保留，包括无关、证据不足或无法确证主体的行，仍按原规则说明缺口和反证。"
+    "同URL、同故事或相同正文的不同来源/版本仍按各自输入id独立输出，不合并、不去重、不按相关性过滤。"
+    "id逐字复制，绝不添加_dup等后缀、重命名或自造id。"
 )
 
 
@@ -157,8 +167,17 @@ def chat_arguments(stage, inputs, schema, assessment, *, clean_format_contract=C
             task = LEGACY_CLEAN_TASK
         elif clean_format_contract == SUMMARY_CLEAN_FORMAT_CONTRACT:
             task = SUMMARY_CLEAN_TASK
+        elif clean_format_contract == IDENTIFIERS_CLEAN_FORMAT_CONTRACT:
+            task = IDENTIFIERS_CLEAN_TASK
         elif clean_format_contract != CLEAN_FORMAT_CONTRACT:
             _fail("Unknown clean-format prompt contract")
+        else:
+            documents = inputs.get("documents")
+            if not isinstance(documents, list):
+                _fail("Mandatory clean request requires an explicit document row list")
+            task += (f"本批输入documents恰好{len(documents)}行，输出documents也必须恰好{len(documents)}行。"
+                     "按输入原顺序逐行输出，第i行id必须逐字等于第i个输入id；"
+                     "输出前逐行核对id、顺序、总数和schema，不能漏行、重复行或额外添行。")
     if stage == "decision.debate":
         task += ("company_evidence来自评分前冻结的SEC原文；只有该证券自己的source_ids可用作下单新闻。"
                  "本阶段不再联网补资料。partial必需覆盖或无action资格的证券只能watch；不得把行业资料代作公司证据。")

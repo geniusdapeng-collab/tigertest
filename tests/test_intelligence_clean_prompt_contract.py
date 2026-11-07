@@ -16,7 +16,7 @@ from trading_system.llm.model_budget import (CONTEXT_TOKENS, MAX_OUTPUT_TOKENS, 
     chat_request_core, count_json_tokens, plan_request)
 from trading_system.llm.required_schemas import clean_schema
 from trading_system.redline import LLMUnavailable
-from trading_system.redline.execution import REQUIRED_MODEL_STAGES
+from trading_system.redline.execution import REQUIRED_MODEL_STAGES, RequiredModelFailed
 from trading_system.search.models import RawDocument
 
 
@@ -124,9 +124,12 @@ def test_guidance_does_not_turn_overlong_model_answer_into_valid_or_truncated_ou
     (semantic.SUMMARY_CLEAN_FORMAT_CONTRACT,
      "a5537cce004c4ccfc07d4a085f3bccda3d7e664310eabb4090ed54182a8ff275",
      "df23f2feb8964b1f89cd02127ea100bd1b81eedbbf742429052e8a53508f8baf"),
+    (semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT,
+     "77a60f0ca4f35bdaaf1377899494530267fb7a12e2eabb58ad0375f39e686936",
+     "87aca1bd0eb73fdece79944f1b0a74dfdee08143d9ccb6ba083904fd847bb667"),
 ])
-def test_both_historical_task_and_complete_wire_hashes_remain_exact(contract, task_sha, wire_sha):
-    # Recorded before this change from 09aa, using the complete legal window.
+def test_all_historical_task_and_complete_wire_hashes_remain_exact(contract, task_sha, wire_sha):
+    # Recorded before each version change, using the complete legal window.
     schema = clean_schema([], structured=True, target_ids=semantic.TARGET_IDS)
     arguments = semantic.chat_arguments("clean.llm_semantic",
         {"documents": [], "target_ids": semantic.TARGET_IDS}, schema, assessment(),
@@ -139,13 +142,16 @@ def test_both_historical_task_and_complete_wire_hashes_remain_exact(contract, ta
     assert hashlib.sha256(arguments["user"].encode()).hexdigest() == task_sha
     assert hashlib.sha256(canonical_json(wire).encode()).hexdigest() == wire_sha
     assert ceiling == MAX_OUTPUT_TOKENS
-    assert "清洗标识使用独立命名空间" not in arguments["user"]
+    assert ("清洗标识使用独立命名空间" in arguments["user"]) == (
+        contract == semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT)
+    assert "本批输入documents恰好" not in arguments["user"]
 
 
 @pytest.mark.parametrize("constant,expected", [
     ("LEGACY_CLEAN_SOURCE_SHA256", semantic.LEGACY_CLEAN_FORMAT_CONTRACT),
     ("SUMMARY_CLEAN_SOURCE_SHA256", semantic.SUMMARY_CLEAN_FORMAT_CONTRACT),
     ("SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256", semantic.SUMMARY_CLEAN_FORMAT_CONTRACT),
+    ("IDENTIFIERS_CLEAN_SOURCE_SHA256", semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT),
 ])
 def test_recognized_historical_source_maps_to_its_own_task_without_execution(tmp_path, monkeypatch, constant, expected):
     # Only the fixture trust digest is substituted. Unknown source rejection is
@@ -157,11 +163,14 @@ def test_recognized_historical_source_maps_to_its_own_task_without_execution(tmp
 
 
 def test_identifier_prompt_distinguishes_targets_and_requires_local_evidenced_subjects():
-    assert semantic.CLEAN_FORMAT_CONTRACT == "typed-clean-identifiers/v1"
+    assert semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT == "typed-clean-identifiers/v1"
+    assert semantic.CLEAN_FORMAT_CONTRACT == "typed-clean-complete-format/v1"
     assert proof.SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256 == (
         "8d3154751d3b92e0024590cb9d2226d68638a59156a81ba0ecd626eec9845222")
+    assert proof.IDENTIFIERS_CLEAN_SOURCE_SHA256 == (
+        "6cea0fe5533469d8888ecde8e7fd9bb853c7c1dea544136c0dd2655292b61f36")
     task = semantic.chat_arguments("clean.llm_semantic", {"documents": []}, {}, assessment())["user"]
-    assert task.startswith(semantic.SUMMARY_CLEAN_TASK)
+    assert task.startswith(semantic.IDENTIFIERS_CLEAN_TASK)
     for guidance in ("顶层输入target_ids", "裸产业链ID或ETF代码", "global:、chain:、sector:、security:、account:",
                      "event_type=macro或policy", "target_ids=[]", "只引用本篇subjects[].id", "必须非空",
                      "无法从本篇原文确证主体时", "仍保留该document和完整原文", "未解决缺口",
@@ -249,3 +258,86 @@ def test_all237_complete_originals_remain_in_exact_legal_wire(tmp_path):
         assert row["content"] == original.content and row["source_metadata"] == original.meta
         assert row["native_content_sha256"] == hashlib.sha256(original.content.encode()).hexdigest()
         assert original.content in wire["messages"][1]["content"]
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 237])
+def test_new_format_prompt_uses_actual_batch_count_and_exact_ordered_ids(count):
+    documents = [{"id": "document-" + str(index)} for index in range(count)]
+    arguments = semantic.chat_arguments("clean.llm_semantic", {"documents": documents}, {}, assessment())
+    task = arguments["user"]
+    assert f"本批输入documents恰好{count}行，输出documents也必须恰好{count}行" in task
+    assert "按输入原顺序逐行输出，第i行id必须逐字等于第i个输入id" in task
+    for guidance in ("summary_zh等schema要求纯文本", "不能含字符<或>", "优于、低于",
+                     "content、evidence_spans[].quote", "value/unit/currency",
+                     "不同来源/版本仍按各自输入id独立输出", "不合并、不去重、不按相关性过滤",
+                     "绝不添加_dup", "不能漏行、重复行或额外添行"):
+        assert guidance in task
+    assert arguments["public_payload"]["documents"] == documents
+
+
+@pytest.mark.parametrize("documents", [None, {}, (), "not-a-row-list"])
+def test_new_format_count_requires_explicit_document_rows(documents):
+    with pytest.raises(RequiredModelFailed, match="explicit document row list"):
+        semantic.chat_arguments("clean.llm_semantic", {"documents": documents}, {}, assessment())
+
+
+@pytest.mark.parametrize("summary", ["甲>乙", "甲<乙", "甲\n乙", "甲\u202e乙"])
+def test_plaintext_summary_still_rejects_operators_or_controls_without_repair(summary):
+    annotation = typed_annotation()
+    annotation["summary_zh"] = summary
+    before = deepcopy(annotation)
+    with pytest.raises(LLMUnavailable) as caught:
+        validate_schema({"documents": [annotation]}, clean_schema(["document"], structured=True,
+            target_ids=semantic.TARGET_IDS))
+    assert caught.value.diagnostic["schema_path"] == "/documents/0/summary_zh"
+    assert caught.value.diagnostic["schema_keyword"] == "pattern"
+    assert annotation == before
+
+
+def test_chinese_comparison_accepts_without_rewriting_verbatim_quote_or_claim_literals():
+    annotation = typed_annotation()
+    annotation["summary_zh"] = "制造业弱于上期，原文还记载了金额条件，仍需核验事实。"
+    quote = "Manufacturing weakened. Value>5 USD per share."
+    annotation["evidence_spans"][0].update(quote=quote, end=len(quote))
+    annotation["claims"][0].update(value="5", unit="per share", currency="USD")
+    before = deepcopy(annotation)
+    validate_schema({"documents": [annotation]}, clean_schema(["document"], structured=True,
+        target_ids=semantic.TARGET_IDS))
+    assert annotation == before and annotation["evidence_spans"][0]["quote"] == quote
+
+
+def test_same_url_or_story_versions_keep_both_original_rows_and_special_characters(tmp_path):
+    frozen_semantic(tmp_path)
+    replay = proof._Replay.__new__(proof._Replay)
+    replay.run, replay.assessment = tmp_path, assessment()
+    replay.scene_policy_path = SOURCE_ROOT / SCENE_POLICY_RELATIVE
+    content = "Manufacturing weakened. Value>5 USD per share."
+    originals = [RawDocument("document-v" + str(index), "web_page", "TEST_FIXTURE same story",
+        "https://example.test/same-story", content, "2026-10-19T12:00:00+00:00",
+        meta={"intelligence_version": index}) for index in (1, 2)]
+    batches = semantic.plan_clean_documents(originals, replay.planner("clean.llm_semantic"))
+    assert len(batches) == 1
+    docs, payload, schema = batches[0]
+    assert docs == originals and [row["id"] for row in payload["documents"]] == ["document-v1", "document-v2"]
+    assert [row["content"] for row in payload["documents"]] == [content, content]
+    assert [row["source_metadata"]["intelligence_version"] for row in payload["documents"]] == [1, 2]
+    wire, _estimate, _ceiling = replay.planner("clean.llm_semantic")(payload, schema)
+    assert "本批输入documents恰好2行" in wire["messages"][1]["content"]
+    assert "Value>5 USD per share." in wire["messages"][1]["content"]
+
+
+def test_missing_or_fabricated_ids_and_duplicates_remain_rejected_without_host_completion():
+    first, second = typed_annotation(), typed_annotation()
+    first["id"], second["id"] = "document-v1", "document-v2"
+    schema = clean_schema(["document-v1", "document-v2"], structured=True, target_ids=semantic.TARGET_IDS)
+    with pytest.raises(LLMUnavailable):
+        validate_schema({"documents": [first]}, schema)
+    second["id"] = "document-v2_dup"
+    before = deepcopy(second)
+    with pytest.raises(LLMUnavailable):
+        validate_schema({"documents": [first, second]}, schema)
+    assert second == before
+    second["id"], second["summary_zh"] = "document-v1", "同一id的另一个不同说明。"
+    validate_schema({"documents": [first, second]}, schema)
+    with pytest.raises(RequiredModelFailed):
+        semantic._coverage([first, second], "id", ["document-v1", "document-v2"])
