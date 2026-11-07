@@ -223,6 +223,23 @@ publisher/origin、查询命中、时间精度和附件引用。HTML 优先 `<ma
 确定性验证器检查确切原文区间、审定身份和时序；未知值保留未知，不用抓取时间、
 标题 hash 或英文季度正则替代全部事件语义。
 
+### 清洗标识与历史重放
+
+新清洗提示使用 `typed-clean-identifiers/v1`。事件的 `target_ids` 只选本次输入列出的
+裸产业链 ID 或 ETF 代码；采集档案里的 `global:`、`chain:`、`sector:`、`security:`
+和 `account:` 标识属于另一套命名空间，不能直接复制进事件。宏观或政策属性通过
+`event_type=macro/policy` 表达；不涉及给定产业链或 ETF 时，事件目标可以为空数组。
+
+每个 typed event 必须引用本篇 `subjects[].id`，且主体有可核验的原文 span。无法
+确证主体时不造该 typed event 及依赖它的 claim，原文和文档行仍完整保留，中文摘要
+如实写明事实或反证以及未解决的主体缺口；有原文依据的负面事件和反证仍须保留。
+这只是对模型输出格式和引用关系的说明，不放宽 schema，不补写或删除模型答案，
+也不改变原文分批、五阶段、合法窗口、一次执行级格式重答或逐事件证据资格规则。
+
+历史 `typed-clean-legacy/v1` 与 `typed-clean-summary-characters/v1` 的提示字节继续保留。
+独立证明按已识别的冻结模块 SHA 选择当时的提示，未知或被修改的冻结实现拒绝重放；
+新的提示不能补签旧运行，也不能让旧的不合格回答变成合格。
+
 `allowed_uses` 按事件分为 background、analysis、scoring、action。一段宏观材料
 可以供背景阅读，却不能借此取得某股票的行动资格。action 只是允许作为行动证据
 来源，数值阈值、仓位、止损和最终计划校验仍单独执行。转载按共同原始来源归组，

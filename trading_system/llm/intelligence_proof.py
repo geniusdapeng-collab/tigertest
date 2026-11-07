@@ -59,6 +59,7 @@ from .scene_policy import KERNEL_SCENE_MAP, scene_config, ScenePolicyError
 
 LEGACY_CLEAN_SOURCE_SHA256 = "dc15de6306fe8e134df343ea42a0bf8073b4a7408e8c6eca2b3e418022a61c3f"
 SUMMARY_CLEAN_SOURCE_SHA256 = "3db582964bbfa8a709ff3c40c5f72ec4012b1f6a06b74f6c5e57e5a4771b5008"
+SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256 = "8d3154751d3b92e0024590cb9d2226d68638a59156a81ba0ecd626eec9845222"
 
 
 def _fail(stage=None):
@@ -77,8 +78,8 @@ def frozen_clean_format_contract(run):
     observed = hashlib.sha256(content).hexdigest()
     if observed == LEGACY_CLEAN_SOURCE_SHA256:
         return semantic.LEGACY_CLEAN_FORMAT_CONTRACT
-    if observed == SUMMARY_CLEAN_SOURCE_SHA256:
-        return semantic.CLEAN_FORMAT_CONTRACT
+    if observed in {SUMMARY_CLEAN_SOURCE_SHA256, SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256}:
+        return semantic.SUMMARY_CLEAN_FORMAT_CONTRACT
     trusted = Path(semantic.__file__).read_bytes()
     if observed != hashlib.sha256(trusted).hexdigest():
         _fail(stage)

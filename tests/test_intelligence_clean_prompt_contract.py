@@ -1,6 +1,8 @@
 """Clean formatting guidance keeps frozen request replay and legal windows."""
 from datetime import datetime, timezone
+from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,9 @@ from trading_system.agent_evidence import EvidenceInvalid
 from trading_system.agent_runtime import SCENE_POLICY_RELATIVE, SOURCE_ROOT, frozen_clock
 from trading_system.llm import intelligence_proof as proof
 from trading_system.llm import intelligence_required as semantic
-from trading_system.llm.deepseek_required import validate_schema
+from trading_system.llm.deepseek_required import sanitize_model_text, sanitize_model_value, validate_schema
+from trading_system.llm.model_budget import (CONTEXT_TOKENS, MAX_OUTPUT_TOKENS, canonical_json,
+    chat_request_core, count_json_tokens, plan_request)
 from trading_system.llm.required_schemas import clean_schema
 from trading_system.redline import LLMUnavailable
 from trading_system.redline.execution import REQUIRED_MODEL_STAGES
@@ -111,3 +115,137 @@ def test_guidance_does_not_turn_overlong_model_answer_into_valid_or_truncated_ou
     assert document["summary_zh"] == "长" * 601
     document["summary_zh"] = "长" * 600
     validate_schema({"documents": [document]}, schema)
+
+
+@pytest.mark.parametrize("contract,task_sha,wire_sha", [
+    (semantic.LEGACY_CLEAN_FORMAT_CONTRACT,
+     "fa974aa29c276905fe9a0f6b3226f674eb07579147d77cf9639d381350f58c82",
+     "aeadaaa653a29d63083d50e30cf5918dbc6260539db3a3dfa9a65da130eedaf1"),
+    (semantic.SUMMARY_CLEAN_FORMAT_CONTRACT,
+     "a5537cce004c4ccfc07d4a085f3bccda3d7e664310eabb4090ed54182a8ff275",
+     "df23f2feb8964b1f89cd02127ea100bd1b81eedbbf742429052e8a53508f8baf"),
+])
+def test_both_historical_task_and_complete_wire_hashes_remain_exact(contract, task_sha, wire_sha):
+    # Recorded before this change from 09aa, using the complete legal window.
+    schema = clean_schema([], structured=True, target_ids=semantic.TARGET_IDS)
+    arguments = semantic.chat_arguments("clean.llm_semantic",
+        {"documents": [], "target_ids": semantic.TARGET_IDS}, schema, assessment(),
+        clean_format_contract=contract)
+    user = sanitize_model_text(arguments["user"]) + "\n" + json.dumps(
+        sanitize_model_value(arguments["public_payload"]), ensure_ascii=False,
+        sort_keys=True, separators=(",", ":"), allow_nan=False)
+    wire, _estimate, ceiling = plan_request(chat_request_core(system=sanitize_model_text(arguments["system"]),
+        user=user, schema=schema, schema_hint={}, thinking_mode="disabled", effort=None, temperature=.2))
+    assert hashlib.sha256(arguments["user"].encode()).hexdigest() == task_sha
+    assert hashlib.sha256(canonical_json(wire).encode()).hexdigest() == wire_sha
+    assert ceiling == MAX_OUTPUT_TOKENS
+    assert "清洗标识使用独立命名空间" not in arguments["user"]
+
+
+@pytest.mark.parametrize("constant,expected", [
+    ("LEGACY_CLEAN_SOURCE_SHA256", semantic.LEGACY_CLEAN_FORMAT_CONTRACT),
+    ("SUMMARY_CLEAN_SOURCE_SHA256", semantic.SUMMARY_CLEAN_FORMAT_CONTRACT),
+    ("SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256", semantic.SUMMARY_CLEAN_FORMAT_CONTRACT),
+])
+def test_recognized_historical_source_maps_to_its_own_task_without_execution(tmp_path, monkeypatch, constant, expected):
+    # Only the fixture trust digest is substituted. Unknown source rejection is
+    # exercised separately; actual 09aa module/wire replay is a delivery probe.
+    content = b"raise AssertionError('Historical frozen code must not execute')\n"
+    frozen_semantic(tmp_path, content)
+    monkeypatch.setattr(proof, constant, hashlib.sha256(content).hexdigest())
+    assert proof.frozen_clean_format_contract(tmp_path) == expected
+
+
+def test_identifier_prompt_distinguishes_targets_and_requires_local_evidenced_subjects():
+    assert semantic.CLEAN_FORMAT_CONTRACT == "typed-clean-identifiers/v1"
+    assert proof.SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256 == (
+        "8d3154751d3b92e0024590cb9d2226d68638a59156a81ba0ecd626eec9845222")
+    task = semantic.chat_arguments("clean.llm_semantic", {"documents": []}, {}, assessment())["user"]
+    assert task.startswith(semantic.SUMMARY_CLEAN_TASK)
+    for guidance in ("顶层输入target_ids", "裸产业链ID或ETF代码", "global:、chain:、sector:、security:、account:",
+                     "event_type=macro或policy", "target_ids=[]", "只引用本篇subjects[].id", "必须非空",
+                     "无法从本篇原文确证主体时", "仍保留该document和完整原文", "未解决缺口",
+                     "relation=refutes", "不能为通过schema而清空"):
+        assert guidance in task
+
+
+def typed_annotation():
+    return {"id": "document", "tickers": [], "sentiment": "neutral", "sentiment_score": 0,
+        "events": ["macro"], "summary_zh": "制造业资料存在，主体及时间仍需核验。", "relevance": .5,
+        "subjects": [{"id": "subject-1", "type": "industry", "name": "Manufacturing",
+            "identifiers": [], "span_ids": ["span-1"]}],
+        "evidence_spans": [{"id": "span-1", "quote": "Manufacturing weakened.", "start": 0, "end": 23}],
+        "event_records": [{"id": "event-1", "event_type": "macro", "subject_ids": ["subject-1"],
+            "is_primary": True, "event_identifiers": [],
+            "report_period": {"kind": "unknown", "value": None, "span_ids": []},
+            "event_time": {"precision": "unknown", "value": None, "span_ids": []},
+            "effective_time": {"precision": "unknown", "value": None, "span_ids": []},
+            "source_span_ids": ["span-1"], "claim_kind": "analysis", "target_ids": []}],
+        "claims": [{"id": "claim-1", "event_id": "event-1", "predicate": "manufacturing_strength",
+            "value": None, "unit": None, "currency": None, "source_span_ids": ["span-1"],
+            "relation": "refutes", "conflict_group": None, "supersedes_claim_id": None}]}
+
+
+@pytest.mark.parametrize("targets", [[], ["memory"], ["XLK"]])
+def test_macro_empty_or_given_target_preserves_evidenced_subject_and_counterevidence(targets):
+    annotation = typed_annotation()
+    annotation["event_records"][0]["target_ids"] = targets
+    before = deepcopy(annotation)
+    validate_schema({"documents": [annotation]}, clean_schema(["document"], structured=True,
+        target_ids=semantic.TARGET_IDS))
+    assert annotation == before and annotation["claims"][0]["relation"] == "refutes"
+
+
+@pytest.mark.parametrize("target", ["global:macro", "chain:memory", "sector:XLK", "security:us:NVDA", "account:holdings"])
+def test_acquisition_target_namespace_still_fails_event_enum(target):
+    annotation = typed_annotation()
+    annotation["event_records"][0]["target_ids"] = [target]
+    before = deepcopy(annotation)
+    with pytest.raises(LLMUnavailable) as caught:
+        validate_schema({"documents": [annotation]}, clean_schema(["document"], structured=True,
+            target_ids=semantic.TARGET_IDS))
+    assert caught.value.diagnostic["schema_path"] == "/documents/0/event_records/0/target_ids/0"
+    assert caught.value.diagnostic["schema_keyword"] == "enum"
+    assert annotation == before
+
+
+def test_empty_event_subject_still_fails_without_output_repair():
+    annotation = typed_annotation()
+    annotation["event_records"][0]["subject_ids"] = []
+    before = deepcopy(annotation)
+    with pytest.raises(LLMUnavailable) as caught:
+        validate_schema({"documents": [annotation]}, clean_schema(["document"], structured=True,
+            target_ids=semantic.TARGET_IDS))
+    assert caught.value.diagnostic["schema_path"] == "/documents/0/event_records/0/subject_ids"
+    assert caught.value.diagnostic["schema_keyword"] == "minItems"
+    assert annotation == before
+
+
+def test_unresolved_subject_can_keep_document_and_summary_without_fabricating_typed_event():
+    annotation = typed_annotation()
+    annotation.update(subjects=[], event_records=[], claims=[], summary_zh="正文有制造业反证，但主体未能确证，仍存在未解决缺口。")
+    before = deepcopy(annotation)
+    validate_schema({"documents": [annotation]}, clean_schema(["document"], structured=True,
+        target_ids=semantic.TARGET_IDS))
+    assert annotation == before and annotation["id"] == "document"
+
+
+def test_all237_complete_originals_remain_in_exact_legal_wire(tmp_path):
+    frozen_semantic(tmp_path)
+    replay = proof._Replay.__new__(proof._Replay)
+    replay.run, replay.assessment = tmp_path, assessment()
+    replay.scene_policy_path = SOURCE_ROOT / SCENE_POLICY_RELATIVE
+    originals = [RawDocument("document-" + str(index), "web_page", "TEST_FIXTURE",
+        "https://example.test/" + str(index), "Manufacturing weakened. " * 60 + "TAIL-" + str(index),
+        "2026-10-19T12:00:00+00:00", meta={"target_ids": ["global:macro"]}) for index in range(237)]
+    batches = semantic.plan_clean_documents(originals, replay.planner("clean.llm_semantic"))
+    assert len(batches) == 1
+    docs, payload, schema = batches[0]
+    assert docs == originals and len(payload["documents"]) == 237
+    wire, estimate, ceiling = replay.planner("clean.llm_semantic")(payload, schema)
+    assert estimate == count_json_tokens(wire) and estimate + ceiling <= CONTEXT_TOKENS
+    assert ceiling == wire["max_tokens"] == min(MAX_OUTPUT_TOKENS, CONTEXT_TOKENS - estimate)
+    for original, row in zip(originals, payload["documents"], strict=True):
+        assert row["content"] == original.content and row["source_metadata"] == original.meta
+        assert row["native_content_sha256"] == hashlib.sha256(original.content.encode()).hexdigest()
+        assert original.content in wire["messages"][1]["content"]

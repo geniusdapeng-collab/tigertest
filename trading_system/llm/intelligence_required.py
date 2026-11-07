@@ -81,7 +81,8 @@ TASKS = {**legacy.TASKS,
 # Keep the historical task byte-for-byte replayable. This extension guides
 # model formatting; it never truncates source data or edits a model answer.
 LEGACY_CLEAN_FORMAT_CONTRACT = "typed-clean-legacy/v1"
-CLEAN_FORMAT_CONTRACT = "typed-clean-summary-characters/v1"
+SUMMARY_CLEAN_FORMAT_CONTRACT = "typed-clean-summary-characters/v1"
+CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
 LEGACY_CLEAN_TASK = (
     "逐篇完成实体消歧、情感、事件与中文摘要。每个输入id恰好返回一次。"
     "每篇tickers最多8个，先去重，再按文章主题只保留直接相关且能从文档核实的股票代码。"
@@ -104,12 +105,25 @@ LEGACY_CLEAN_TASK = (
     "target_ids仅选实际涉及且给定的产业链/ETF，不因检索标签而默认关联。"
     "正文没有可核事实可返回空subjects/event_records，仍完成中文摘要；零输入返回documents=[]。"
 )
-TASKS["clean.llm_semantic"] = LEGACY_CLEAN_TASK + (
+SUMMARY_CLEAN_TASK = LEGACY_CLEAN_TASK + (
     "输出前逐篇检查summary_zh：schema的maxLength=600按Unicode字符数计（不是token或字节），"
     "建议每篇160–300字符，绝不超过600字符；摘要不要重复全文、证据引文或其他字段。"
     "每个输入id必须恰好返回一次；tickers、events、subjects、evidence_spans、event_records、claims"
     "各数组的项数、枚举和字符串长度逐项遵守给定schema，不多填、不漏项。"
     "quote保留完整必要原文，不能为满足摘要长度去裁切原文证据或改写引用。"
+)
+TASKS["clean.llm_semantic"] = SUMMARY_CLEAN_TASK + (
+    "清洗标识使用独立命名空间：event_records[].target_ids只能从本次顶层输入target_ids"
+    "原样选取给定的裸产业链ID或ETF代码，例如memory、XLK；不能复制source_metadata里的采集目标。"
+    "global:、chain:、sector:、security:、account:前缀的采集标识都不能放进事件target_ids。"
+    "宏观或政策属性用event_type=macro或policy表达；不涉及给定产业链/ETF时target_ids=[]。"
+    "每个event_records[].subject_ids必须非空，且只引用本篇subjects[].id；"
+    "被引用主体的名称、标识与span_ids必须能从本篇content逐字核验，不能借用其他文章的主体。"
+    "宏观系列、行业、监管机构和境外主体可用各自subject type表达，不必伪造美股代码。"
+    "无法从本篇原文确证主体时，不构造该typed event及依赖它的claim；仍保留该document和完整原文，"
+    "照常完成中文摘要，在摘要明确相关事实或反证及主体未能确证的未解决缺口。"
+    "能以原文span确证的主体、事件和claims必须如实提取，尤其保留负面事实和relation=refutes的反证；"
+    "不能为通过schema而清空已有依据的结构化结果、删除文档或隐藏反证，也不能把未解决缺口写成没有风险。"
 )
 
 
@@ -141,6 +155,8 @@ def chat_arguments(stage, inputs, schema, assessment, *, clean_format_contract=C
     if stage == "clean.llm_semantic":
         if clean_format_contract == LEGACY_CLEAN_FORMAT_CONTRACT:
             task = LEGACY_CLEAN_TASK
+        elif clean_format_contract == SUMMARY_CLEAN_FORMAT_CONTRACT:
+            task = SUMMARY_CLEAN_TASK
         elif clean_format_contract != CLEAN_FORMAT_CONTRACT:
             _fail("Unknown clean-format prompt contract")
     if stage == "decision.debate":
