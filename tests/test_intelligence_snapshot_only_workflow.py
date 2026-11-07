@@ -237,6 +237,6 @@ def test_known_previous_summary_prompt_source_is_recognized_without_executing_it
     path = tmp_path / "source/trading_system/llm/intelligence_required.py"
     path.parent.mkdir(parents=True); path.write_bytes(content)
     monkeypatch.setattr(proof, "SUMMARY_CLEAN_SOURCE_SHA256", hashlib.sha256(content).hexdigest())
-    assert proof.frozen_clean_format_contract(tmp_path) == semantic.CLEAN_FORMAT_CONTRACT
+    assert proof.frozen_clean_format_contract(tmp_path) == semantic.SUMMARY_CLEAN_FORMAT_CONTRACT
     path.write_bytes(content + b"# unknown\n")
     with pytest.raises(EvidenceInvalid): proof.frozen_clean_format_contract(tmp_path)
