@@ -196,37 +196,139 @@ def test_supervisor_bootstrap_validation_has_deadline_before_acceptance(tmp_path
 
 @pytest.mark.parametrize("business_seconds", [2400, 5400])
 def test_supervisor_business_deadline_uses_original_clock_after_bootstrap(tmp_path, monkeypatch, business_seconds):
-    from trading_system.agent_evidence import atomic_json
+    from trading_system.agent_evidence import atomic_json, digest, read_bytes, strict_json
     state = checked_root(tmp_path / "state", create=True)
     run_id = "run-" + "b" * 32
     run = checked_root(state / "runs" / run_id, create=True)
     account_fd = runner._lock_fd(state, "account.lock", create=True, nonblocking=True)
     run_fd = runner._lock_fd(run, "run.lock", create=True, nonblocking=True)
     ack_read, ack_write = os.pipe()
-    original_deadline = datetime.now(timezone.utc) + timedelta(seconds=0.12)
-    atomic_json(run, "admission.json", {"fixture": "TEST_FIXTURE"})
+    # Leave preparation/acceptance a real business-sized horizon. A short wall
+    # starting before fsync tests filesystem latency rather than business expiry.
+    # The spent minute also makes restarting either policy duration observable.
+    original_deadline = datetime.now(timezone.utc) + timedelta(seconds=business_seconds - 60)
+    admission = {"fixture": "TEST_FIXTURE", "clock": {"deadline_at_utc": original_deadline.isoformat()}}
+    atomic_json(run, "admission.json", admission)
+    utc_reads, monotonic_reads, guards, timer_arms, reached = [], [], [], [], []
+    previous_alarm = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    real_setitimer = signal.setitimer
+
+    class SupervisorDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime.now(tz)
+            utc_reads.append(value)
+            return value
+
+    class SupervisorTime:
+        @staticmethod
+        def monotonic():
+            value = time.monotonic()
+            monotonic_reads.append(value)
+            return value
+
+    def observe_guard(*args, **kwargs):
+        guard = PreparationDeadline(*args, **kwargs)
+        guards.append(guard)
+        return guard
+
+    def observe_timer(which, seconds, interval=0):
+        timer_arms.append((which, seconds, interval, signal.getsignal(signal.SIGALRM)))
+        return real_setitimer(which, seconds, interval)
+
     def validate(_run):
         time.sleep(0.04)
-        return {"clock": {"deadline_at_utc": original_deadline.isoformat()}}, {"business_deadline_seconds": business_seconds}, {}
+        assert read_json(_run, "admission.json") == admission
+        return admission, {"business_deadline_seconds": business_seconds}, {}
+
     def slow_business(*_args, **kwargs):
-        assert 0 < kwargs["deadline"] - time.monotonic() < 0.12
+        # Assert the real durable handoff before injecting an alarm. Clock spies
+        # return actual readings, allowing exact translation checks without a
+        # scheduling-speed tolerance or a replacement timeout handler.
+        assert read_json(run, "accepted.json") == {
+            "schema": "tiger.accepted.v1", "run_id": run_id,
+            "supervisor_pid": os.getpid(),
+            "admission_sha256": digest(read_bytes(run, "admission.json")),
+        }
+        assert read_json(run, "status.json")["status"] == "running"
+        assert strict_json(os.read(ack_read, 4096)) == {"accepted": True, "run_id": run_id}
+        assert len(utc_reads) == len(monotonic_reads) == 1
+        original_remaining = (original_deadline - utc_reads[0]).total_seconds()
+        assert kwargs["deadline"] == monotonic_reads[0] + original_remaining
+        assert len(guards) == 2
+        business_guard = guards[1]
+        assert business_guard.stage == "supervisor.business" and business_guard.active
+        assert business_guard.seconds == original_remaining
+        assert business_guard.requested_deadline == business_guard.deadline == kwargs["deadline"]
+        remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+        handler = signal.getsignal(signal.SIGALRM)
+        assert callable(handler) and handler != previous_alarm
+        assert timer_arms[-1][0] == signal.ITIMER_REAL and timer_arms[-1][2:] == (0, handler)
+        assert 0 < remaining <= timer_arms[-1][1] <= original_remaining
+        assert interval == 0
+        reached.append("accepted-business")
+        # Expire the already-installed original business alarm only after the
+        # handoff and its frozen-clock/timer bindings have been proven.
+        signal.setitimer(signal.ITIMER_REAL, 0.02)
         time.sleep(2)
+
+    monkeypatch.setattr(supervisor, "datetime", SupervisorDateTime)
+    monkeypatch.setattr(supervisor, "time", SupervisorTime)
+    monkeypatch.setattr(supervisor, "PreparationDeadline", observe_guard)
+    monkeypatch.setattr(signal, "setitimer", observe_timer)
     monkeypatch.setattr(supervisor, "validate_admission", validate)
     monkeypatch.setattr(supervisor, "supervise_group", slow_business)
     previous_term = signal.getsignal(signal.SIGTERM)
     previous_int = signal.getsignal(signal.SIGINT)
     try:
-        started = time.monotonic()
         code = supervisor.supervisor(state, run_id, account_fd=account_fd, run_fd=run_fd, ack_fd=ack_write)
-        assert code == 1 and time.monotonic() - started < 0.5
+        assert code == 1 and reached == ["accepted-business"]
         status = read_json(run, "status.json")
         assert status["error"]["code"] == "TIMEOUT" and status["acceptance_was_durable"]
         assert status["error"]["stage"] == "supervisor.business"
         assert pointer_read(state) is None
+        assert signal.getsignal(signal.SIGALRM) == previous_alarm
+        assert previous_timer == signal.getitimer(signal.ITIMER_REAL) == (0, 0)
     finally:
         os.close(ack_read)
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
+
+
+@pytest.mark.parametrize("business_seconds", [2400, 5400])
+def test_supervisor_expired_admission_never_becomes_accepted(tmp_path, monkeypatch, business_seconds):
+    from trading_system.agent_evidence import atomic_json
+    state = checked_root(tmp_path / "state", create=True)
+    run_id = "run-" + "c" * 32
+    run = checked_root(state / "runs" / run_id, create=True)
+    account_fd = runner._lock_fd(state, "account.lock", create=True, nonblocking=True)
+    run_fd = runner._lock_fd(run, "run.lock", create=True, nonblocking=True)
+    ack_read, ack_write = os.pipe()
+    admission = {"fixture": "TEST_FIXTURE", "clock": {
+        "deadline_at_utc": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}
+    atomic_json(run, "admission.json", admission)
+    monkeypatch.setattr(supervisor, "validate_admission", lambda _run: (
+        read_json(_run, "admission.json"), {"business_deadline_seconds": business_seconds}, {}))
+    reached = []
+    monkeypatch.setattr(supervisor, "supervise_group", lambda *_args, **_kwargs: reached.append("business"))
+    previous_alarm = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    try:
+        code = supervisor.supervisor(state, run_id, account_fd=account_fd, run_fd=run_fd, ack_fd=ack_write)
+        status = read_json(run, "status.json")
+        assert code == 1 and reached == []
+        assert status["status"] == "failed" and status["error"]["code"] == "TIMEOUT"
+        assert status["acceptance_was_durable"] is False
+        assert not (run / "accepted.json").exists() and not (run / "processes.json").exists()
+        assert pointer_read(state) is None and os.read(ack_read, 4096) == b""
+        assert signal.getsignal(signal.SIGALRM) == previous_alarm
+        assert previous_timer == signal.getitimer(signal.ITIMER_REAL) == (0, 0)
+        for root, name in ((state, "account.lock"), (run, "run.lock")):
+            descriptor = runner._lock_fd(root, name, create=False, nonblocking=True)
+            os.close(descriptor)
+    finally:
+        os.close(ack_read)
 
 
 def test_ack_observation_timeout_does_not_kill_accepted_detached_worker(tmp_path, monkeypatch):
