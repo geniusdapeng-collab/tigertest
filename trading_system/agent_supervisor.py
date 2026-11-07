@@ -590,6 +590,7 @@ def engine(run: Path) -> int:
             store=EvidenceStore(run, run.name),
             authoritative_paper=bool(policy.get("paper_ledger_contract")),
             account_version_before=(admission["parent"] or {}).get("version_sha256"),
+            response_observation_contract=policy.get("model_contract", {}).get("response_observation_contract", ""),
         )
         main_file = run / "source" / "main.py"
         spec = importlib.util.spec_from_file_location("tiger_frozen_main", main_file)
@@ -650,11 +651,28 @@ def engine(run: Path) -> int:
         if execution is not None and execution.summary():
             stage = execution.summary()[-1]["stage"]
         error = error_record(exc, run_id=run.name, stage=stage)
+        failure = {"schema": "tiger.engine-result.v1", "run_id": run.name,
+                   "success": False, "error": error}
+        if execution is not None and execution.response_observation_contract:
+            try:
+                from trading_system.llm.intelligence_proof import verify_partial_intelligence_model
+                accounting = verify_partial_intelligence_model(run, admission,
+                    scene_policy_path=run / "source" / "governance/bundles/trading/model-policy.yml")
+                accounting["runtime_network_diagnostic"] = {
+                    "fixed_provider_host": "api.deepseek.com",
+                    "trusted_proxy_bypass_configured": "api.deepseek.com" in os.environ.get("NO_PROXY", "").split(","),
+                    "actual_egress_route_verified": False,
+                }
+                atomic_json(run, "model-failure-accounting.json", accounting, exclusive=True)
+                failure["model_failure_accounting"] = file_ref(run, "model-failure-accounting.json", "application/json")
+            except Exception:
+                # Preserve the primary business failure. A rejected or unwritable
+                # accounting summary is explicit unknown evidence, never zero cost.
+                failure["model_failure_accounting_verification"] = {
+                    "status": "rejected", "code": "MODEL_FAILURE_ACCOUNTING_UNVERIFIED"}
+                sys.stderr.write("Partial model accounting could not be independently verified or persisted.\n")
         try:
-            atomic_json(run, "engine-result.json", {
-                "schema": "tiger.engine-result.v1", "run_id": run.name,
-                "success": False, "error": error,
-            }, exclusive=True)
+            atomic_json(run, "engine-result.json", failure, exclusive=True)
         except (OSError, ValueError):
             sys.stderr.write("Unable to persist engine failure evidence.\n")
         sys.stderr.write(error["message"] + "\n")

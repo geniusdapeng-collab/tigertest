@@ -73,7 +73,8 @@ def snapshot_fixture(tmp_path, patch, *, failure_stage=None, authoritative=False
     (root / "intelligence-input.json").unlink()
     packet = stage_input_packet(root, as_of=execution.admitted_at)
     if authoritative:
-        atomic_json(root, "policy.json", policy_manifest(INTELLIGENCE_PROFILE, intelligence_input=packet))
+        atomic_json(root, "policy.json", policy_manifest(INTELLIGENCE_PROFILE, intelligence_input=packet,
+            response_observation_contract=execution.response_observation_contract))
     build_adapters = SourceRegistry.build_adapters
     def frozen_adapters(registry, *args, **kwargs):
         from trading_system.intelligence.replay import _FrozenTransport

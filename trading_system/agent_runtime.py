@@ -31,6 +31,7 @@ from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_
                                 INTELLIGENCE_SEARCH_SOURCES)
 from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
 from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
+from .llm.json_observation import CONTRACT as RESPONSE_OBSERVATION_CONTRACT, SOURCE_PATH as RESPONSE_OBSERVATION_RELATIVE
 
 PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
@@ -126,10 +127,17 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     event_contract: str = EVENT_EVIDENCE_CONTRACT,
                     risk_evidence_contract: str = RISK_EVIDENCE_CONTRACT,
                     authoritative_paper: bool = True, intelligence_input: dict | None = None,
-                    runtime_input: dict | None = None) -> dict:
+                    runtime_input: dict | None = None,
+                    response_observation_contract: str | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
+    if response_observation_contract is None:
+        response_observation_contract = RESPONSE_OBSERVATION_CONTRACT if intelligence else ""
+    if (type(response_observation_contract) is not str
+            or response_observation_contract not in {"", RESPONSE_OBSERVATION_CONTRACT}
+            or response_observation_contract and not intelligence):
+        raise EvidenceInvalid("RESULT_INVALID", "Unknown model response observation contract")
     required = profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}
     active = profile == ACTIVE_PROFILE
     policy_id = (INTELLIGENCE_POLICY_ID if intelligence else REQUIRED_POLICY_ID if required
@@ -226,6 +234,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                 risk_evidence_contract="tiger.tech-risk-evidence.v2",
                 company_evidence_contract="sec-frozen-typed-original/v3",
                 search_mode="intelligence_source_registry")
+            if response_observation_contract:
+                value["model_contract"]["response_observation_contract"] = response_observation_contract
             value["search_collection_budget_seconds"] = value["intelligence"]["limits"]["deadline_seconds"]
             value["limitations"] += [
                 "Intelligence sources are frozen from trusted startup configuration; unavailable sources and unknown version times remain explicit gaps.",
@@ -367,6 +377,20 @@ def verify_source(run: Path) -> dict:
     return manifest
 
 
+def trusted_model_no_proxy(value: str | None) -> str:
+    """Only trusted startup may add the fixed model host to loopback bypass."""
+    default = "localhost,127.0.0.1,::1"
+    if value is None:
+        return default
+    if type(value) is not str:
+        raise EvidenceInvalid("RESULT_INVALID", "Trusted model proxy bypass is invalid")
+    values = value.split(",")
+    base = {"localhost", "127.0.0.1", "::1"}
+    if (len(values) != len(set(values)) or set(values) not in (base, base | {"api.deepseek.com"})):
+        raise EvidenceInvalid("RESULT_INVALID", "Trusted model proxy bypass is invalid")
+    return default + (",api.deepseek.com" if "api.deepseek.com" in values else "")
+
+
 def run_environment(work: Path, *, model_required: bool = False) -> dict[str, str]:
     checked_root(work / "tmp", create=True)
     checked_root(work / "cache", create=True)
@@ -378,6 +402,8 @@ def run_environment(work: Path, *, model_required: bool = False) -> dict[str, st
         "TMPDIR": str(work / "tmp"), "XDG_CACHE_HOME": str(work / "cache"),
         "NETRC": os.devnull, "NO_PROXY": "localhost,127.0.0.1,::1",
     }
+    if model_required:
+        env["NO_PROXY"] = trusted_model_no_proxy(os.environ.get("NO_PROXY"))
     # Keep HOME unchanged; do not redirect the user's home to an artificial
     # directory. Application configuration comes only from the fixed policy.
     if "HOME" in os.environ:
@@ -640,7 +666,10 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
                                       authoritative_paper=any(ref["path"] == PAPER_LEDGER_RELATIVE for ref in source["files"]),
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
                                       intelligence_input=intelligence_input,
-                                      runtime_input=runtime_input)
+                                      runtime_input=runtime_input,
+                                      response_observation_contract=(RESPONSE_OBSERVATION_CONTRACT
+                                          if RESPONSE_OBSERVATION_RELATIVE in frozen_files
+                                          and request["profile"] == INTELLIGENCE_PROFILE else ""))
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
@@ -854,7 +883,9 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
             source_content_contract=model_contract.get("source_content_contract", LEGACY_SOURCE_CONTENT_CONTRACT),
             company_evidence_contract=model_contract.get("company_evidence_contract", ""),
             event_contract=model_contract.get("event_contract", ""),
-            risk_evidence_contract=model_contract.get("risk_evidence_contract", ""))
+            risk_evidence_contract=model_contract.get("risk_evidence_contract", ""),
+            **({"response_observation_contract": model_contract.get("response_observation_contract", "")}
+               if profile == INTELLIGENCE_PROFILE else {}))
         if model_contract.get("company_evidence_contract"):
             summary["disclosures"]["company_evidence"] = raw["debate"]["company_evidence"]
         summary["action_summary"] = raw["action_summary"]

@@ -19,7 +19,8 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from ..agent_evidence import (EvidenceInvalid, normalize, read_bytes, read_json,
-                              read_snapshot, strict_json, verify_events, checked_root, safe_path)
+                              read_snapshot, strict_json, verify_events, checked_root, safe_path,
+                              digest, json_bytes)
 from ..cleaning.pipeline import rule_base_clean
 from ..intelligence import (build_plan, default_registry,
                             project_to_rawdocuments, replay_observation, verify_bundle)
@@ -124,7 +125,7 @@ def _source_parameters(spec, operation, parameters):
 
 
 class _Replay:
-    def __init__(self, run, admission, scene_policy_path):
+    def __init__(self, run, admission, scene_policy_path, *, _partial=False):
         self.run, self.admission, self.scene_policy_path = Path(run), admission, scene_policy_path
         clock = admission["clock"]
         self.cutoff = datetime.fromisoformat(clock["admitted_at_utc"])
@@ -142,8 +143,12 @@ class _Replay:
         contract = daily_stage_contract(True, intelligence=True, authoritative_paper=self.authoritative_paper)
         if self.policy is not None:
             _same(self.policy["stages"], contract)
-        verify_events(self.run, self.run.name, contract)
-        events = [strict_json(line) for line in read_bytes(self.run, "events.jsonl").splitlines()]
+        if _partial:
+            events = _partial_events(self.run, contract)
+        else:
+            verify_events(self.run, self.run.name, contract)
+            events = [strict_json(line) for line in read_bytes(self.run, "events.jsonl").splitlines()]
+        self.events = events
         self.ends = {row["stage"]: row for row in events if row["kind"] == "end"}
         self.outputs = {stage: self.snapshot(row, "output") for stage, row in self.ends.items()}
         self.inputs = {stage: self.snapshot(row, "input") for stage, row in self.ends.items()}
@@ -156,6 +161,10 @@ class _Replay:
         self.response_ids, self.call_ids, self.identities = [], set(), set()
         self.counts = {stage: 0 for stage in REQUIRED_MODEL_STAGES}
         self.chat_schema_retries = 0
+        self.observation_contract = (self.policy or {}).get("model_contract", {}).get(
+            "response_observation_contract", "")
+        self.observation_refs = set()
+        self.chat_observations = []
         self.native_searches, self.native_fetches = [], []
         self.attempt_stages = {}
 
@@ -203,7 +212,14 @@ class _Replay:
             "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
             "tokenizer_sha256": TOKENIZER_SHA256}
         body = request["request"]
-        if (request["schema"] != "tiger.deepseek-request.v1"
+        observed = bool(self.observation_contract)
+        if observed:
+            from .json_observation import CONTRACT
+            if self.observation_contract != CONTRACT or request.get("response_observation_contract") != CONTRACT:
+                _fail(stage)
+        elif "response_observation_contract" in request or "response_observation" in proof:
+            _fail(stage)
+        if (request["schema"] != ("tiger.deepseek-request.v2" if observed else "tiger.deepseek-request.v1")
                 or request["endpoint"] != "https://api.deepseek.com/chat/completions"
                 or request["method"] != "POST" or request["provider"] != "deepseek"
                 or request["stage"] != stage or request["release"] != RELEASE
@@ -211,7 +227,8 @@ class _Replay:
                 or any(request.get(key) != value or proof.get(key) != value for key, value in metadata.items())
                 or body != expected_body or request["request_sha256"] != _hash(body)
                 or request["output_schema"] != schema or request["schema_sha256"] != _hash(schema)
-                or proof["schema"] != "tiger.deepseek-call.v1" or proof["provider"] != "deepseek"
+                or proof["schema"] != ("tiger.deepseek-call.v2" if observed else "tiger.deepseek-call.v1")
+                or proof["provider"] != "deepseek"
                 or proof["stage"] != stage or proof["call_id"] != call_id
                 or proof.get("scene") != KERNEL_SCENE_MAP[stage]
                 or proof["request_sha256"] != request["request_sha256"]
@@ -221,6 +238,12 @@ class _Replay:
                 or proof["search_mode"] != NATIVE_SEARCH_MODE
                 or not re.fullmatch(r"[0-9a-f]{64}", proof["transport_response_sha256"])):
             _fail(stage)
+        if observed:
+            self._chat_observation(stage, request, proof)
+            validate_schema(proof["parsed"], schema)
+            self.response_ids.append(proof["response_id"])
+            self.counts[stage] += 1
+            return proof["parsed"]
         retries = proof.get("retry_diagnostics", [])
         if (type(retries) is not list or self.chat_schema_retries + len(retries) > 1
                 or any(validate_model_diagnostic(item)["code"] != "OUTPUT_SCHEMA_MISMATCH"
@@ -263,6 +286,92 @@ class _Replay:
         self.response_ids.append(response_id)
         self.counts[stage] += 1
         return proof["parsed"]
+
+    def _observed_attempts(self, stage, request, observation):
+        """Replay only journal-referenced native attempts, never discovered files."""
+        from .json_observation import CONTRACT, replay_attempt, validate_reference_observation
+
+        if self.observation_contract != CONTRACT:
+            _fail(stage)
+        observation = validate_reference_observation(observation)
+        if (observation["call_id"] != request["call_id"]
+                or observation["request_sha256"] != request["request_sha256"]):
+            _fail(stage)
+        attempts = observation["attempts"]
+        retry_count = len(attempts) - 1
+        if observation["retry_used"] != bool(retry_count) or self.chat_schema_retries + retry_count > 1:
+            _fail(stage)
+        self.chat_schema_retries += retry_count
+        results = []
+        for ordinal, row in enumerate(attempts, 1):
+            ref = row["observation_ref"]
+            if row["ordinal"] != ordinal or ref["path"] in self.observation_refs:
+                _fail(stage)
+            self.observation_refs.add(ref["path"])
+            native = read_snapshot(self.run, ref, run_id=self.run.name, stage=stage, role="output")
+            if (native["call_id"] != request["call_id"] or native["ordinal"] != ordinal
+                    or native["request_sha256"] != request["request_sha256"]):
+                _fail(stage)
+            replayed = replay_attempt(native, request)
+            _same(row["diagnostic"], replayed["diagnostic"], stage)
+            if ordinal < len(attempts) and not replayed["retry_eligible"]:
+                _fail(stage)
+            response = native["response"]
+            if response is not None:
+                identity = hashlib.sha256(response["id"].encode()).hexdigest()
+                if identity in self.identities:
+                    _fail(stage)
+                self.identities.add(identity)
+            elif ordinal != len(attempts):
+                _fail(stage)
+            results.append((row, native, replayed))
+            self.chat_observations.append({"stage": stage, "call_id": request["call_id"],
+                "request_sha256": request["request_sha256"], "ordinal": ordinal,
+                "observation_ref": ref,
+                "response_id": response["id"] if response is not None else None,
+                "diagnostic": replayed["diagnostic"], "usage": replayed["usage"]})
+        return results
+
+    def _chat_observation(self, stage, request, proof):
+        if (proof.get("response_observation_contract") != self.observation_contract
+                or "retry_attempt" in proof or "retry_diagnostics" in proof):
+            _fail(stage)
+        attempts = self._observed_attempts(stage, request, proof["response_observation"])
+        _, native, last = attempts[-1]
+        if last["diagnostic"] is not None or last["parsed"] is None or last["usage"] is None:
+            _fail(stage)
+        _same(proof["parsed"], last["parsed"], stage)
+        original = native["response"]
+        safe_response = {key: original[key] for key in ("id", "object", "model", "system_fingerprint", "usage")}
+        safe_response["choices"] = [{"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant", "content": json.dumps(last["parsed"], ensure_ascii=False,
+                sort_keys=True, separators=(",", ":"), allow_nan=False)}}]
+        if (proof["response"] != safe_response or proof["response_sha256"] != _hash(safe_response)
+                or proof["response_id"] != original["id"]
+                or proof["system_fingerprint"] != original["system_fingerprint"]
+                or proof["usage"] != original["usage"]
+                or proof["transport_response_sha256"] != native["transport"]["body_sha256"]):
+            _fail(stage)
+        for _, _, result in attempts:
+            if result["usage"] is None:
+                _fail(stage)
+            self.usage(result["usage"], request["thinking_mode"], request["output_ceiling"], stage)
+        return attempts
+
+    def chat_accounting(self, *, other_model_io_count):
+        known = [row for row in self.chat_observations if row["usage"] is not None]
+        unknown = len(self.chat_observations) - len(known)
+        usage = ({key: sum(row["usage"][key] for row in known)
+                  for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+                 if known else None)
+        return {"accounting_scope": "chat_completions_only",
+            "source_accounting": "not_certified_by_this_report", "other_model_io_count": other_model_io_count,
+            "native_count": len(self.chat_observations), "observed_attempts_count": len(self.chat_observations),
+            "known_native_attempts": len(known), "known_usage": usage, "unknown_attempts": unknown,
+            "observation_state": "no_chat_observation" if not self.chat_observations else
+                                 "usage_unknown" if unknown else "known_usage",
+            "requires_reconciliation": bool(unknown), "format_reanswers": self.chat_schema_retries,
+            "observed_attempts": list(self.chat_observations)}
 
     @staticmethod
     def usage(usage, mode, ceiling, stage):
@@ -1207,9 +1316,185 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
         _fail(stage)
 
 
+def _partial_events(run, contract):
+    """Verify an explicit completed prefix ending in one failed stage."""
+    from .json_observation import CONTRACT
+
+    raw = read_bytes(run, "events.jsonl", limit=16 * 1024 * 1024)
+    if not raw.endswith(b"\n"):
+        _fail()
+    events = [strict_json(line) for line in raw.splitlines()]
+    if not events or len(events) % 2 or len(events) > 2 * len(contract):
+        _fail()
+    previous, previous_output = None, None
+    fields = {"schema", "run_id", "sequence", "stage_index", "stage", "kind", "status",
+              "input_ref", "output_ref", "previous_stage_ref", "reason", "error_type",
+              "previous_event_sha256", "event_sha256"}
+    for index in range(len(events) // 2):
+        begin, end = events[index * 2:index * 2 + 2]
+        stage = contract[index]["name"]
+        terminal = index == len(events) // 2 - 1
+        for offset, row in enumerate((begin, end)):
+            if (type(row) is not dict or set(row) != fields
+                    or row["schema"] != "tiger.execution-event.v1" or row["run_id"] != run.name
+                    or type(row["sequence"]) is not int or row["sequence"] != 2 * index + offset + 1
+                    or type(row["stage_index"]) is not int or row["stage_index"] != index + 1
+                    or row["stage"] != stage or row["kind"] != ("begin" if offset == 0 else "end")
+                    or row["previous_event_sha256"] != previous
+                    or row["previous_stage_ref"] != previous_output
+                    or row["event_sha256"] != digest(json_bytes({key: value for key, value in row.items()
+                                                               if key != "event_sha256"}))):
+                _fail(stage)
+            previous = row["event_sha256"]
+        invalid_end = ((end["status"] != "failed" or type(end["error_type"]) is not str or not end["error_type"])
+                       if terminal else (end["status"] != "completed" or end["error_type"] is not None))
+        if (begin["status"] != "running" or begin["output_ref"] is not None
+                or begin["reason"] is not None or begin["error_type"] is not None
+                or begin["input_ref"] != end["input_ref"] or end["reason"] is not None
+                or invalid_end):
+            _fail(stage)
+        read_snapshot(run, begin["input_ref"], run_id=run.name, stage=stage, role="input")
+        output = read_snapshot(run, end["output_ref"], run_id=run.name, stage=stage, role="output")
+        if terminal:
+            expected = {"schema", "response_observation_contract", "io_calls"}
+            valid = (type(output) is dict and set(output) == expected
+                and output["schema"] == "tiger.failed-stage-output/v2"
+                and output["response_observation_contract"] == CONTRACT)
+            valid = valid or (type(output) is dict and set(output) == {"schema", "value", "io_calls"}
+                and output["schema"] == "tiger.stage-output.v1")
+        else:
+            valid = (type(output) is dict and set(output) == {"schema", "value", "io_calls"}
+                and output["schema"] == "tiger.stage-output.v1")
+        if not valid or type(output["io_calls"]) is not list:
+            _fail(stage)
+        for number, call in enumerate(output["io_calls"], 1):
+            if (type(call) is not dict or type(call.get("index")) is not int or call["index"] != number
+                    or type(call.get("method")) is not str or not call["method"]
+                    or any(char in call["method"] for char in "\r\n")
+                    or ("output_ref" in call) == ("error_ref" in call)
+                    or set(call) != {"index", "method", "input_ref",
+                                     "error_ref" if "error_ref" in call else "output_ref"}):
+                _fail(stage)
+            read_snapshot(run, call["input_ref"], run_id=run.name, stage=stage, role="input")
+            value = read_snapshot(run, call.get("output_ref", call.get("error_ref")),
+                run_id=run.name, stage=stage, role="output")
+            if "error_ref" in call:
+                base = {"error_type", "message", "outcome_observed"}
+                if (type(value) is not dict or not base.issubset(value)
+                        or set(value) - base - {"diagnostic", "response_observation"}
+                        or type(value["error_type"]) is not str or not value["error_type"]
+                        or value["message"] != "External call failed"
+                        or type(value["outcome_observed"]) is not bool):
+                    _fail(stage)
+                if "diagnostic" in value:
+                    if (call["method"] not in {"model.deepseek.chat", "model.deepseek.search", "model.deepseek.fetch"}
+                            or value["error_type"] != "RequiredModelUnavailable"):
+                        _fail(stage)
+                    validate_model_diagnostic(value["diagnostic"])
+                if "response_observation" in value and (call["method"] != "model.deepseek.chat"
+                        or value["error_type"] != "RequiredModelUnavailable"):
+                    _fail(stage)
+        previous_output = end["output_ref"]
+    return events
+
+
+def _partial_chat_request(request, stage, scene_policy_path):
+    """Check the journal's entire wire and legal window, without business acceptance."""
+    from .json_observation import CONTRACT
+
+    thinking = scene_config(KERNEL_SCENE_MAP[stage], scene_policy_path)["thinking"]
+    body = request["request"]
+    rebuilt, estimate, ceiling = plan_request({key: value for key, value in body.items() if key != "max_tokens"})
+    metadata = {"thinking_mode": thinking["type"], "reasoning_effort": thinking.get("effort"),
+        "input_token_estimate": estimate, "output_ceiling": ceiling,
+        "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
+        "tokenizer_sha256": TOKENIZER_SHA256}
+    if (request["schema"] != "tiger.deepseek-request.v2"
+            or request["response_observation_contract"] != CONTRACT
+            or type(request["call_id"]) is not str or re.fullmatch(r"[0-9a-f]{32}", request["call_id"]) is None
+            or request["stage"] != stage or request["provider"] != "deepseek"
+            or request["method"] != "POST" or request["endpoint"] != "https://api.deepseek.com/chat/completions"
+            or request["release"] != RELEASE or request["scene"] != KERNEL_SCENE_MAP[stage]
+            or request["request_sha256"] != _hash(body) or body != rebuilt
+            or body.get("model") != MODEL or body.get("stream") is not False
+            or body.get("response_format") != {"type": "json_object"}
+            or body.get("thinking") != {"type": thinking["type"]}
+            or (body.get("reasoning_effort") != thinking.get("effort")
+                if thinking["type"] == "enabled" else "reasoning_effort" in body)
+            or request["schema_sha256"] != _hash(request["output_schema"])
+            or any(request.get(key) != value for key, value in metadata.items())):
+        _fail(stage)
+    return metadata
+
+
+def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None):
+    """Account for explicitly bound failed-run observations; never certify a study."""
+    try:
+        from .json_observation import CONTRACT
+
+        replay = _Replay(run, admission, scene_policy_path, _partial=True)
+        if replay.observation_contract != CONTRACT:
+            _fail()
+        rows, stopped, other_model_io = [], False, 0
+        for stage in replay.outputs:
+            for call, request, proof in replay.io(stage):
+                if stopped:
+                    _fail(stage)
+                if call["method"] != "model.deepseek.chat":
+                    other_model_io += call["method"] in {"model.deepseek.search", "model.deepseek.fetch"}
+                    continue
+                if stage not in REQUIRED_MODEL_STAGES or request["call_id"] in replay.call_ids:
+                    _fail(stage)
+                replay.call_ids.add(request["call_id"])
+                metadata = _partial_chat_request(request, stage, scene_policy_path)
+                if "error_ref" in call:
+                    observation = proof.get("response_observation")
+                    if observation is None:
+                        _fail(stage)
+                    attempts = replay._observed_attempts(stage, request, observation)
+                    if attempts[-1][2]["diagnostic"] is None:
+                        _fail(stage)
+                    _same(proof.get("diagnostic"), attempts[-1][2]["diagnostic"], stage)
+                    stopped = True
+                else:
+                    if (proof["schema"] != "tiger.deepseek-call.v2" or proof["provider"] != "deepseek"
+                            or proof["stage"] != stage or proof["call_id"] != request["call_id"]
+                            or proof["model"] != MODEL or proof["requested_model"] != MODEL
+                            or proof["release"] != RELEASE or proof["finish_reason"] != "stop"
+                            or proof["scene"] != KERNEL_SCENE_MAP[stage]
+                            or proof["request_sha256"] != request["request_sha256"]
+                            or proof["schema_sha256"] != request["schema_sha256"]
+                            or proof["search_mode"] != NATIVE_SEARCH_MODE
+                            or any(proof.get(key) != value for key, value in metadata.items())):
+                        _fail(stage)
+                    attempts = replay._chat_observation(stage, request, proof)
+                    replay.counts[stage] += 1
+                for reference, native, result in attempts:
+                    usage = result["usage"]
+                    rows.append({"stage": stage, "call_id": request["call_id"],
+                        "request_sha256": request["request_sha256"], "ordinal": reference["ordinal"],
+                        "observation_ref": reference["observation_ref"],
+                        "response_id": native["response"]["id"] if native["response"] is not None else None,
+                        "diagnostic": result["diagnostic"], "state": "known_usage" if usage is not None else "usage_unknown",
+                        "usage": usage, "requires_reconciliation": usage is None})
+        return {"schema": "tiger.failed-model-accounting/v2", "run_id": replay.run.name,
+            "response_observation_contract": CONTRACT, "business_completed": False,
+            **replay.chat_accounting(other_model_io_count=other_model_io),
+            "all_required_completed": False, "failure_stage": replay.events[-1]["stage"],
+            "event_tail_sha256": replay.events[-1]["event_sha256"],
+            "stage_counts": replay.counts, "observed_attempts": rows,
+            "request_binding": "explicit-stage-IO-and-complete-wire-window",
+            "scope": "Failed-run model observations and accounting only; business evidence is not certified."}
+    except EvidenceInvalid:
+        raise
+    except (KeyError, ValueError, TypeError, IndexError, AttributeError, OSError, IntelligenceError,
+            LLMUnavailable, RequiredModelFailed, TokenBudgetError, ExecutionContractError, ScenePolicyError, OverflowError):
+        _fail()
+
+
 def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
         source_content_contract=None, company_evidence_contract=None,
-        event_contract=None, risk_evidence_contract=None):
+        event_contract=None, risk_evidence_contract=None, response_observation_contract=None):
     """Replay the new profile without changing the historical required proof."""
     try:
         for actual, expected in ((source_content_contract, SOURCE_CONTENT_CONTRACT),
@@ -1218,6 +1503,8 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
             if actual is not None and actual != expected:
                 _fail()
         replay = _Replay(run, admission, scene_policy_path)
+        if response_observation_contract is not None and response_observation_contract != replay.observation_contract:
+            _fail()
         if (result["raw"].get("paper_execution_version") == "tiger.paper-execution.v1") != replay.authoritative_paper:
             _fail()
         registry, archive, bundle, frontier, plan, snapshots, phases, market = _verify_acquisition(replay)
@@ -1282,6 +1569,9 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
         # replay. Every accepted proof still recomputes all eight rule stages.
         from ..intelligence_scoring_proof import verify_intelligence_scoring
         verify_intelligence_scoring(run, replay.ends, admission)
+        if replay.observation_contract:
+            summary = {**summary, "chat_accounting": replay.chat_accounting(
+                other_model_io_count=len(replay.native_searches) + len(replay.native_fetches))}
         return summary
     except EvidenceInvalid:
         raise

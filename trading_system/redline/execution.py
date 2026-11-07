@@ -228,7 +228,8 @@ class StageScope:
 class ExecutionContext:
     def __init__(self, *, run_id: str, run_date: date, paths: RuntimePaths,
                  policy: ExecutionPolicy, store: EvidenceStore, admitted_at: datetime | None = None,
-                 authoritative_paper: bool = False, account_version_before: str | None = None):
+                 authoritative_paper: bool = False, account_version_before: str | None = None,
+                 response_observation_contract: str = ""):
         if not isinstance(run_id, str) or not run_id:
             raise ExecutionContractError("run_id is required")
         if not isinstance(run_date, date) or isinstance(run_date, datetime):
@@ -237,6 +238,14 @@ class ExecutionContext:
         self.paths, self.policy, self.store = paths, policy, store
         self.model_required = policy.policy_id in MODEL_REQUIRED_POLICIES
         self.intelligence = policy.policy_id == INTELLIGENCE_POLICY_ID
+        if type(response_observation_contract) is not str:
+            raise ExecutionContractError("Invalid model response observation contract")
+        if response_observation_contract:
+            from ..llm.json_observation import CONTRACT
+            if not self.intelligence or response_observation_contract != CONTRACT:
+                raise ExecutionContractError("Invalid model response observation contract")
+        self.response_observation_contract = response_observation_contract
+        self._model_format_retry_used = False
         self.admitted_at = admitted_at
         self.authoritative_paper = authoritative_paper
         self.account_version_before = account_version_before
@@ -347,6 +356,12 @@ class ExecutionContext:
                 scope.elapsed_ms = (perf_counter() - scope.started) * 1000
                 scope.status = "failed"
                 try:
+                    if self.response_observation_contract and scope.output_ref is None:
+                        scope.output_ref = self._snapshot(name, "output", {
+                            "schema": "tiger.failed-stage-output/v2",
+                            "response_observation_contract": self.response_observation_contract,
+                            "io_calls": sorted(scope.io_calls, key=lambda call: call["index"]),
+                        })
                     self._event(scope, "end", "failed", type(original).__name__)
                 except EvidenceWriteError as evidence_error:
                     raise evidence_error from original
@@ -385,6 +400,31 @@ class ExecutionContext:
         scope._handles.append(handle)
         return handle
 
+    def model_attempt_snapshot(self, value: object) -> dict:
+        """Persist a native attempt while its exact model IO is still active."""
+        self._check_thread()
+        scope = self._active
+        if not self.response_observation_contract or scope is None:
+            self._reject("Native model observation requires its admitted active stage")
+        scope._check_active()
+        pending = [handle for handle in scope._handles
+                   if not handle.completed and handle.method == "model.deepseek.chat"]
+        if scope.output_ref is not None or len(pending) != 1:
+            self._reject("Native model observation requires one unfinished model IO")
+        return self._snapshot(scope.spec.name, "output", value)
+
+    def claim_model_format_retry(self) -> bool:
+        """Share the single admitted format reanswer across all client instances."""
+        self._check_thread()
+        scope = self._active
+        if not self.response_observation_contract or scope is None:
+            self._reject("Model format reanswer requires its admitted active stage")
+        scope._check_active()
+        if self._model_format_retry_used:
+            return False
+        self._model_format_retry_used = True
+        return True
+
     def finish_io(self, handle: _IOHandle, *, output: object = None,
                   error: BaseException | None = None,
                   outcome_observed: bool = True) -> None:
@@ -402,6 +442,11 @@ class ExecutionContext:
             diagnostic = model_failure_diagnostic(error)
             if diagnostic is not None:
                 value["diagnostic"] = diagnostic
+            if self.response_observation_contract:
+                from .model_diagnostics import model_failure_observation
+                observation = model_failure_observation(error)
+                if observation is not None:
+                    value["response_observation"] = observation
         ref = self._snapshot(scope.spec.name, "output", value)
         scope.io_calls.append({"index": handle.index, "method": handle.method,
                                "input_ref": handle.input_ref,

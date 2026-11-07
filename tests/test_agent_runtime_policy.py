@@ -155,7 +155,9 @@ def test_default_policy_bytes_and_original_admission_shape_remain_historical(tmp
     }
     assert runtime.startup_runtime_input(PROFILE) is None
     for profile, expected in legacy_hashes.items():
-        assert digest(json_bytes(runtime.policy_manifest(profile))) == expected
+        # This fixture pins the historical policy, before the separately
+        # versioned native-JSON observation contract for new intelligence runs.
+        assert digest(json_bytes(runtime.policy_manifest(profile, response_observation_contract=""))) == expected
     source = fixture_source(tmp_path / "source")
     state = tmp_path / "state"
     accepted = runner.submit(state, REQUEST, source=source)

@@ -115,6 +115,49 @@ node scripts/tiger-intelligence.mjs evidence \
 均不接受密钥；只读 Node 子进程不会收到采集 key。提供商用量未知时保留
 `requires_reconciliation`，不能在成本报告里把未知数写成 0。
 
+### 模型 JSON 失败、格式重答与计量
+
+新接纳的情报 paper 运行在冻结 policy 的 `model_contract` 中登记
+`response_observation_contract=tiger.deepseek-json-observation/v2`。该标记由已核验的
+冻结源码确定；业务请求不能开启、关闭或更换合同。没有该源码标记的历史运行继续
+重放原 policy、wire 与证明，不补写为新合同。
+
+- **HTTP 返回体无法读成 JSON**：诊断明确标为 `http_envelope`，只保存实际观察到的
+  HTTP 状态、响应字节数、哈希、是否纯空白与是否完整读完。没有已核验的模型、响应
+  身份、stop 和 usage 时，计费仍未知，不自动重发。纯空白 HTTP 返回体不能当成
+  已知模型空回答。
+- **已核验完整回复的 assistant 内容不是合法 JSON，或仅有空白**：先把去凭据、
+  不含私有 reasoning 的原生回复与实际 usage 持久化，再解析内容。只有原失败能由
+  同一快照重算且内容未因脱敏改变时，才可使用一次格式重答。
+- **模型第二次仍失败**：保留第一、第二次各自的原生观测。两次 usage 已知就分别
+  计入；第二次外层响应或 usage 未知则继续待对账，不能删除首次已知用量。
+
+格式失败与原有 schema 失败共享整次执行的**一个**重答额度，不按阶段、分片或
+重新创建客户端重置。重答发送相同完整 wire、同模型和同场景，仍使用原合法输出
+窗口；不补裁原文、不降低数组/字符串限制、不修补 JSON、也不改变行情范围或数值
+风险门槛。DeepSeek 官方说明 JSON 模式可能返回仅含 U+0020 的 assistant 内容，
+即使 finish_reason 为 stop；这只解释为什么需显式区分空内容与空 HTTP 返回体，
+不能证明某次历史失败的实际原因。[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)
+
+原生观测通过 `response_observation` 的显式快照引用绑定到成功 IO 或失败阶段的
+事件链。独立证明从这些原回复重新计算 JSON/schema 结果和重答资格；失败阶段
+始终是 failed，不因已留计量证据而变成完整研究。已通过 canonical model、响应
+身份、stop 和 usage 核心检查的失败可以保留已知用量；length、非 canonical
+回复或未通过核心检查的回复仍是未知计量，不能宣称所有带 usage 的失败均已结算。
+
+成功的独立模型证明另列 `chat_accounting`，包括格式重答前后的全部已知 chat
+用量；单个调用的 `usage` 仍是最后一次实际回复的 usage。失败时
+`model-failure-accounting.json` 仅说明显式绑定的 chat 观测与已知/未知计量。
+没有 chat 观测表示观测数为 0，不能推断整次运行免费；Search/Fetch 和来源采集
+仍须单独核对原 archive 账目。验证被拒绝或摘要无法写入时明确记为 unverified，
+保留原业务失败，不补造零费用。
+
+如操作者需要仅让固定模型域名直连，可在可信启动环境显式设置
+`NO_PROXY=localhost,127.0.0.1,::1,api.deepseek.com`。默认仍是三个 loopback 项；
+只允许额外加入 `api.deepseek.com`，拒绝其他域名、URL、凭据形式及重复项。
+原代理配置继续用于其他网络来源；该启动配置不是一次失败的根因证明，也不能由
+业务请求修改端点或全局代理。
+
 完整 v2 工作流可由可信启动环境的 `TIGER_INTEL_REGISTRY_FILE` 指向审查过的绝对
 配置路径，登记可选来源和发行人 IR；`TIGER_INTEL_ARCHIVE_ROOT` 可显式绑定已有
 原文档案作为基线。基线只复用截止前已观察的原文版本，不复用模型标注或旧语义分。

@@ -280,7 +280,8 @@ def test_actual_authoritative_policy_binds_paper_order_and_independent_paper_led
     from trading_system.paper_proof import verify_paper_execution
     execution, root, args, _, _, _ = intelligence_fixture(tmp_path, monkeypatch, authoritative=True)
     packet = read_json(root, "intelligence-input.json")
-    atomic_json(root, "policy.json", policy_manifest(INTELLIGENCE_PROFILE, intelligence_input=packet))
+    atomic_json(root, "policy.json", policy_manifest(INTELLIGENCE_PROFILE, intelligence_input=packet,
+        response_observation_contract=execution.response_observation_contract))
     output = main._daily(args, "yahoo", execution=execution)
     result = asdict(output.result)
     admission = {"clock": {"run_date": execution.run_date.isoformat(), "market_timezone": "America/New_York",
