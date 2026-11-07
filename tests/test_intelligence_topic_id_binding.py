@@ -206,6 +206,7 @@ def _legacy_nbsp_service(harness, monkeypatch):
     # mutable report field or a new process default.
     with monkeypatch.context() as legacy:
         legacy.setitem(module.DEFAULT_POLICY, "citation_resolution_contract", None)
+        legacy.setitem(module.DEFAULT_POLICY, "analysis_feedback_contract", None)
         return _service(harness, [("public_original", NBSP_QUOTE,
             ["news_events"], ["topic_analysis"])])
 

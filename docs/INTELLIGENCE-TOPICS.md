@@ -103,6 +103,8 @@ admission 从可信入口读取和准备之前开始计时，构造、完整源�
 
 结构通过后，若引文仍不符合上述已接纳合同及确定性 exact 校验，整个 job 最多申请一个同模型重答身份，完整保留原快照、原文、旧回复、校验诊断及实际用量；可选择更短的完整连续片段。再次失败则终止，不无限修复。能按已接纳 NBSP 合同确定性定位的首次回复直接进入独立复核，不额外申请付费重答。既有全局有界 schema retry、12 次尝试、完整合法模型窗口和原墙钟仍生效；每次实际 outbound 独立计量。中断后复用同一原始响应和校对依据，不重发已收到的付费回复。
 
+新 admission 默认明确启用 `analysis_feedback_contract = tiger.topic-analysis-feedback/v1`。分析提示直接说明：事实的每个支持及反证原文都必须 `completeness=complete`，不能用 partial/snippet/unknown 原文或换成“观点”标签绕过；quote 必须来自同一个被引用文档。若失败，重答仅收到首个坏结论与引用的有界定位（数组位置、文档 ID、完整性及 quote 摘要），不自动跨文档找替代、不改变原文或模型答案。v2 重答检查点绑定原请求、原模型 response 和实际重答；report 从原回复与固定原文重新计算诊断。旧 policy 缺少该字段或为 null 时仍使用原提示和 code-only v1 检查点，不回填历史任务。诊断能帮助模型纠错，但不保证一次重答必定成功；未修正时按原门禁失败，资料不足可明确列为 unknown。
+
 模型回复的 choices 缺失、为空或形状错误时，若原 response identity/model 与 usage 可以核实，仍先封存去除 reasoning 的安全账务回执并结算已知用量，业务继续按原语义门禁失败；失败不是免费调用。缺 identity 或 usage 时保持 unknown 预占，重放阻断，不编造用量或另发替代请求。
 
 admission 与报告同时绑定 trading_system 下全部 Python 源码、两个 topic Node 入口、共享 workflow client、模型政策、requirements 与固定 tokenizer 资产的内容指纹。恢复和 report 验真发现实现变化时返回 SOURCE_CHANGED，应使用原发布版本继续核查；缺少此绑定的早期实验 job 返回 LEGACY_JOB_REQUIRES_MATCHING_RELEASE，不把旧检查点重新解释为新严格任务。

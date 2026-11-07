@@ -70,14 +70,29 @@ def test_slow_archive_staging_is_inside_preparation_deadline(tmp_path, monkeypat
 def test_slow_account_copy_is_inside_preparation_deadline(tmp_path, monkeypatch):
     source = fixture_source(tmp_path / "source")
     reached = []
+    previous_handler = signal.getsignal(signal.SIGALRM)
     def slow(*_args):
+        # Source freezing precedes this operation and varies with filesystem
+        # speed. Inject expiry at the operation under test, under the actual
+        # original admission handler, rather than requiring all preparation
+        # before this point to finish in 500 ms on every hosted runner.
+        remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+        assert 0 < remaining <= 45 and interval == 0
+        assert callable(signal.getsignal(signal.SIGALRM))
+        assert signal.getsignal(signal.SIGALRM) != previous_handler
         reached.append("account")
+        signal.setitimer(signal.ITIMER_REAL, 0.02)
         time.sleep(2)
     monkeypatch.setattr(runner, "stage_account", slow)
-    result = runner.submit(tmp_path / "state", REQUEST, source=source, _preparation_seconds=0.5)
+    result = runner.submit(tmp_path / "state", REQUEST, source=source)
     assert reached == ["account"]
     assert result["error"]["code"] == "TIMEOUT"
     assert pointer_read(tmp_path / "state") is None
+    assert signal.getsignal(signal.SIGALRM) == previous_handler
+    assert signal.getitimer(signal.ITIMER_REAL)[0] == 0
+    replay = runner.submit(tmp_path / "state", REQUEST, source=source)
+    assert replay["run_id"] == result["run_id"] and replay["status"] == "failed"
+    assert replay["error"]["code"] == "TIMEOUT" and reached == ["account"]
 
 
 def test_submission_lock_wait_uses_same_bounded_preparation_window(tmp_path):
@@ -218,15 +233,29 @@ def test_ack_observation_timeout_does_not_kill_accepted_detached_worker(tmp_path
     source = fixture_source(tmp_path / "source")
     state = tmp_path / "state"
     original = runner._acknowledgement
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    acknowledged = []
     def lost_after_acceptance(*args):
         original(*args)
+        # Only inject the lost-observation deadline after a genuine durable
+        # acknowledgement. This separates the tested parent observation
+        # timeout from variable source-copy and worker-bootstrap latency.
+        remaining, interval = signal.getitimer(signal.ITIMER_REAL)
+        assert 0 < remaining <= 45 and interval == 0
+        assert callable(signal.getsignal(signal.SIGALRM))
+        assert signal.getsignal(signal.SIGALRM) != previous_handler
+        acknowledged.append(True)
+        signal.setitimer(signal.ITIMER_REAL, 0.02)
         time.sleep(2)
     monkeypatch.setattr(runner, "_acknowledgement", lost_after_acceptance)
-    value = runner.submit(state, REQUEST, source=source, _preparation_seconds=0.5)
+    value = runner.submit(state, REQUEST, source=source)
+    assert acknowledged == [True]
     assert value["error"]["code"] == "TIMEOUT" and value["run_id"]
     terminal = wait_terminal(state, value["run_id"])
     assert terminal["status"] == "completed_degraded", terminal
     assert pointer_read(state)["run_id"] == value["run_id"]
+    assert signal.getsignal(signal.SIGALRM) == previous_handler
+    assert signal.getitimer(signal.ITIMER_REAL)[0] == 0
 
 
 def test_thread_submit_keeps_same_key_concurrency_and_real_worker_semantics(tmp_path):
