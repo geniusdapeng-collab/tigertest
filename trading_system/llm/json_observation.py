@@ -18,8 +18,22 @@ ATTEMPT_SCHEMA = "tiger.deepseek-observed-attempt/v2"
 REQUEST_SCHEMA = "tiger.deepseek-request.v2"
 CALL_SCHEMA = "tiger.deepseek-call.v2"
 FAILED_STAGE_SCHEMA = "tiger.failed-stage-output/v2"
+TOOL_CONTRACT = "tiger.deepseek-json-observation/v3"
+TOOL_SOURCE_PATH = "trading_system/llm/clean_keyed_codec.py"
+SUPPORTED_CONTRACTS = frozenset({CONTRACT, TOOL_CONTRACT})
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _CALL = re.compile(r"[0-9a-f]{32}\Z")
+
+
+def contract_schemas(contract):
+    """Keep historical v2 and newly admitted v3 wire identities distinct."""
+    if type(contract) is not str or contract not in SUPPORTED_CONTRACTS:
+        raise ValueError("Unknown native observation contract")
+    suffix = "v3" if contract == TOOL_CONTRACT else "v2"
+    return {"attempt": "tiger.deepseek-observed-attempt/" + suffix,
+            "request": "tiger.deepseek-request." + suffix,
+            "call": "tiger.deepseek-call." + suffix,
+            "failed_stage": "tiger.failed-stage-output/" + suffix}
 
 
 def digest(value):
@@ -29,7 +43,8 @@ def digest(value):
 
 def validate_transport(value):
     fields = {"http_status", "body_sha256", "body_bytes", "body_whitespace_only", "body_complete"}
-    if not isinstance(value, dict) or set(value) != fields:
+    routed = {"final_response_url", "redirected"}
+    if not isinstance(value, dict) or set(value) not in (fields, fields | routed):
         raise ValueError("Invalid native transport observation")
     if (value["http_status"] is not None and (type(value["http_status"]) is not int
             or not 100 <= value["http_status"] <= 599)
@@ -39,6 +54,13 @@ def validate_transport(value):
             or value["body_whitespace_only"] is not None and type(value["body_whitespace_only"]) is not bool
             or type(value["body_complete"]) is not bool):
         raise ValueError("Invalid native transport observation")
+    if routed <= value.keys() and (
+            value["final_response_url"] is not None and (type(value["final_response_url"]) is not str
+            or value["final_response_url"] not in {
+                "https://api.deepseek.com/chat/completions",
+                "https://api.deepseek.com/beta/chat/completions"})
+            or value["redirected"] is not None and type(value["redirected"]) is not bool):
+        raise ValueError("Invalid native response route")
     return deepcopy(value)
 
 
@@ -47,7 +69,8 @@ def validate_reference_observation(value):
     from ..redline.model_diagnostics import validate_model_diagnostic
     if (not isinstance(value, dict) or set(value) != {
             "schema", "call_id", "request_sha256", "attempts", "retry_used"}
-            or value["schema"] != CONTRACT or not isinstance(value["call_id"], str)
+            or type(value["schema"]) is not str or value["schema"] not in SUPPORTED_CONTRACTS
+            or not isinstance(value["call_id"], str)
             or _CALL.fullmatch(value["call_id"]) is None
             or not isinstance(value["request_sha256"], str) or _HASH.fullmatch(value["request_sha256"]) is None
             or not isinstance(value["attempts"], list) or not 1 <= len(value["attempts"]) <= 2
@@ -88,11 +111,17 @@ def staged_diagnostic(value, stage, transport=None):
 def validate_attempt(value, inputs):
     fields = {"schema", "call_id", "ordinal", "request_sha256", "transport", "response",
         "response_sha256", "content_redacted", "reasoning_state", "fingerprint_valid", "transport_diagnostic"}
-    if (not isinstance(value, dict) or set(value) != fields or value["schema"] != ATTEMPT_SCHEMA
+    expected = contract_schemas(inputs.get("response_observation_contract", CONTRACT))["attempt"]
+    if (not isinstance(value, dict) or set(value) != fields or value["schema"] != expected
             or value["call_id"] != inputs["call_id"] or value["request_sha256"] != inputs["request_sha256"]
             or type(value["ordinal"]) is not int or value["ordinal"] not in {1, 2}):
         raise ValueError("Native observation differs from its request")
     validate_transport(value["transport"])
+    routed = {"final_response_url", "redirected"}
+    current = inputs.get("response_observation_contract", CONTRACT) == TOOL_CONTRACT
+    if (current != routed.issubset(value["transport"])
+            or not current and routed.intersection(value["transport"])):
+        raise ValueError("Native transport version differs")
     if value["response"] is None:
         if (any(value[name] is not None for name in ("response_sha256", "content_redacted", "reasoning_state", "fingerprint_valid"))
                 or value["transport_diagnostic"] is None):
@@ -112,6 +141,10 @@ def validate_attempt(value, inputs):
             or value["transport"]["body_whitespace_only"] not in {False, None}
             or value["transport"]["body_bytes"] is not None and value["transport"]["body_bytes"] <= 0):
         raise ValueError("Invalid known native response observation")
+    if current and value["response"] is not None and (
+            value["transport"]["final_response_url"] != inputs["endpoint"]
+            or value["transport"]["redirected"] is not False):
+        raise ValueError("Known native response route differs")
     return deepcopy(value)
 
 
@@ -122,6 +155,9 @@ The original failed code is never used to authorize retry. Unknown envelopes,
 redacted content and ancillary-policy failures cannot authorize another send.
 Generic valid usage is retained even if a later budget/mode check rejects it.
 """
+    if inputs.get("clean_protocol") is not None:
+        from .strict_clean_transport import replay_tool_attempt
+        return replay_tool_attempt(value, inputs)
     from .deepseek_required import (DeepSeekRequiredClient, MODEL, CONTEXT_TOKENS,
         _json_loads, sanitize_model_value, validate_schema)
     from ..redline.model_diagnostics import RequiredModelUnavailable

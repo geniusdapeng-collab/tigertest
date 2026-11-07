@@ -241,8 +241,8 @@ class ExecutionContext:
         if type(response_observation_contract) is not str:
             raise ExecutionContractError("Invalid model response observation contract")
         if response_observation_contract:
-            from ..llm.json_observation import CONTRACT
-            if not self.intelligence or response_observation_contract != CONTRACT:
+            from ..llm.json_observation import SUPPORTED_CONTRACTS
+            if not self.intelligence or response_observation_contract not in SUPPORTED_CONTRACTS:
                 raise ExecutionContractError("Invalid model response observation contract")
         self.response_observation_contract = response_observation_contract
         self._model_format_retry_used = False
@@ -357,8 +357,9 @@ class ExecutionContext:
                 scope.status = "failed"
                 try:
                     if self.response_observation_contract and scope.output_ref is None:
+                        from ..llm.json_observation import contract_schemas
                         scope.output_ref = self._snapshot(name, "output", {
-                            "schema": "tiger.failed-stage-output/v2",
+                            "schema": contract_schemas(self.response_observation_contract)["failed_stage"],
                             "response_observation_contract": self.response_observation_contract,
                             "io_calls": sorted(scope.io_calls, key=lambda call: call["index"]),
                         })

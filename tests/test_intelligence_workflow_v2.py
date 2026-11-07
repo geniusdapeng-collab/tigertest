@@ -10,6 +10,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -17,8 +18,9 @@ import pytest
 
 import main
 from trading_system import pipeline
-from trading_system.agent_evidence import EvidenceStore, normalize, verify_events
-from trading_system.agent_runtime import policy_manifest, freeze_source
+from trading_system.agent_evidence import EvidenceStore, atomic_bytes, atomic_json, normalize, verify_events
+from trading_system.agent_runtime import (policy_manifest, freeze_source, source_inventory,
+    source_tree_hash, verify_source)
 from trading_system.agents.universe_scanner_agent import UniverseScannerAgent, rank_universe
 from trading_system.intelligence import default_registry
 from trading_system.intelligence.transport import HttpResponse, HttpTransport
@@ -38,6 +40,31 @@ from trading_system.search.models import RawDocument
 from trading_system.tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS
 from test_model_required_workflow import _answer as legacy_answer
 from test_strict_daily_core import daily_fixture, stage_value, OfflinePublicBoundaryFixture
+
+HISTORICAL_COMPLETE_CLEAN_CONTRACT = "typed-clean-complete-format/v1"
+HISTORICAL_COMPLETE_SOURCE_SHA256 = "1cc9445e1684801e2e2d8a571ce98c7d5c49ccb65c68a0134e594d8f668cd1aa"
+
+
+def freeze_historical_complete_source(root):
+    """Keep the old array-wire fixture genuinely bound to its public old source.
+
+    These bytes are read/hash-bound only, never imported or executed. The live
+    implementation and independent verifier remain the code under test.
+    """
+    source = freeze_source(root)
+    content = (Path(__file__).parent / "fixtures/intelligence_required_complete_v1_source.txt").read_bytes()
+    assert hashlib.sha256(content).hexdigest() == HISTORICAL_COMPLETE_SOURCE_SHA256
+    frozen = root / "source"
+    atomic_bytes(frozen, "trading_system/llm/intelligence_required.py", content)
+    # These modules jointly activate v3 source admission. A historical v2
+    # fixture must carry their actual absence, not an inconsistent policy flag.
+    for name in ("clean_keyed_codec.py", "strict_clean_transport.py"):
+        (frozen / "trading_system/llm" / name).unlink(missing_ok=True)
+    source["files"] = source_inventory(frozen)
+    source["tree_sha256"] = source_tree_hash(source["files"])
+    source["git_worktree_dirty"] = True
+    atomic_json(root, "source-manifest.json", source)
+    verify_source(root)
 
 
 def answer(stage, schema, payload):
@@ -67,11 +94,21 @@ def answer(stage, schema, payload):
 
 
 def intelligence_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt=None, long_body=False,
-                         authoritative=False):
+                         authoritative=False, clean_format_contract=HISTORICAL_COMPLETE_CLEAN_CONTRACT):
     original, root, args, provider, denied = daily_fixture(tmp_path, monkeypatch)
     # Prompt replay selects only a recognized frozen implementation, exactly
     # as the real admitted worker does; a mutable checkout is not its authority.
-    freeze_source(root)
+    if clean_format_contract == HISTORICAL_COMPLETE_CLEAN_CONTRACT:
+        freeze_historical_complete_source(root)
+        native_chat_arguments = semantic.chat_arguments
+        def historical_chat_arguments(stage, inputs, schema, assessment, **kwargs):
+            if stage == "clean.llm_semantic":
+                kwargs.setdefault("clean_format_contract", HISTORICAL_COMPLETE_CLEAN_CONTRACT)
+            return native_chat_arguments(stage, inputs, schema, assessment, **kwargs)
+        monkeypatch.setattr(semantic, "chat_arguments", historical_chat_arguments)
+    else:
+        assert clean_format_contract == semantic.CLEAN_FORMAT_CONTRACT
+        freeze_source(root)
     (original.paths.work_dir / "universe.txt").write_text("AAPL\nMU\nNVDA\n")
     allowed = {"AAPL", "MU", "NVDA"}
     from trading_system.markets import get_market

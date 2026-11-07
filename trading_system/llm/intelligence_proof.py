@@ -61,6 +61,7 @@ LEGACY_CLEAN_SOURCE_SHA256 = "dc15de6306fe8e134df343ea42a0bf8073b4a7408e8c6eca2b
 SUMMARY_CLEAN_SOURCE_SHA256 = "3db582964bbfa8a709ff3c40c5f72ec4012b1f6a06b74f6c5e57e5a4771b5008"
 SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256 = "8d3154751d3b92e0024590cb9d2226d68638a59156a81ba0ecd626eec9845222"
 IDENTIFIERS_CLEAN_SOURCE_SHA256 = "6cea0fe5533469d8888ecde8e7fd9bb853c7c1dea544136c0dd2655292b61f36"
+COMPLETE_CLEAN_SOURCE_SHA256 = "1cc9445e1684801e2e2d8a571ce98c7d5c49ccb65c68a0134e594d8f668cd1aa"
 
 
 def _fail(stage=None):
@@ -83,6 +84,8 @@ def frozen_clean_format_contract(run):
         return semantic.SUMMARY_CLEAN_FORMAT_CONTRACT
     if observed == IDENTIFIERS_CLEAN_SOURCE_SHA256:
         return semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT
+    if observed == COMPLETE_CLEAN_SOURCE_SHA256:
+        return semantic.COMPLETE_CLEAN_FORMAT_CONTRACT
     trusted = Path(semantic.__file__).read_bytes()
     if observed != hashlib.sha256(trusted).hexdigest():
         _fail(stage)
@@ -198,7 +201,8 @@ class _Replay:
                 sanitize_model_value(args["public_payload"]), ensure_ascii=False,
                 sort_keys=True, separators=(",", ":"), allow_nan=False)
             return plan_request(chat_request_core(system=system, user=user, schema=schema,
-                schema_hint={}, thinking_mode=mode, effort=effort, temperature=0.2))
+                schema_hint={}, thinking_mode=mode, effort=effort, temperature=0.2,
+                **({"clean_protocol": args["clean_protocol"]} if "clean_protocol" in args else {})))
         return plan
 
     def chat(self, stage, call, request, proof, payload, schema):
@@ -217,28 +221,41 @@ class _Replay:
             "tokenizer_sha256": TOKENIZER_SHA256}
         body = request["request"]
         observed = bool(self.observation_contract)
-        if observed:
-            from .json_observation import CONTRACT
-            if self.observation_contract != CONTRACT or request.get("response_observation_contract") != CONTRACT:
+        tool_protocol = "tools" in expected_body
+        if tool_protocol:
+            from .clean_keyed_codec import CONTRACT as CLEAN_CONTRACT
+            from .json_observation import TOOL_CONTRACT
+            if (self.observation_contract != TOOL_CONTRACT or stage != "clean.llm_semantic"
+                    or request.get("clean_protocol") != {"contract": CLEAN_CONTRACT}
+                    or proof.get("clean_protocol") != request["clean_protocol"]):
                 _fail(stage)
+        elif any(key in request or key in proof for key in ("clean_protocol", "native_parsed")):
+            _fail(stage)
+        if observed:
+            from .json_observation import SUPPORTED_CONTRACTS, contract_schemas
+            if (self.observation_contract not in SUPPORTED_CONTRACTS
+                    or request.get("response_observation_contract") != self.observation_contract):
+                _fail(stage)
+            schemas = contract_schemas(self.observation_contract)
         elif "response_observation_contract" in request or "response_observation" in proof:
             _fail(stage)
-        if (request["schema"] != ("tiger.deepseek-request.v2" if observed else "tiger.deepseek-request.v1")
-                or request["endpoint"] != "https://api.deepseek.com/chat/completions"
+        if (request["schema"] != (schemas["request"] if observed else "tiger.deepseek-request.v1")
+                or request["endpoint"] != ("https://api.deepseek.com/beta/chat/completions" if tool_protocol
+                                           else "https://api.deepseek.com/chat/completions")
                 or request["method"] != "POST" or request["provider"] != "deepseek"
                 or request["stage"] != stage or request["release"] != RELEASE
                 or request.get("scene") != KERNEL_SCENE_MAP[stage]
                 or any(request.get(key) != value or proof.get(key) != value for key, value in metadata.items())
                 or body != expected_body or request["request_sha256"] != _hash(body)
                 or request["output_schema"] != schema or request["schema_sha256"] != _hash(schema)
-                or proof["schema"] != ("tiger.deepseek-call.v2" if observed else "tiger.deepseek-call.v1")
+                or proof["schema"] != (schemas["call"] if observed else "tiger.deepseek-call.v1")
                 or proof["provider"] != "deepseek"
                 or proof["stage"] != stage or proof["call_id"] != call_id
                 or proof.get("scene") != KERNEL_SCENE_MAP[stage]
                 or proof["request_sha256"] != request["request_sha256"]
                 or proof["schema_sha256"] != request["schema_sha256"]
                 or proof["model"] != MODEL or proof["requested_model"] != MODEL
-                or proof["release"] != RELEASE or proof["finish_reason"] != "stop"
+                or proof["release"] != RELEASE or proof["finish_reason"] != ("tool_calls" if tool_protocol else "stop")
                 or proof["search_mode"] != NATIVE_SEARCH_MODE
                 or not re.fullmatch(r"[0-9a-f]{64}", proof["transport_response_sha256"])):
             _fail(stage)
@@ -293,12 +310,14 @@ class _Replay:
 
     def _observed_attempts(self, stage, request, observation):
         """Replay only journal-referenced native attempts, never discovered files."""
-        from .json_observation import CONTRACT, replay_attempt, validate_reference_observation
+        from .json_observation import SUPPORTED_CONTRACTS, replay_attempt, validate_reference_observation
 
-        if self.observation_contract != CONTRACT:
+        if self.observation_contract not in SUPPORTED_CONTRACTS:
             _fail(stage)
         observation = validate_reference_observation(observation)
-        if (observation["call_id"] != request["call_id"]
+        if (request.get("response_observation_contract") != self.observation_contract
+                or observation["schema"] != self.observation_contract
+                or observation["call_id"] != request["call_id"]
                 or observation["request_sha256"] != request["request_sha256"]):
             _fail(stage)
         attempts = observation["attempts"]
@@ -346,10 +365,19 @@ class _Replay:
             _fail(stage)
         _same(proof["parsed"], last["parsed"], stage)
         original = native["response"]
-        safe_response = {key: original[key] for key in ("id", "object", "model", "system_fingerprint", "usage")}
-        safe_response["choices"] = [{"index": 0, "finish_reason": "stop", "message": {
-            "role": "assistant", "content": json.dumps(last["parsed"], ensure_ascii=False,
-                sort_keys=True, separators=(",", ":"), allow_nan=False)}}]
+        if request.get("clean_protocol") is not None:
+            _same(proof.get("clean_protocol"), request["clean_protocol"], stage)
+            _same(proof.get("native_parsed"), last["native_parsed"], stage)
+            # Preserve actual tool_calls and original arguments in the native
+            # proof. The business array exists only in its explicit projection.
+            safe_response = original
+        else:
+            if "native_parsed" in proof or "clean_protocol" in proof:
+                _fail(stage)
+            safe_response = {key: original[key] for key in ("id", "object", "model", "system_fingerprint", "usage")}
+            safe_response["choices"] = [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": json.dumps(last["parsed"], ensure_ascii=False,
+                    sort_keys=True, separators=(",", ":"), allow_nan=False)}}]
         if (proof["response"] != safe_response or proof["response_sha256"] != _hash(safe_response)
                 or proof["response_id"] != original["id"]
                 or proof["system_fingerprint"] != original["system_fingerprint"]
@@ -1322,7 +1350,12 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
 
 def _partial_events(run, contract):
     """Verify an explicit completed prefix ending in one failed stage."""
-    from .json_observation import CONTRACT
+    from .json_observation import SUPPORTED_CONTRACTS, contract_schemas
+
+    observation_contract = read_json(run, "policy.json")["model_contract"].get("response_observation_contract", "")
+    if observation_contract not in SUPPORTED_CONTRACTS:
+        _fail()
+    schemas = contract_schemas(observation_contract)
 
     raw = read_bytes(run, "events.jsonl", limit=16 * 1024 * 1024)
     if not raw.endswith(b"\n"):
@@ -1362,8 +1395,8 @@ def _partial_events(run, contract):
         if terminal:
             expected = {"schema", "response_observation_contract", "io_calls"}
             valid = (type(output) is dict and set(output) == expected
-                and output["schema"] == "tiger.failed-stage-output/v2"
-                and output["response_observation_contract"] == CONTRACT)
+                and output["schema"] == schemas["failed_stage"]
+                and output["response_observation_contract"] == observation_contract)
             valid = valid or (type(output) is dict and set(output) == {"schema", "value", "io_calls"}
                 and output["schema"] == "tiger.stage-output.v1")
         else:
@@ -1404,24 +1437,49 @@ def _partial_events(run, contract):
 
 def _partial_chat_request(request, stage, scene_policy_path):
     """Check the journal's entire wire and legal window, without business acceptance."""
-    from .json_observation import CONTRACT
+    from .json_observation import SUPPORTED_CONTRACTS, TOOL_CONTRACT, contract_schemas
 
+    observation_contract = request.get("response_observation_contract")
+    if observation_contract not in SUPPORTED_CONTRACTS:
+        _fail(stage)
+    schemas = contract_schemas(observation_contract)
     thinking = scene_config(KERNEL_SCENE_MAP[stage], scene_policy_path)["thinking"]
     body = request["request"]
+    tool_protocol = request.get("clean_protocol") is not None
+    if tool_protocol:
+        from .clean_keyed_codec import CONTRACT as CLEAN_CONTRACT
+        from .model_budget import clean_tool_request_core
+        if (observation_contract != TOOL_CONTRACT or stage != "clean.llm_semantic"
+                or request["clean_protocol"] != {"contract": CLEAN_CONTRACT}):
+            _fail(stage)
+        prototype = clean_tool_request_core(system="TEST_FIXTURE unused", user="TEST_FIXTURE unused",
+            schema=request["output_schema"], schema_hint={}, thinking_mode=thinking["type"],
+            effort=thinking.get("effort"), temperature=.2, clean_protocol=request["clean_protocol"])
+        if (set(body) != set(prototype) | {"max_tokens"} or body.get("tools") != prototype["tools"]
+                or body.get("tool_choice") != prototype["tool_choice"] or body.get("temperature") != .2
+                or not isinstance(body.get("messages"), list) or len(body["messages"]) != 2
+                or any(not isinstance(message, dict) or set(message) != {"role", "content"}
+                       or message["role"] != role or not isinstance(message["content"], str)
+                       or not message["content"].strip()
+                       for message, role in zip(body["messages"], ("system", "user"), strict=True))):
+            _fail(stage)
+    elif observation_contract == TOOL_CONTRACT and any(key in body for key in ("tools", "tool_choice")):
+        _fail(stage)
     rebuilt, estimate, ceiling = plan_request({key: value for key, value in body.items() if key != "max_tokens"})
     metadata = {"thinking_mode": thinking["type"], "reasoning_effort": thinking.get("effort"),
         "input_token_estimate": estimate, "output_ceiling": ceiling,
         "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
         "tokenizer_sha256": TOKENIZER_SHA256}
-    if (request["schema"] != "tiger.deepseek-request.v2"
-            or request["response_observation_contract"] != CONTRACT
+    if (request["schema"] != schemas["request"]
             or type(request["call_id"]) is not str or re.fullmatch(r"[0-9a-f]{32}", request["call_id"]) is None
             or request["stage"] != stage or request["provider"] != "deepseek"
-            or request["method"] != "POST" or request["endpoint"] != "https://api.deepseek.com/chat/completions"
+            or request["method"] != "POST" or request["endpoint"] != (
+                "https://api.deepseek.com/beta/chat/completions" if tool_protocol
+                else "https://api.deepseek.com/chat/completions")
             or request["release"] != RELEASE or request["scene"] != KERNEL_SCENE_MAP[stage]
             or request["request_sha256"] != _hash(body) or body != rebuilt
             or body.get("model") != MODEL or body.get("stream") is not False
-            or body.get("response_format") != {"type": "json_object"}
+            or ("response_format" in body if tool_protocol else body.get("response_format") != {"type": "json_object"})
             or body.get("thinking") != {"type": thinking["type"]}
             or (body.get("reasoning_effort") != thinking.get("effort")
                 if thinking["type"] == "enabled" else "reasoning_effort" in body)
@@ -1434,11 +1492,12 @@ def _partial_chat_request(request, stage, scene_policy_path):
 def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None):
     """Account for explicitly bound failed-run observations; never certify a study."""
     try:
-        from .json_observation import CONTRACT
+        from .json_observation import SUPPORTED_CONTRACTS, TOOL_CONTRACT, contract_schemas
 
         replay = _Replay(run, admission, scene_policy_path, _partial=True)
-        if replay.observation_contract != CONTRACT:
+        if replay.observation_contract not in SUPPORTED_CONTRACTS:
             _fail()
+        schemas = contract_schemas(replay.observation_contract)
         rows, stopped, other_model_io = [], False, 0
         for stage in replay.outputs:
             for call, request, proof in replay.io(stage):
@@ -1461,10 +1520,11 @@ def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None)
                     _same(proof.get("diagnostic"), attempts[-1][2]["diagnostic"], stage)
                     stopped = True
                 else:
-                    if (proof["schema"] != "tiger.deepseek-call.v2" or proof["provider"] != "deepseek"
+                    if (proof["schema"] != schemas["call"] or proof["provider"] != "deepseek"
                             or proof["stage"] != stage or proof["call_id"] != request["call_id"]
                             or proof["model"] != MODEL or proof["requested_model"] != MODEL
-                            or proof["release"] != RELEASE or proof["finish_reason"] != "stop"
+                            or proof["release"] != RELEASE or proof["finish_reason"] != (
+                                "tool_calls" if request.get("clean_protocol") is not None else "stop")
                             or proof["scene"] != KERNEL_SCENE_MAP[stage]
                             or proof["request_sha256"] != request["request_sha256"]
                             or proof["schema_sha256"] != request["schema_sha256"]
@@ -1481,8 +1541,9 @@ def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None)
                         "response_id": native["response"]["id"] if native["response"] is not None else None,
                         "diagnostic": result["diagnostic"], "state": "known_usage" if usage is not None else "usage_unknown",
                         "usage": usage, "requires_reconciliation": usage is None})
-        return {"schema": "tiger.failed-model-accounting/v2", "run_id": replay.run.name,
-            "response_observation_contract": CONTRACT, "business_completed": False,
+        return {"schema": "tiger.failed-model-accounting/v3" if replay.observation_contract == TOOL_CONTRACT
+                          else "tiger.failed-model-accounting/v2", "run_id": replay.run.name,
+            "response_observation_contract": replay.observation_contract, "business_completed": False,
             **replay.chat_accounting(other_model_io_count=other_model_io),
             "all_required_completed": False, "failure_stage": replay.events[-1]["stage"],
             "event_tail_sha256": replay.events[-1]["event_sha256"],

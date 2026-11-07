@@ -12,7 +12,7 @@ from test_deepseek_required import KEY, SCHEMA, Response, chat_response
 from trading_system.agent_evidence import EvidenceStore, read_snapshot
 from trading_system.agent_runtime import INTELLIGENCE_PROFILE, policy_manifest, trusted_model_no_proxy, run_environment
 from trading_system.llm.deepseek_required import DeepSeekRequiredClient
-from trading_system.llm.json_observation import CONTRACT, replay_attempt
+from trading_system.llm.json_observation import CONTRACT, TOOL_CONTRACT, replay_attempt
 from trading_system.redline.execution import (
     ExecutionContext, ExecutionPolicy, RuntimePaths, INTELLIGENCE_POLICY_ID, INTELLIGENCE_SEARCH_SOURCES,
 )
@@ -235,7 +235,7 @@ def test_valid_redacted_json_and_private_reasoning_keep_safe_native_only(observe
 def test_versioned_policy_retains_explicit_legacy_form():
     current = policy_manifest(INTELLIGENCE_PROFILE)
     legacy = policy_manifest(INTELLIGENCE_PROFILE, response_observation_contract="")
-    assert current["model_contract"]["response_observation_contract"] == CONTRACT
+    assert current["model_contract"]["response_observation_contract"] == TOOL_CONTRACT
     assert "response_observation_contract" not in legacy["model_contract"]
     removed = deepcopy(current); removed["model_contract"].pop("response_observation_contract")
     assert removed == legacy
@@ -248,7 +248,7 @@ def test_new_frozen_source_rejects_coherently_rehashed_missing_contract(tmp_path
     for name in ("TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT", "LLM_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     _state, run, admission, policy, _source = prepared(tmp_path, monkeypatch)
-    assert runtime.validate_admission(run)[1]["model_contract"]["response_observation_contract"] == CONTRACT
+    assert runtime.validate_admission(run)[1]["model_contract"]["response_observation_contract"] == TOOL_CONTRACT
     policy["model_contract"].pop("response_observation_contract")
     atomic_json(run, "policy.json", policy)
     admission["policy_sha256"] = digest(json_bytes(policy)); atomic_json(run, "admission.json", admission)

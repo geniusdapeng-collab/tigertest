@@ -26,6 +26,7 @@ from ..tech_chain.agents import RiskAlert, StructuredSentimentRow
 from ..tech_chain.risk_evidence import risk_coverage
 from ..tech_chain.universe import TECH_SUBCHAINS
 from . import required as legacy
+from .clean_keyed_codec import document_ids as keyed_document_ids
 from .deepseek_required import MODEL, RELEASE, validate_schema
 from .model_budget import TokenBudgetError
 from .required_schemas import (clean_schema, sentiment_schema, risk_schema,
@@ -83,7 +84,8 @@ TASKS = {**legacy.TASKS,
 LEGACY_CLEAN_FORMAT_CONTRACT = "typed-clean-legacy/v1"
 SUMMARY_CLEAN_FORMAT_CONTRACT = "typed-clean-summary-characters/v1"
 IDENTIFIERS_CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
-CLEAN_FORMAT_CONTRACT = "typed-clean-complete-format/v1"
+COMPLETE_CLEAN_FORMAT_CONTRACT = "typed-clean-complete-format/v1"
+CLEAN_FORMAT_CONTRACT = "typed-clean-keyed-inline/v1"
 LEGACY_CLEAN_TASK = (
     "逐篇完成实体消歧、情感、事件与中文摘要。每个输入id恰好返回一次。"
     "每篇tickers最多8个，先去重，再按文章主题只保留直接相关且能从文档核实的股票代码。"
@@ -126,7 +128,7 @@ IDENTIFIERS_CLEAN_TASK = SUMMARY_CLEAN_TASK + (
     "能以原文span确证的主体、事件和claims必须如实提取，尤其保留负面事实和relation=refutes的反证；"
     "不能为通过schema而清空已有依据的结构化结果、删除文档或隐藏反证，也不能把未解决缺口写成没有风险。"
 )
-TASKS["clean.llm_semantic"] = IDENTIFIERS_CLEAN_TASK + (
+COMPLETE_CLEAN_TASK = IDENTIFIERS_CLEAN_TASK + (
     "summary_zh等schema要求纯文本的说明字段不能含字符<或>、HTML或控制字符；"
     "比较和排序写成中文，例如优于、低于，不要把原文的排序符号复制进说明。"
     "这不允许改写content、evidence_spans[].quote或claims的value/unit/currency；"
@@ -134,6 +136,15 @@ TASKS["clean.llm_semantic"] = IDENTIFIERS_CLEAN_TASK + (
     "每个输入文档行都必须保留，包括无关、证据不足或无法确证主体的行，仍按原规则说明缺口和反证。"
     "同URL、同故事或相同正文的不同来源/版本仍按各自输入id独立输出，不合并、不去重、不按相关性过滤。"
     "id逐字复制，绝不添加_dup等后缀、重命名或自造id。"
+)
+TASKS["clean.llm_semantic"] = COMPLETE_CLEAN_TASK.replace(
+    "零输入返回documents=[]。", "零输入使用本协议要求的空文档容器。") + (
+    "本版通过指定工具返回清洗结果：顶层documents必须是对象，不是数组。"
+    "documents的每个键逐字等于一个输入文档id，所有给定键都必须出现且只能出现一次；"
+    "每个键的值只能包含id和annotation，id必须逐字等于该键及对应输入id。"
+    "annotation逐项完整返回该文档的全部语义字段，不含id，不能省略nullable字段或用默认值代填。"
+    "即使相同URL、故事、正文或缺少可核事实，每个键仍独立完成；零输入返回documents={}。"
+    "工具schema固定每个输入id的传输容器；原有摘要、主体、引文、事件、claims、反证和风险要求仍逐项适用。"
 )
 
 
@@ -162,6 +173,7 @@ def chat_arguments(stage, inputs, schema, assessment, *, clean_format_contract=C
     if "assessment" in inputs:
         _fail("V2 assessment must come from frozen admission")
     task = TASKS[stage]
+    clean_protocol = None
     if stage == "clean.llm_semantic":
         if clean_format_contract == LEGACY_CLEAN_FORMAT_CONTRACT:
             task = LEGACY_CLEAN_TASK
@@ -169,20 +181,38 @@ def chat_arguments(stage, inputs, schema, assessment, *, clean_format_contract=C
             task = SUMMARY_CLEAN_TASK
         elif clean_format_contract == IDENTIFIERS_CLEAN_FORMAT_CONTRACT:
             task = IDENTIFIERS_CLEAN_TASK
+        elif clean_format_contract == COMPLETE_CLEAN_FORMAT_CONTRACT:
+            documents = inputs.get("documents")
+            if not isinstance(documents, list):
+                _fail("Mandatory clean request requires an explicit document row list")
+            task = COMPLETE_CLEAN_TASK + (
+                f"本批输入documents恰好{len(documents)}行，输出documents也必须恰好{len(documents)}行。"
+                "按输入原顺序逐行输出，第i行id必须逐字等于第i个输入id；"
+                "输出前逐行核对id、顺序、总数和schema，不能漏行、重复行或额外添行。")
         elif clean_format_contract != CLEAN_FORMAT_CONTRACT:
             _fail("Unknown clean-format prompt contract")
         else:
             documents = inputs.get("documents")
             if not isinstance(documents, list):
                 _fail("Mandatory clean request requires an explicit document row list")
-            task += (f"本批输入documents恰好{len(documents)}行，输出documents也必须恰好{len(documents)}行。"
-                     "按输入原顺序逐行输出，第i行id必须逐字等于第i个输入id；"
-                     "输出前逐行核对id、顺序、总数和schema，不能漏行、重复行或额外添行。")
+            try:
+                identifiers = keyed_document_ids(schema)
+            except (ValueError, TypeError, KeyError):
+                _fail("Mandatory keyed clean request requires the full final schema")
+            if any(not isinstance(row, dict) for row in documents) or [
+                    row.get("id") for row in documents] != identifiers:
+                _fail("Mandatory keyed clean source identities differ from the final schema")
+            task += (f"本批输入documents恰好{len(documents)}行，输出documents对象必须恰好"
+                     f"包含schema要求的{len(documents)}个输入id键；逐一完成每个键的完整annotation。")
+            clean_protocol = {"contract": CLEAN_FORMAT_CONTRACT}
     if stage == "decision.debate":
         task += ("company_evidence来自评分前冻结的SEC原文；只有该证券自己的source_ids可用作下单新闻。"
                  "本阶段不再联网补资料。partial必需覆盖或无action资格的证券只能watch；不得把行业资料代作公司证据。")
-    return {"system": SYSTEM, "user": task, "schema_hint": {}, "schema": schema,
-            "public_payload": normalize({"assessment": assessment, **inputs})}
+    arguments = {"system": SYSTEM, "user": task, "schema_hint": {}, "schema": schema,
+                 "public_payload": normalize({"assessment": assessment, **inputs})}
+    if clean_protocol is not None:
+        arguments["clean_protocol"] = clean_protocol
+    return arguments
 
 
 def _stage_plan(llm, stage):

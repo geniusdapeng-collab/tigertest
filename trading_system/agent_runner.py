@@ -30,6 +30,7 @@ from .agent_runtime import (
     committed_pointer, freeze_source, frozen_clock, pointer_read, policy_manifest,
     run_environment, stage_account, stage_calendar, startup_runtime_input, validate_clock, verify_run,
     DEADLINE_SECONDS, INTELLIGENCE_PROFILE, RUNTIME_POLICY_ENV,
+    source_observation_contract, source_inventory,
 )
 from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
                                PreparationExpired, thread_submission)
@@ -321,7 +322,7 @@ def _submit(state: Path, request: dict, *, source: Path,
                 "status": "accepted", "error": None,
             })
             parent = pointer_read(state)
-            freeze_source(run, source)
+            frozen_source = freeze_source(run, source)
             if runtime_input is not None:
                 atomic_json(run, "runtime-input.json", runtime_input, exclusive=True)
             intelligence_input = None
@@ -332,7 +333,9 @@ def _submit(state: Path, request: dict, *, source: Path,
                     as_of=datetime.fromisoformat(clock["admitted_at_utc"]))
             policy = policy_manifest(request["profile"],
                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
-                                     intelligence_input=intelligence_input, runtime_input=runtime_input)
+                                     intelligence_input=intelligence_input, runtime_input=runtime_input,
+                                     response_observation_contract=source_observation_contract(
+                                         frozen_source["files"], request["profile"]))
             atomic_json(run, "policy.json", policy, exclusive=True)
             stage_account(state, run, parent)
             stage_calendar(run)
@@ -444,7 +447,9 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
         if operation == "doctor":
             return doctor(state, mode)
         if operation == "describe":
-            selected = policy_manifest(request["profile"], runtime_input=startup_runtime_input(request["profile"]))
+            selected = policy_manifest(request["profile"], runtime_input=startup_runtime_input(request["profile"]),
+                response_observation_contract=source_observation_contract(
+                    source_inventory(SOURCE_ROOT), request["profile"]))
             value = envelope(operation, data={"profile": selected, "access_mode": mode})
             value["limitations"] = selected["limitations"]
             return value

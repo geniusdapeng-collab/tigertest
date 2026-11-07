@@ -240,11 +240,14 @@ def test_unknown_or_malformed_contract_cannot_activate_observation(tmp_path, con
 
 
 def business_fixture(tmp_path, monkeypatch, *, authoritative=False):
-    from test_intelligence_workflow_v2 import intelligence_fixture
+    from test_intelligence_workflow_v2 import HISTORICAL_COMPLETE_CLEAN_CONTRACT, intelligence_fixture
     from trading_system.agent_runtime import policy_manifest
     from trading_system.redline.execution import INTELLIGENCE_PROFILE
 
-    old, root, args, _, _, calls = intelligence_fixture(tmp_path, monkeypatch, authoritative=authoritative)
+    # This suite preserves the historical COMPLETE v1 array wire and v2 native
+    # observations, including its malformed/unknown/retry TCP boundaries.
+    old, root, args, _, _, calls = intelligence_fixture(tmp_path, monkeypatch, authoritative=authoritative,
+        clean_format_contract=HISTORICAL_COMPLETE_CLEAN_CONTRACT)
     execution = ExecutionContext(run_id=old.run_id, run_date=old.run_date, paths=old.paths,
         policy=old.policy, store=old.store, admitted_at=old.admitted_at, authoritative_paper=authoritative,
         response_observation_contract=CONTRACT)

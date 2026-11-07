@@ -480,8 +480,8 @@ class DeepSeekRequiredClient:
         self._native_io_limits = None
         self._response_observation_contract = getattr(execution, "response_observation_contract", "")
         if self._response_observation_contract:
-            from .json_observation import CONTRACT
-            if (self._response_observation_contract != CONTRACT
+            from .json_observation import SUPPORTED_CONTRACTS
+            if (self._response_observation_contract not in SUPPORTED_CONTRACTS
                     or not callable(getattr(execution, "model_attempt_snapshot", None))
                     or not callable(getattr(execution, "claim_model_format_retry", None))):
                 _fail("TRUSTED_CONFIGURATION_MISMATCH")
@@ -540,9 +540,13 @@ class DeepSeekRequiredClient:
 
     def _post_json(self, path: str, request: dict, *, _transport_observation=None,
                    _chat_read_timeout=None) -> tuple[dict, str]:
-        if path not in ("/chat/completions", "/v1/tools/search", "/v1/tools/fetch"):
+        from .json_observation import TOOL_CONTRACT
+        strict_chat = path == "/beta/chat/completions"
+        if (path not in ("/chat/completions", "/beta/chat/completions", "/v1/tools/search", "/v1/tools/fetch")
+                or strict_chat and (self._response_observation_contract != TOOL_CONTRACT
+                                    or self._stage() != "clean.llm_semantic")):
             _fail("ENDPOINT_NOT_ALLOWED")
-        chat = path == "/chat/completions"
+        chat = path in {"/chat/completions", "/beta/chat/completions"}
         if (_transport_observation is not None and (not chat or type(_transport_observation) is not dict)
                 or _chat_read_timeout is not None and (not chat or type(_chat_read_timeout) not in {int, float}
                     or not math.isfinite(_chat_read_timeout) or not 0 < _chat_read_timeout <= CHAT_RESPONSE_DEADLINE)):
@@ -552,6 +556,8 @@ class DeepSeekRequiredClient:
         if observed_chat:
             self._last_chat_transport = {"http_status": None, "body_sha256": None,
                 "body_bytes": 0, "body_whitespace_only": True, "body_complete": False}
+            if self._response_observation_contract == TOOL_CONTRACT:
+                self._last_chat_transport.update(final_response_url=None, redirected=None)
         if _transport_observation is not None:
             _transport_observation.update(phase="awaiting_headers", transport=self._last_chat_transport)
         wire = _canonical(request)
@@ -590,6 +596,12 @@ class DeepSeekRequiredClient:
                             if chat else READ_TIMEOUT)),
                 allow_redirects=False, verify=True, stream=True)
             status = response.status_code
+            if observed_chat and self._response_observation_contract == TOOL_CONTRACT:
+                final_url, redirected = response.url, bool(response.history)
+                self._last_chat_transport["redirected"] = redirected
+                if final_url != BASE_URL + path or redirected:
+                    _fail("ENDPOINT_NOT_ALLOWED")
+                self._last_chat_transport["final_response_url"] = final_url
             if _transport_observation is not None:
                 _transport_observation["phase"] = "response_headers"
             if observed_chat and type(status) is int and 100 <= status <= 599:
@@ -723,7 +735,8 @@ class DeepSeekRequiredClient:
         return result
 
     def plan_chat(self, *, system: str, user: str, schema_hint: dict, schema: dict,
-                  temperature: float = 0.2, public_payload: dict | None = None) -> tuple[dict, int, int]:
+                  temperature: float = 0.2, public_payload: dict | None = None,
+                  clean_protocol: dict | None = None) -> tuple[dict, int, int]:
         """Plan the exact sanitized wire without transport or acceptance-budget side effects."""
         stage = self._stage()
         if stage not in self._scene_policies:
@@ -738,6 +751,10 @@ class DeepSeekRequiredClient:
                 or not 0 <= temperature <= 2):
             _fail("INVALID_CHAT_REQUEST")
         thinking = self._scene_policies[stage]["thinking"]
+        if clean_protocol is not None:
+            from .json_observation import TOOL_CONTRACT
+            if stage != "clean.llm_semantic" or self._response_observation_contract != TOOL_CONTRACT:
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
         user_text = self._text(user)
         if public_payload is not None:
             # Redact data values before JSON escaping: escaped delimiters must
@@ -745,11 +762,17 @@ class DeepSeekRequiredClient:
             user_text += "\n" + _canonical(self._clean(public_payload)).decode("utf-8")
         return plan_request(chat_request_core(system=self._text(system), user=user_text,
             schema=schema, schema_hint=self._clean(schema_hint), thinking_mode=thinking["type"],
-            effort=thinking.get("effort"), temperature=temperature))
+            effort=thinking.get("effort"), temperature=temperature,
+            **({"clean_protocol": clean_protocol} if clean_protocol is not None else {})))
 
     def complete_json(self, *, system: str, user: str, schema_hint: dict,
                       max_tokens: int | None = None, temperature: float = 0.2, schema: dict,
-                      public_payload: dict | None = None) -> dict:
+                      public_payload: dict | None = None, clean_protocol: dict | None = None) -> dict:
+        if clean_protocol is not None:
+            from .strict_clean_transport import complete_tool_json
+            return complete_tool_json(self, system=system, user=user, schema_hint=schema_hint,
+                max_tokens=max_tokens, temperature=temperature, schema=schema,
+                public_payload=public_payload, clean_protocol=clean_protocol)
         if self._response_observation_contract:
             return self._observed_complete_json(system=system, user=user, schema_hint=schema_hint,
                 max_tokens=max_tokens, temperature=temperature, schema=schema, public_payload=public_payload)
@@ -888,7 +911,10 @@ class DeepSeekRequiredClient:
     def _observed_complete_json(self, *, system, user, schema_hint, max_tokens,
                                temperature, schema, public_payload):
         from .json_observation import (ATTEMPT_SCHEMA, CALL_SCHEMA, CONTRACT, REQUEST_SCHEMA,
-            replay_attempt, staged_diagnostic, validate_reference_observation, validate_transport)
+            contract_schemas, replay_attempt, staged_diagnostic, validate_reference_observation, validate_transport,
+            TOOL_CONTRACT)
+        contract = self._response_observation_contract
+        schemas = contract_schemas(contract)
         if max_tokens is not None:
             _fail("CALLER_OUTPUT_CAP_FORBIDDEN")
         stage = self._stage()
@@ -899,7 +925,7 @@ class DeepSeekRequiredClient:
             _fail(error.code)
         call_id = uuid.uuid4().hex
         mode, effort = request["thinking"]["type"], request.get("reasoning_effort")
-        inputs = {"schema": REQUEST_SCHEMA, "response_observation_contract": CONTRACT,
+        inputs = {"schema": schemas["request"], "response_observation_contract": contract,
             "call_id": call_id, "stage": stage, "provider": "deepseek", "method": "POST",
             "endpoint": BASE_URL + "/chat/completions", "request": request, "request_sha256": _hash(request),
             "output_schema": schema, "schema_sha256": _hash(schema), "release": RELEASE,
@@ -907,7 +933,7 @@ class DeepSeekRequiredClient:
             "input_token_estimate": input_tokens, "output_ceiling": ceiling,
             "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
             "tokenizer_sha256": TOKENIZER_SHA256}
-        observation = {"schema": CONTRACT, "call_id": call_id, "request_sha256": inputs["request_sha256"],
+        observation = {"schema": contract, "call_id": call_id, "request_sha256": inputs["request_sha256"],
                        "attempts": [], "retry_used": False}
 
         def record(ordinal, *, native=None, body_hash=None, error=None):
@@ -920,9 +946,11 @@ class DeepSeekRequiredClient:
             if transport is None:
                 transport = {"http_status": None, "body_sha256": None, "body_bytes": None,
                     "body_whitespace_only": None, "body_complete": False}
+            if contract == TOOL_CONTRACT and "final_response_url" not in transport:
+                transport = {**transport, "final_response_url": None, "redirected": None}
             transport = validate_transport(transport)
             diagnostic = staged_diagnostic(error, "http_envelope", transport) if error is not None else None
-            attempt = {"schema": ATTEMPT_SCHEMA, "call_id": call_id, "ordinal": ordinal,
+            attempt = {"schema": schemas["attempt"], "call_id": call_id, "ordinal": ordinal,
                 "request_sha256": inputs["request_sha256"], "transport": transport,
                 "response": None, "response_sha256": None, "content_redacted": None,
                 "reasoning_state": None, "fingerprint_valid": None, "transport_diagnostic": diagnostic}
@@ -1004,7 +1032,7 @@ class DeepSeekRequiredClient:
                 parsed = verdict["parsed"]
                 safe_response = {**attempt["response"], "choices": [{"index": 0, "finish_reason": "stop",
                     "message": {"role": "assistant", "content": _canonical(parsed).decode("utf-8")}}]}
-                return {"schema": CALL_SCHEMA, "response_observation_contract": CONTRACT, "call_id": call_id,
+                return {"schema": schemas["call"], "response_observation_contract": contract, "call_id": call_id,
                     "stage": stage, "provider": "deepseek", "requested_model": MODEL, "response_id": response_id,
                     "model": MODEL, "release": RELEASE, "usage": verdict["usage"], "scene": KERNEL_SCENE_MAP[stage],
                     "thinking_mode": mode, "reasoning_effort": effort, "input_token_estimate": input_tokens,

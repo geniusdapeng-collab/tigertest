@@ -31,7 +31,9 @@ from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_
                                 INTELLIGENCE_SEARCH_SOURCES)
 from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
 from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
-from .llm.json_observation import CONTRACT as RESPONSE_OBSERVATION_CONTRACT, SOURCE_PATH as RESPONSE_OBSERVATION_RELATIVE
+from .llm.json_observation import (CONTRACT as RESPONSE_OBSERVATION_CONTRACT,
+    SOURCE_PATH as RESPONSE_OBSERVATION_RELATIVE, TOOL_CONTRACT as TOOL_OBSERVATION_CONTRACT,
+    TOOL_SOURCE_PATH, SUPPORTED_CONTRACTS as RESPONSE_OBSERVATION_CONTRACTS)
 
 PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
@@ -66,6 +68,19 @@ PAPER_LEDGER_CONTRACT = "tiger.paper-execution.v1"
 # The last deployed contract used 4,000/1,600-character excerpts. Recognize it
 # only from its already frozen source bytes, not a missing marker in new runs.
 LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
+
+
+def source_observation_contract(files, profile):
+    """Select an observation version only from the actual frozen inventory."""
+    if profile != INTELLIGENCE_PROFILE:
+        return ""
+    paths = {item["path"] for item in files}
+    tool_files = {TOOL_SOURCE_PATH, "trading_system/llm/strict_clean_transport.py"}
+    if paths.intersection(tool_files):
+        if not tool_files.issubset(paths) or RESPONSE_OBSERVATION_RELATIVE not in paths:
+            raise EvidenceInvalid("RESULT_INVALID", "Strict clean frozen source is incomplete")
+        return TOOL_OBSERVATION_CONTRACT
+    return RESPONSE_OBSERVATION_CONTRACT if RESPONSE_OBSERVATION_RELATIVE in paths else ""
 
 
 def validate_runtime_input(value: object, profile: str) -> dict:
@@ -133,9 +148,9 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
     if response_observation_contract is None:
-        response_observation_contract = RESPONSE_OBSERVATION_CONTRACT if intelligence else ""
+        response_observation_contract = TOOL_OBSERVATION_CONTRACT if intelligence else ""
     if (type(response_observation_contract) is not str
-            or response_observation_contract not in {"", RESPONSE_OBSERVATION_CONTRACT}
+            or response_observation_contract not in {"", *RESPONSE_OBSERVATION_CONTRACTS}
             or response_observation_contract and not intelligence):
         raise EvidenceInvalid("RESULT_INVALID", "Unknown model response observation contract")
     required = profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}
@@ -667,9 +682,8 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
                                       intelligence_input=intelligence_input,
                                       runtime_input=runtime_input,
-                                      response_observation_contract=(RESPONSE_OBSERVATION_CONTRACT
-                                          if RESPONSE_OBSERVATION_RELATIVE in frozen_files
-                                          and request["profile"] == INTELLIGENCE_PROFILE else ""))
+                                      response_observation_contract=source_observation_contract(
+                                          source["files"], request["profile"]))
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)

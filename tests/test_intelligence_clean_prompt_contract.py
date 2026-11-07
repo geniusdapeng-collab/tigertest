@@ -43,8 +43,9 @@ def test_historical_clean_prompt_bytes_remain_exactly_replayable():
     assert "Unicode" not in arguments["user"]
 
 
-def test_new_contract_adds_only_format_guidance_and_retains_all_original_requirements():
-    arguments = semantic.chat_arguments("clean.llm_semantic", {"documents": []}, {}, assessment())
+def test_complete_contract_retains_all_original_requirements_and_format_guidance():
+    arguments = semantic.chat_arguments("clean.llm_semantic", {"documents": []}, {}, assessment(),
+        clean_format_contract=semantic.COMPLETE_CLEAN_FORMAT_CONTRACT)
     assert arguments["user"].startswith(semantic.LEGACY_CLEAN_TASK)
     assert "maxLength=600按Unicode字符数" in arguments["user"]
     assert "160–300字符" in arguments["user"] and "绝不超过600字符" in arguments["user"]
@@ -127,6 +128,9 @@ def test_guidance_does_not_turn_overlong_model_answer_into_valid_or_truncated_ou
     (semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT,
      "77a60f0ca4f35bdaaf1377899494530267fb7a12e2eabb58ad0375f39e686936",
      "87aca1bd0eb73fdece79944f1b0a74dfdee08143d9ccb6ba083904fd847bb667"),
+    (semantic.COMPLETE_CLEAN_FORMAT_CONTRACT,
+     "35c481eb6ee798c20fc5bfcbb08dff42729233edd15f9fd74f8f4f11cd08fc6c",
+     "3d67e49a25258d0baf9baba733fa87023154ca0133ae623aa25972ad2333e127"),
 ])
 def test_all_historical_task_and_complete_wire_hashes_remain_exact(contract, task_sha, wire_sha):
     # Recorded before each version change, using the complete legal window.
@@ -143,8 +147,9 @@ def test_all_historical_task_and_complete_wire_hashes_remain_exact(contract, tas
     assert hashlib.sha256(canonical_json(wire).encode()).hexdigest() == wire_sha
     assert ceiling == MAX_OUTPUT_TOKENS
     assert ("清洗标识使用独立命名空间" in arguments["user"]) == (
-        contract == semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT)
-    assert "本批输入documents恰好" not in arguments["user"]
+        contract in {semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT, semantic.COMPLETE_CLEAN_FORMAT_CONTRACT})
+    assert ("本批输入documents恰好" in arguments["user"]) == (
+        contract == semantic.COMPLETE_CLEAN_FORMAT_CONTRACT)
 
 
 @pytest.mark.parametrize("constant,expected", [
@@ -152,6 +157,7 @@ def test_all_historical_task_and_complete_wire_hashes_remain_exact(contract, tas
     ("SUMMARY_CLEAN_SOURCE_SHA256", semantic.SUMMARY_CLEAN_FORMAT_CONTRACT),
     ("SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256", semantic.SUMMARY_CLEAN_FORMAT_CONTRACT),
     ("IDENTIFIERS_CLEAN_SOURCE_SHA256", semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT),
+    ("COMPLETE_CLEAN_SOURCE_SHA256", semantic.COMPLETE_CLEAN_FORMAT_CONTRACT),
 ])
 def test_recognized_historical_source_maps_to_its_own_task_without_execution(tmp_path, monkeypatch, constant, expected):
     # Only the fixture trust digest is substituted. Unknown source rejection is
@@ -164,12 +170,16 @@ def test_recognized_historical_source_maps_to_its_own_task_without_execution(tmp
 
 def test_identifier_prompt_distinguishes_targets_and_requires_local_evidenced_subjects():
     assert semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT == "typed-clean-identifiers/v1"
-    assert semantic.CLEAN_FORMAT_CONTRACT == "typed-clean-complete-format/v1"
+    assert semantic.COMPLETE_CLEAN_FORMAT_CONTRACT == "typed-clean-complete-format/v1"
+    assert semantic.CLEAN_FORMAT_CONTRACT == "typed-clean-keyed-inline/v1"
+    assert proof.COMPLETE_CLEAN_SOURCE_SHA256 == (
+        "1cc9445e1684801e2e2d8a571ce98c7d5c49ccb65c68a0134e594d8f668cd1aa")
     assert proof.SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256 == (
         "8d3154751d3b92e0024590cb9d2226d68638a59156a81ba0ecd626eec9845222")
     assert proof.IDENTIFIERS_CLEAN_SOURCE_SHA256 == (
         "6cea0fe5533469d8888ecde8e7fd9bb853c7c1dea544136c0dd2655292b61f36")
-    task = semantic.chat_arguments("clean.llm_semantic", {"documents": []}, {}, assessment())["user"]
+    task = semantic.chat_arguments("clean.llm_semantic", {"documents": []}, {}, assessment(),
+        clean_format_contract=semantic.COMPLETE_CLEAN_FORMAT_CONTRACT)["user"]
     assert task.startswith(semantic.IDENTIFIERS_CLEAN_TASK)
     for guidance in ("顶层输入target_ids", "裸产业链ID或ETF代码", "global:、chain:、sector:、security:、account:",
                      "event_type=macro或policy", "target_ids=[]", "只引用本篇subjects[].id", "必须非空",
@@ -263,7 +273,8 @@ def test_all237_complete_originals_remain_in_exact_legal_wire(tmp_path):
 @pytest.mark.parametrize("count", [0, 1, 2, 237])
 def test_new_format_prompt_uses_actual_batch_count_and_exact_ordered_ids(count):
     documents = [{"id": "document-" + str(index)} for index in range(count)]
-    arguments = semantic.chat_arguments("clean.llm_semantic", {"documents": documents}, {}, assessment())
+    arguments = semantic.chat_arguments("clean.llm_semantic", {"documents": documents}, {}, assessment(),
+        clean_format_contract=semantic.COMPLETE_CLEAN_FORMAT_CONTRACT)
     task = arguments["user"]
     assert f"本批输入documents恰好{count}行，输出documents也必须恰好{count}行" in task
     assert "按输入原顺序逐行输出，第i行id必须逐字等于第i个输入id" in task
@@ -278,7 +289,8 @@ def test_new_format_prompt_uses_actual_batch_count_and_exact_ordered_ids(count):
 @pytest.mark.parametrize("documents", [None, {}, (), "not-a-row-list"])
 def test_new_format_count_requires_explicit_document_rows(documents):
     with pytest.raises(RequiredModelFailed, match="explicit document row list"):
-        semantic.chat_arguments("clean.llm_semantic", {"documents": documents}, {}, assessment())
+        semantic.chat_arguments("clean.llm_semantic", {"documents": documents}, {}, assessment(),
+            clean_format_contract=semantic.COMPLETE_CLEAN_FORMAT_CONTRACT)
 
 
 @pytest.mark.parametrize("summary", ["甲>乙", "甲<乙", "甲\n乙", "甲\u202e乙"])
