@@ -286,12 +286,33 @@ def isolated_extract(response, *, original_url=None, trusted_filing=False, polic
                 remaining = cutoff - time.monotonic()
                 if remaining <= 0:
                     return partial("PARSER_DEADLINE_EXCEEDED")
-                resident = _resident_bytes(child.pid, remaining)
+                observer_error = None
+                try:
+                    resident = _resident_bytes(child.pid, remaining)
+                except IntelligenceError as exc:
+                    if exc.code != "PARSER_RESOURCE_UNAVAILABLE":
+                        raise
+                    resident, observer_error = None, exc
                 if time.monotonic() >= cutoff:
                     return partial("PARSER_DEADLINE_EXCEEDED")
-                if resident is None and child.poll() is None:
-                    raise IntelligenceError("PARSER_RESOURCE_UNAVAILABLE", "Cannot observe live parser memory",
+                if resident is None and observer_error is None:
+                    observer_error = IntelligenceError("PARSER_RESOURCE_UNAVAILABLE", "Cannot observe live parser memory",
                         details={"observer_reason": "LIVE_PROCESS_NOT_OBSERVED"})
+                if observer_error is not None:
+                    # A disappearing RSS record can race with worker exit.
+                    # Only actual completion of its pipes and process permits
+                    # its result; a still-live unobservable child fails closed.
+                    remaining = cutoff - time.monotonic()
+                    if remaining <= 0:
+                        return partial("PARSER_DEADLINE_EXCEEDED")
+                    try:
+                        output, diagnostics = child.communicate(timeout=min(0.05, remaining))
+                    except subprocess.TimeoutExpired as exc:
+                        worker_phase = _worker_phase(exc.stderr) or worker_phase
+                        raise observer_error
+                    worker_phase = _worker_phase(diagnostics) or worker_phase
+                    observer_reason = "EXIT_CONFIRMED_AFTER_" + observer_error.details.get("observer_reason", "UNAVAILABLE")
+                    break
                 if resident is not None:
                     samples += 1
                     peak_resident = max(peak_resident or 0, resident)

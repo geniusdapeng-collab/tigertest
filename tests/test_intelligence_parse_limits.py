@@ -180,6 +180,8 @@ def test_live_parser_without_observable_memory_fails_closed(monkeypatch, failed_
     observed, child, clock = controlled_child(monkeypatch)
     original_communicate = child.communicate
     def communicate(*args, **kwargs):
+        if child.calls and child.returncode is None and kwargs.get("timeout") is not None:
+            raise subprocess.TimeoutExpired("test-fixture-parser", kwargs["timeout"])
         try:
             return original_communicate(*args, **kwargs)
         except subprocess.TimeoutExpired:

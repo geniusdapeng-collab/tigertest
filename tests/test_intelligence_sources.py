@@ -255,7 +255,7 @@ def test_pdf_original_bytes_text_page_locations_and_encrypted_or_invalid_paths()
     for body in (encrypted.getvalue(), b"%PDF-1.4\nmalformed"):
         result = extract_response(_response(body))
         assert result.raw_bytes == body and result.text == "" and result.completeness == "partial"
-        assert result.metadata["extraction_error"] == "PDF_PARSE_FAILED"
+        assert result.metadata["extraction_error"] == "PDF_PARSE_FAILED", result._parser_runtime
     unsupported = extract_response(_response(b"\xff\xfe\x00\x81", "application/octet-stream"))
     assert unsupported.raw_bytes == b"\xff\xfe\x00\x81" and unsupported.completeness == "partial"
 
