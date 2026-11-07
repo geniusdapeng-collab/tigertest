@@ -38,27 +38,73 @@ def test_pdf_page_guard_preserves_original_without_partial_text():
     assert result.metadata["extraction_error"] == "PARSER_PAGE_LIMIT"
 
 
-def test_expired_shared_deadline_blocks_parser():
-    result = extract_response(response(pdf(1), "application/pdf"), deadline=time.monotonic() - 1)
+def test_expired_shared_deadline_blocks_parser(monkeypatch):
+    from trading_system.intelligence import parse_limits
+    def unexpected_child(*_args, **_kwargs):
+        pytest.fail("An expired shared deadline must not spawn a parser")
+    monkeypatch.setattr(parse_limits.subprocess, "Popen", unexpected_child)
+    observed = response(pdf(1), "application/pdf")
+    result = extract_response(observed, deadline=time.monotonic() - 1)
     assert result.metadata["extraction_error"] == "PARSER_DEADLINE_EXCEEDED"
+    assert result.text == "" and result.completeness == "partial"
+    assert result.raw_bytes == observed.body and result._parser_runtime["worker_returncode"] is None
 
 
 def test_actual_parser_timeout_reaps_child(monkeypatch):
     from trading_system.intelligence import parse_limits
     original = parse_limits.subprocess.Popen
     children = []
-    def start(*args, **kwargs):
-        child = original(*args, **kwargs)
-        children.append(child)
-        assert "LLM_API_KEY" not in kwargs["env"]
+    def start(args, **kwargs):
+        if not any(str(value).endswith("parse_worker.py") for value in args):
+            return original(args, **kwargs)
+        assert set(kwargs["env"]) == {"PATH", "LC_ALL", "PYTHONDONTWRITEBYTECODE"}
+        # A real child reads the private input, announces readiness on both
+        # pipes, then stays alive beyond the real absolute parser deadline.
+        child = original([sys.executable, "-I", "-c",
+            "import os,sys,time; assert 'LLM_API_KEY' not in os.environ; "
+            "sys.stdin.buffer.read(); "
+            "sys.stdout.buffer.write(b'TEST_FIXTURE_PARSER_READY'); sys.stdout.buffer.flush(); "
+            "sys.stderr.buffer.write(b'TEST_FIXTURE_PARSER_WAITING'); sys.stderr.buffer.flush(); "
+            "time.sleep(60)"], **kwargs)
+        observed = {"child": child, "kill_calls": 0, "timeout_calls": 0, "drained": None}
+        children.append(observed)
+        original_kill, original_communicate = child.kill, child.communicate
+        def kill():
+            observed["kill_calls"] += 1
+            return original_kill()
+        def communicate(*args, **kwargs):
+            try:
+                output = original_communicate(*args, **kwargs)
+            except subprocess.TimeoutExpired:
+                observed["timeout_calls"] += 1
+                raise
+            observed["drained"] = output
+            return output
+        monkeypatch.setattr(child, "kill", kill)
+        monkeypatch.setattr(child, "communicate", communicate)
         return child
     monkeypatch.setattr(parse_limits.subprocess, "Popen", start)
     monkeypatch.setenv("LLM_API_KEY", "test-parent-credential")
-    started = time.monotonic()
-    result = extract_response(response(pdf(1), "application/pdf"), policy=ParsePolicy(timeout_seconds=0.001))
-    assert time.monotonic() - started < 3
-    assert result.metadata["extraction_error"] == "PARSER_DEADLINE_EXCEEDED"
-    assert children and all(child.poll() is not None for child in children)
+    observed = response(pdf(1), "application/pdf")
+    timeout_seconds = 1.0  # Private test budget permits spawn; production policy is unchanged.
+    try:
+        started = time.monotonic()
+        result = extract_response(observed, policy=ParsePolicy(timeout_seconds=timeout_seconds))
+        assert timeout_seconds <= time.monotonic() - started < 3
+        assert result.metadata["extraction_error"] == "PARSER_DEADLINE_EXCEEDED"
+        assert result.text == "" and result.completeness == "partial" and result.raw_bytes == observed.body
+        assert len(children) == 1
+        recorded, child = children[0], children[0]["child"]
+        assert recorded["timeout_calls"] >= 1 and recorded["kill_calls"] == 1
+        assert recorded["drained"] == (b"TEST_FIXTURE_PARSER_READY", b"TEST_FIXTURE_PARSER_WAITING")
+        assert child.poll() is not None and child.returncode < 0
+        assert child.stdout.closed and child.stderr.closed
+    finally:
+        for recorded in children:
+            child = recorded["child"]
+            if child.poll() is None:
+                child.kill()
+                child.communicate()
 
 
 def test_scrapling_only_parses_existing_bytes_and_preserves_table():
@@ -101,6 +147,28 @@ class ParserClock:
 
     def __call__(self):
         return self.now
+
+
+def test_parser_preparation_deadline_expires_without_spawning(monkeypatch):
+    from trading_system.intelligence import parse_limits
+    clock, inputs = ParserClock(), []
+    temporary_file = parse_limits.tempfile.TemporaryFile
+    def prepare(*args, **kwargs):
+        private_input = temporary_file(*args, **kwargs)
+        inputs.append(private_input)
+        clock.now += 0.001
+        return private_input
+    def unexpected_child(*_args, **_kwargs):
+        pytest.fail("A deadline exhausted during input preparation must not spawn a parser")
+    monkeypatch.setattr(parse_limits.time, "monotonic", clock)
+    monkeypatch.setattr(parse_limits.tempfile, "TemporaryFile", prepare)
+    monkeypatch.setattr(parse_limits.subprocess, "Popen", unexpected_child)
+    observed = response(pdf(1), "application/pdf")
+    result = extract_response(observed, policy=ParsePolicy(timeout_seconds=0.001))
+    assert result.metadata["extraction_error"] == "PARSER_DEADLINE_EXCEEDED"
+    assert result.text == "" and result.completeness == "partial" and result.raw_bytes == observed.body
+    assert result._parser_runtime["worker_returncode"] is None
+    assert inputs and all(private_input.closed for private_input in inputs)
 
 
 def controlled_child(monkeypatch, *, finish_late=False, timeout_seconds=1):
