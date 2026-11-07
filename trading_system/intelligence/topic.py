@@ -28,14 +28,16 @@ from ..redline.model_diagnostics import RequiredModelUnavailable
 from .contracts import IntelligenceError, aware, canonical, digest, identifier, safe_value, timestamp, utc_now
 from .freshness import material_freshness
 from .citation_resolution import CONTRACT as CITATION_RESOLUTION_CONTRACT, derive_analysis, derivative_artifact
+from .model_snapshot_view import CONTRACT as MODEL_SNAPSHOT_VIEW_CONTRACT, model_snapshot_view
 from .registry import default_registry
 
 ANALYSIS_FEEDBACK_CONTRACT = "tiger.topic-analysis-feedback/v1"
 
 DEFAULT_POLICY = {
-    "schema": "tiger.topic-policy/v1", "version": "2026-11-07.2",
+    "schema": "tiger.topic-policy/v1", "version": "2026-11-07.3",
     "citation_resolution_contract": CITATION_RESOLUTION_CONTRACT,
     "analysis_feedback_contract": ANALYSIS_FEEDBACK_CONTRACT,
+    "model_snapshot_view_contract": MODEL_SNAPSHOT_VIEW_CONTRACT,
     "wall_seconds": 2400, "closeout_seconds": 30, "review_reserve_seconds": 510,
     "model_attempts": 12, "model_total_tokens": 12 * CONTEXT_TOKENS,
     "model_concurrency": 1, "max_jobs": 128,
@@ -96,9 +98,10 @@ def trusted_policy(path=None):
             raise IntelligenceError("INVALID_STARTUP")
         value.update(supplied)
     if (value["schema"] != DEFAULT_POLICY["schema"] or not isinstance(value["version"], str)
-            or any(type(v) is not int or v <= 0 for k, v in value.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract"})
+            or any(type(v) is not int or v <= 0 for k, v in value.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract"})
             or value.get("citation_resolution_contract") not in (None, CITATION_RESOLUTION_CONTRACT)
             or value.get("analysis_feedback_contract") not in (None, ANALYSIS_FEEDBACK_CONTRACT)
+            or value.get("model_snapshot_view_contract") not in (None, MODEL_SNAPSHOT_VIEW_CONTRACT)
             or value["model_concurrency"] != 1 or value["rounds"] > 2
             or value["closeout_seconds"] + value["review_reserve_seconds"] >= value["wall_seconds"]):
         raise IntelligenceError("INVALID_STARTUP")
@@ -870,6 +873,10 @@ class TopicResearch:
         return ANALYSIS_SYSTEM if cls._feedback_enabled(job) else LEGACY_ANALYSIS_SYSTEM
 
     @staticmethod
+    def _model_snapshot(job, manifest):
+        return model_snapshot_view(manifest, job["policy"].get("model_snapshot_view_contract"))
+
+    @staticmethod
     def _proof_payload(inputs):
         try:
             content = inputs["request"]["messages"][1]["content"]
@@ -883,7 +890,7 @@ class TopicResearch:
     @staticmethod
     def _proof_documents(inputs, job, manifest, documents):
         payload = TopicResearch._proof_payload(inputs)
-        if (payload.get("snapshot") != sanitize_model_value(manifest)
+        if (payload.get("snapshot") != sanitize_model_value(TopicResearch._model_snapshot(job, manifest))
                 or payload.get("topic") != sanitize_model_value(job["topic"])):
             raise IntelligenceError("MODEL_RECEIPT_REQUIRED", "Analysis belongs to another admitted snapshot")
         by_id = {document["id"]: document for document in documents}
@@ -898,7 +905,46 @@ class TopicResearch:
             [{"id": d["id"], "version": d["version"], "text_sha256": d["text_blob"]["sha256"]} for d in scope])
         if supplied != expected:
             raise IntelligenceError("HASH_MISMATCH", "Analysis original bytes differ from its sealed snapshot")
+        if job["policy"].get("model_snapshot_view_contract") is not None and "documents" in payload and "document_refs" in payload:
+            refs = [{"id": d["id"], "version": d["version"], "text_sha256": d["text_blob"]["sha256"]} for d in scope]
+            if payload["document_refs"] != refs:
+                raise IntelligenceError("HASH_MISMATCH", "Reanswer references differ from its complete originals")
         return scope
+
+    def _verified_model_views(self, job, manifests, proofs):
+        """Rebuild model context from full archive proofs, never a saved view.
+
+        Every source-boundary request retains exact full document objects.
+        Synthesis/global-review requests may reference those checked batches;
+        only full document objects count toward dual-stage original coverage.
+        """
+        if job["policy"].get("model_snapshot_view_contract") is None:
+            return
+        archive = self._service(readonly=True).archive
+        by_snapshot = {manifest["snapshot_id"]: manifest for manifest in manifests}
+        originals = {key: archive.snapshot_documents(key) for key in by_snapshot}
+        final_id = manifests[-1]["snapshot_id"]
+        full_seen = {stage: set() for stage in ("sector.narrative", "decision.debate")}
+        for inputs, proof in proofs:
+            payload = self._proof_payload(inputs)
+            header = payload.get("snapshot")
+            manifest = by_snapshot.get(header.get("snapshot_id")) if isinstance(header, dict) else None
+            if (manifest is None or header != sanitize_model_value(self._model_snapshot(job, manifest))
+                    or payload.get("topic") != sanitize_model_value(job["topic"])):
+                raise IntelligenceError("HASH_MISMATCH", "Model snapshot context differs from its complete archive proof")
+            stage = proof.get("stage")
+            if stage not in full_seen:
+                raise IntelligenceError("HASH_MISMATCH", "Unexpected topic evidence stage")
+            if "documents" in payload or "document_refs" in payload:
+                scope = self._proof_documents(inputs, job, manifest, originals[manifest["snapshot_id"]])
+                if "documents" in payload and manifest["snapshot_id"] == final_id:
+                    full_seen[stage].update(document["id"] for document in scope)
+            elif (stage != "decision.debate" or not isinstance(payload.get("source_reviews"), list)
+                    or not isinstance(payload.get("verified_quotations"), list)):
+                raise IntelligenceError("HASH_MISMATCH", "Model original scope is unavailable")
+        required = {document["id"] for document in originals[final_id]}
+        if any(seen != required for seen in full_seen.values()):
+            raise IntelligenceError("MODEL_RECEIPT_REQUIRED", "Both model stages must receive every complete original object")
 
     @staticmethod
     def _derivative_filename(artifact):
@@ -1050,6 +1096,9 @@ class TopicResearch:
             if original_proof is None:
                 raise IntelligenceError("MODEL_RECEIPT_REQUIRED")
             binding.update(original_request_sha256=original_proof["request_sha256"], original_response_id=original_proof["response_id"])
+        if job["policy"].get("model_snapshot_view_contract") is not None:
+            binding.update(model_snapshot_view_contract=MODEL_SNAPSHOT_VIEW_CONTRACT,
+                model_snapshot_view_sha256=digest(cls._model_snapshot(job, manifest)))
         binding["binding_sha256"] = digest(binding)
         return binding
 
@@ -1106,7 +1155,7 @@ class TopicResearch:
 
     def _analyze(self, client, execution, job, manifest, documents):
         payload = {"purpose": "read_only_topic_research_no_trade", "topic": job["topic"],
-                   "snapshot": manifest, "documents": documents}
+                   "snapshot": self._model_snapshot(job, manifest), "documents": documents}
         user = "Research all declared dimensions. Cite exact original text, identify conditional and contrary evidence, and propose at most one bounded follow-up only for essential gaps."
         try:
             result = self._semantic(client, execution, stage="sector.narrative", system=self._analysis_system(job),
@@ -1123,7 +1172,7 @@ class TopicResearch:
         for part in parts:
             validate_analysis(part, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
         payload = {"purpose": "source_bound_topic_synthesis", "topic": job["topic"],
-            "snapshot": manifest, "document_refs": [{"id": d["id"], "version": d["version"], "text_sha256": d["text_blob"]["sha256"]} for d in documents],
+            "snapshot": self._model_snapshot(job, manifest), "document_refs": [{"id": d["id"], "version": d["version"], "text_sha256": d["text_blob"]["sha256"]} for d in documents],
             "source_analyses": parts}
         result = self._semantic(client, execution, stage="sector.narrative", system=self._analysis_system(job),
             user="Synthesize every source-boundary analysis. Originals are retained under the fixed snapshot; use document_refs[].id as citation document_id, never logical doc_id. Preserve exact quotations, unknowns and counterevidence. Do not treat a partial viewpoint as full coverage.",
@@ -1131,7 +1180,7 @@ class TopicResearch:
         return self._validated_analysis(client, execution, job, manifest, documents, result, payload)
 
     def _review(self, client, execution, job, manifest, documents, analysis, *, source_batch=False):
-        payload = {"topic": job["topic"], "snapshot": manifest, "documents": documents, "report": analysis}
+        payload = {"topic": job["topic"], "snapshot": self._model_snapshot(job, manifest), "documents": documents, "report": analysis}
         records = self._current_resolution_records(job)
         if records:
             payload["citation_resolutions"] = records
@@ -1156,7 +1205,7 @@ class TopicResearch:
         quotations = [{"id": c["id"], "supports": c["supports"], "refutes": c["refutes"]} for c in analysis["conclusions"]]
         return self._semantic(client, execution, stage="decision.debate", system=REVIEW_SYSTEM,
             user="Review cross-source consistency after every full-original batch was independently checked. All quotations were also deterministically located in originals. Check subject/period distinctions, unsupported synthesis, contradictory views and honest gaps; do not claim sources outside this manifest.",
-            schema=REVIEW_SCHEMA, payload={"topic": job["topic"], "snapshot": manifest,
+            schema=REVIEW_SCHEMA, payload={"topic": job["topic"], "snapshot": self._model_snapshot(job, manifest),
                 "report": analysis, "source_reviews": parts, "verified_quotations": quotations,
                 **({"citation_resolutions": records} if records else {})})
 
@@ -1193,8 +1242,6 @@ class TopicResearch:
                     ids = [read_json(directory, f"snapshot-{i}.json")["snapshot_id"] for i in range(round_index + 1)]
                     self.store.update(job_id, phase="analyze", snapshot_ids=ids)
                     documents = self._service().archive.snapshot_documents(manifest["snapshot_id"])
-                    payload = {"purpose": "read_only_topic_research_no_trade", "topic": job["topic"],
-                               "snapshot": manifest, "documents": documents}
                     filename = f"analysis-{round_index}.json"
                     if (directory / filename).exists():
                         analysis = read_json(directory, filename)
@@ -1298,13 +1345,14 @@ class TopicResearch:
         proofs = self._verified_model_proofs(job)
         self._verified_analysis_feedback(job, manifests, proofs)
         derivatives, resolution_records = self._verified_derivatives(job, manifests, proofs)
+        self._verified_model_views(job, manifests, proofs)
         if resolution_records:
             if report.get("citation_resolutions") != resolution_records:
                 raise IntelligenceError("HASH_MISMATCH", "Citation resolutions differ from original model evidence")
         elif "citation_resolutions" in report:
             raise IntelligenceError("HASH_MISMATCH", "Unexpected citation resolution contract")
         payload = {"purpose": "read_only_topic_research_no_trade", "topic": job["topic"],
-                   "snapshot": manifest, "documents": documents}
+                   "snapshot": self._model_snapshot(job, manifest), "documents": documents}
         generation = [(i, p) for i, p in proofs if p.get("stage") == "sector.narrative"
             and (p.get("parsed") == report["analysis"]
                  or derivatives.get((p["request_sha256"], p["response_id"])) == report["analysis"])]
@@ -1463,17 +1511,19 @@ class TopicResearch:
 
 
 def trusted_policy_value(value):
-    legacy_keys = set(DEFAULT_POLICY) - {"analysis_feedback_contract"}
-    if not isinstance(value, dict) or set(value) not in (set(DEFAULT_POLICY), legacy_keys):
+    optional = {"analysis_feedback_contract", "model_snapshot_view_contract"}
+    if (not isinstance(value, dict) or set(value) - set(DEFAULT_POLICY)
+            or not (set(DEFAULT_POLICY) - optional).issubset(value)):
         raise IntelligenceError("INVALID_STARTUP")
     merged = {**DEFAULT_POLICY, **value}
-    if "analysis_feedback_contract" not in value:
-        # A frozen legacy policy keeps its exact/code-only request contract.
-        merged.pop("analysis_feedback_contract", None)
+    for key in optional - set(value):
+        # Frozen jobs retain their exact original prompt and snapshot bytes.
+        merged.pop(key, None)
     if (merged["schema"] != DEFAULT_POLICY["schema"] or not isinstance(merged["version"], str)
-            or any(type(v) is not int or v <= 0 for k, v in merged.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract"})
+            or any(type(v) is not int or v <= 0 for k, v in merged.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract"})
             or merged.get("citation_resolution_contract") not in (None, CITATION_RESOLUTION_CONTRACT)
             or merged.get("analysis_feedback_contract") not in (None, ANALYSIS_FEEDBACK_CONTRACT)
+            or merged.get("model_snapshot_view_contract") not in (None, MODEL_SNAPSHOT_VIEW_CONTRACT)
             or merged["model_concurrency"] != 1 or merged["rounds"] > 2
             or merged["closeout_seconds"] + merged["review_reserve_seconds"] >= merged["wall_seconds"]):
         raise IntelligenceError("INVALID_STARTUP")
