@@ -89,6 +89,10 @@ readonly 不显示写工具，直接调用也会在 Python 启动前拒绝。初
 
 默认 `tiger.topic-policy/v1` 具有 2400 秒从接纳到收尾的总期限，保留 510 秒供独立复核、30 秒供收尾；最多两次取材/研究版本。整个任务的采集总上限为 120 请求、96 次 fetch、32 MiB，第二次补查扣除前一次已观察用量。语义研究最多 12 次真实调用尝试，任务 token 配额与单次模型合法窗口分别计量；每次 outbound（含 schema repair）发送前持久预占完整输入加最大合法输出，按实际 usage 结算。默认保留同一模型、high 分析和 max 独立复核，不压小输出窗口换取通过。
 
+新 admission 的 `model_transport_contract = tiger.topic-model-transport/v1` 将 topic chat 的 socket idle 等待上限设为既有响应总上限 480 秒，并用独立 POSIX alarm 将一次实际运输限制为 `min(480, 任务剩余-30-分析阶段预留510)`；max 复核只扣收尾的30秒。更早的 worker watchdog 保留原 handler、停止原因和扣除实际耗时后的剩余时间。旧 policy 缺字段或为 null 时保留原180秒 idle 与原请求字节，paper、模型/推理档位、输出窗口与 schema 不变。Requests 的 [read timeout 是字节间隔而非总 wall](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts)；DeepSeek 官方说明非流式请求可能返回 [空行 keep-alive](https://api-docs.deepseek.com/quick_start/rate_limit/)，因此心跳不延长本地绝对期限，也不能证明供应商已开始或完成推理。
+
+新合同在原 attempt 的 unknown 结算事务中追加封闭的 `model_failure_observed` 事件：绑定 job/request/policy/source/attempt/stage、失败阶段和代码、elapsed、实际 deadline owner 与安全 HTTP status/body prefix hash/观测字节/complete。没有原生 checkpoint 时仍为 unknown，观测到零字节不代表零费用；不保存原始正文、reasoning、凭据或异常文本，也不自动重发。旧任务缺少这些新观察时不追溯补造传输原因或实际用量。
+
 只有完整请求经实际 tokenizer 证实超出模型窗口时，才按完整原文边界拆批，再保留来源 id/hash/精确引文作合成；独立复核也按完整原文分批并做全局一致性复核。单篇原文本身超窗，或完整批次/合成所需预算、时限仍不够，明确失败而不裁剪证据。已完成批次与实际模型响应在同 job 内恢复，避免中断后再次付费。
 
 可信 `--policy-file` 可覆盖原政策中的同名字段，随 job admission 冻结并计算摘要；网页和请求无权改它。调整墙钟或调用/token 配额时，须记录真实失败及容量观测，再重新验证；旧任务仍受原 admission 约束。解析器使用可信 Scrapling HTML policy，PDF/HTML 的解析子进程由独立时间、字节、页数和内存边界保护；原始字节保留，超限资料是 partial。

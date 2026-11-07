@@ -538,15 +538,22 @@ class DeepSeekRequiredClient:
     def _clean(self, value: object, depth: int = 0) -> object:
         return sanitize_model_value(value, self._api_key, depth)
 
-    def _post_json(self, path: str, request: dict) -> tuple[dict, str]:
+    def _post_json(self, path: str, request: dict, *, _transport_observation=None,
+                   _chat_read_timeout=None) -> tuple[dict, str]:
         if path not in ("/chat/completions", "/v1/tools/search", "/v1/tools/fetch"):
             _fail("ENDPOINT_NOT_ALLOWED")
         chat = path == "/chat/completions"
-        observed_chat = chat and bool(self._response_observation_contract)
+        if (_transport_observation is not None and (not chat or type(_transport_observation) is not dict)
+                or _chat_read_timeout is not None and (not chat or type(_chat_read_timeout) not in {int, float}
+                    or not math.isfinite(_chat_read_timeout) or not 0 < _chat_read_timeout <= CHAT_RESPONSE_DEADLINE)):
+            _fail("INVALID_CHAT_REQUEST")
+        observed_chat = chat and (bool(self._response_observation_contract) or _transport_observation is not None)
         observed_digest = hashlib.sha256()
         if observed_chat:
             self._last_chat_transport = {"http_status": None, "body_sha256": None,
                 "body_bytes": 0, "body_whitespace_only": True, "body_complete": False}
+        if _transport_observation is not None:
+            _transport_observation.update(phase="awaiting_headers", transport=self._last_chat_transport)
         wire = _canonical(request)
         # Chat admission is governed by the pinned tokenizer and model window.
         # The Search/Fetch byte envelope is a separate endpoint constraint.
@@ -579,9 +586,12 @@ class DeepSeekRequiredClient:
                          "Accept-Encoding": "identity", "Authorization": "Bearer " + self._api_key},
                 timeout=((min(CONNECT_TIMEOUT, remaining / 2), min(READ_TIMEOUT, remaining / 2))
                          if tool_limits is not None else
-                         (CONNECT_TIMEOUT, CHAT_READ_TIMEOUT if chat else READ_TIMEOUT)),
+                         (CONNECT_TIMEOUT, (_chat_read_timeout if _chat_read_timeout is not None else CHAT_READ_TIMEOUT)
+                            if chat else READ_TIMEOUT)),
                 allow_redirects=False, verify=True, stream=True)
             status = response.status_code
+            if _transport_observation is not None:
+                _transport_observation["phase"] = "response_headers"
             if observed_chat and type(status) is int and 100 <= status <= 599:
                 self._last_chat_transport["http_status"] = status
             if type(status) is not int or status != 200:
@@ -598,6 +608,8 @@ class DeepSeekRequiredClient:
                 _fail("RESPONSE_TOO_LARGE")
             chunks: list[bytes] = []
             size = 0
+            if _transport_observation is not None:
+                _transport_observation["phase"] = "response_body"
             while True:
                 if time.monotonic() > deadline:
                     if tool_limits is not None:
@@ -637,15 +649,23 @@ class DeepSeekRequiredClient:
             if observed_chat:
                 self._last_chat_transport.update(body_complete=True, body_bytes=len(raw),
                     body_sha256=hashlib.sha256(raw).hexdigest(), body_whitespace_only=not bool(raw.strip()))
+            if _transport_observation is not None:
+                _transport_observation["phase"] = "http_envelope"
             obj = _json_loads(raw)
             if not isinstance(obj, dict):
                 _fail("RESPONSE_NOT_OBJECT")
             return obj, hashlib.sha256(raw).hexdigest()
         except LLMUnavailable:
             raise
-        except requests.Timeout:
+        except requests.Timeout as error:
+            if _transport_observation is not None:
+                _transport_observation["transport_error"] = (
+                    "connect_timeout" if isinstance(error, requests.ConnectTimeout) else
+                    "read_timeout" if isinstance(error, requests.ReadTimeout) else "timeout")
             _fail("NETWORK_TIMEOUT")
         except Exception:
+            if _transport_observation is not None:
+                _transport_observation["transport_error"] = "transport_failure"
             _fail("TRANSPORT_FAILURE")
         finally:
             if response is not None:

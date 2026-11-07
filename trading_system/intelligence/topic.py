@@ -30,14 +30,16 @@ from .freshness import material_freshness
 from .citation_resolution import CONTRACT as CITATION_RESOLUTION_CONTRACT, derive_analysis, derivative_artifact
 from .model_snapshot_view import CONTRACT as MODEL_SNAPSHOT_VIEW_CONTRACT, model_snapshot_view
 from .registry import default_registry
+from .topic_transport import CONTRACT as MODEL_TRANSPORT_CONTRACT, TransportObservation, deadline_supported, validate_failure
 
 ANALYSIS_FEEDBACK_CONTRACT = "tiger.topic-analysis-feedback/v1"
 
 DEFAULT_POLICY = {
-    "schema": "tiger.topic-policy/v1", "version": "2026-11-07.3",
+    "schema": "tiger.topic-policy/v1", "version": "2026-11-07.4",
     "citation_resolution_contract": CITATION_RESOLUTION_CONTRACT,
     "analysis_feedback_contract": ANALYSIS_FEEDBACK_CONTRACT,
     "model_snapshot_view_contract": MODEL_SNAPSHOT_VIEW_CONTRACT,
+    "model_transport_contract": MODEL_TRANSPORT_CONTRACT,
     "wall_seconds": 2400, "closeout_seconds": 30, "review_reserve_seconds": 510,
     "model_attempts": 12, "model_total_tokens": 12 * CONTEXT_TOKENS,
     "model_concurrency": 1, "max_jobs": 128,
@@ -98,10 +100,11 @@ def trusted_policy(path=None):
             raise IntelligenceError("INVALID_STARTUP")
         value.update(supplied)
     if (value["schema"] != DEFAULT_POLICY["schema"] or not isinstance(value["version"], str)
-            or any(type(v) is not int or v <= 0 for k, v in value.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract"})
+            or any(type(v) is not int or v <= 0 for k, v in value.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"})
             or value.get("citation_resolution_contract") not in (None, CITATION_RESOLUTION_CONTRACT)
             or value.get("analysis_feedback_contract") not in (None, ANALYSIS_FEEDBACK_CONTRACT)
             or value.get("model_snapshot_view_contract") not in (None, MODEL_SNAPSHOT_VIEW_CONTRACT)
+            or value.get("model_transport_contract") not in (None, MODEL_TRANSPORT_CONTRACT)
             or value["model_concurrency"] != 1 or value["rounds"] > 2
             or value["closeout_seconds"] + value["review_reserve_seconds"] >= value["wall_seconds"]):
         raise IntelligenceError("INVALID_STARTUP")
@@ -286,17 +289,24 @@ class TopicStore:
             self.event(db, job_id, "model_dispatched", {"attempt_id": attempt, "request_sha256": digest(request), "hold": hold, "stage": stage})
             return attempt
 
-    def settle(self, job_id, attempt, receipt, *, reconcile=False):
+    def settle(self, job_id, attempt, receipt, *, reconcile=False, failure_observation=None):
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM topic_attempts WHERE tenant=? AND job_id=? AND attempt_id=?", (self.tenant, job_id, attempt)).fetchone()
             allowed = {"dispatched", "unknown"} if reconcile and receipt is not None else {"dispatched"}
             if row is None or row["state"] not in allowed:
                 raise IntelligenceError("REVISION_CONFLICT")
+            observation = None
+            if failure_observation is not None:
+                if receipt is not None:
+                    raise IntelligenceError("HASH_MISMATCH", "A transport failure cannot settle known usage")
+                observation = validate_failure(failure_observation, self._get(db, job_id), row)
             state = "unknown" if receipt is None else "overrun" if receipt["usage"]["total_tokens"] > row["hold"] else "settled"
             db.execute("UPDATE topic_attempts SET state=?,receipt=? WHERE tenant=? AND attempt_id=?", (state, canonical(receipt).decode() if receipt is not None else None, self.tenant, attempt))
             self.event(db, job_id, "model_" + state, {"attempt_id": attempt, "receipt": receipt,
                 "reconciled_from_checkpoint": bool(reconcile)})
+            if observation is not None:
+                self.event(db, job_id, "model_failure_observed", observation)
 
 
 class TopicExecution:
@@ -329,6 +339,10 @@ class TopicModelClient(DeepSeekRequiredClient):
     """One outbound reservation for each actual chat, including schema repair."""
     def __init__(self, execution):
         super().__init__(execution)
+        self._topic_transport = (execution.store.job(execution.job_id)["policy"].get("model_transport_contract")
+            == MODEL_TRANSPORT_CONTRACT)
+        if self._topic_transport:
+            deadline_supported()
         attempts = execution.store.attempts(execution.job_id)
         self._recoverable_attempts = {row["attempt_id"] for row in attempts}
         hashes = [row["request_sha"] for row in attempts]
@@ -483,10 +497,24 @@ class TopicModelClient(DeepSeekRequiredClient):
                 raise RequiredModelUnavailable("NON_THINKING_REASONING_CONTENT")
             return saved_response, receipt["response_sha256"]
         attempt = execution.store.reserve(execution.job_id, execution._active.spec.name, request)
+        observation = TransportObservation() if self._topic_transport else None
         try:
-            response, body_hash = super()._post_json(path, request)
-        except BaseException:
-            execution.store.settle(execution.job_id, attempt, None)
+            if observation is None:
+                response, body_hash = super()._post_json(path, request)
+            else:
+                from ..llm.deepseek_required import CHAT_RESPONSE_DEADLINE
+                with observation.deadline(execution.store.job(execution.job_id), CHAT_RESPONSE_DEADLINE,
+                        execution._active.spec.name):
+                    response, body_hash = super()._post_json(path, request,
+                        _transport_observation=observation.data, _chat_read_timeout=CHAT_RESPONSE_DEADLINE)
+                observation.data["phase"] = "native_validation"
+        except BaseException as error:
+            if observation is None:
+                execution.store.settle(execution.job_id, attempt, None)
+            else:
+                execution.store.settle(execution.job_id, attempt, None,
+                    failure_observation=observation.failure(execution.store.job(execution.job_id), attempt,
+                        digest(request), execution._active.spec.name, error))
             raise
         try:
             usage = self._usage(response.get("usage"), request["thinking"]["type"])
@@ -517,10 +545,17 @@ class TopicModelClient(DeepSeekRequiredClient):
                     "input_tokens": receipt["input_tokens"], "output_ceiling": receipt["output_ceiling"]},
                 "response": saved_response, "receipt": receipt, "omitted_reasoning": omitted}
             checkpoint["checkpoint_sha256"] = digest(checkpoint)
+            if observation is not None:
+                observation.data["phase"] = "response_checkpoint"
             atomic_json(execution.directory, response_file, checkpoint, exclusive=True)
             receipt = {**receipt, "checkpoint_sha256": checkpoint["checkpoint_sha256"]}
-        except BaseException:
-            execution.store.settle(execution.job_id, attempt, None)
+        except BaseException as error:
+            if observation is None:
+                execution.store.settle(execution.job_id, attempt, None)
+            else:
+                execution.store.settle(execution.job_id, attempt, None,
+                    failure_observation=observation.failure(execution.store.job(execution.job_id), attempt,
+                        digest(request), execution._active.spec.name, error))
             raise
         execution.store.settle(execution.job_id, attempt, receipt)
         return response, body_hash
@@ -1511,7 +1546,7 @@ class TopicResearch:
 
 
 def trusted_policy_value(value):
-    optional = {"analysis_feedback_contract", "model_snapshot_view_contract"}
+    optional = {"analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"}
     if (not isinstance(value, dict) or set(value) - set(DEFAULT_POLICY)
             or not (set(DEFAULT_POLICY) - optional).issubset(value)):
         raise IntelligenceError("INVALID_STARTUP")
@@ -1520,10 +1555,11 @@ def trusted_policy_value(value):
         # Frozen jobs retain their exact original prompt and snapshot bytes.
         merged.pop(key, None)
     if (merged["schema"] != DEFAULT_POLICY["schema"] or not isinstance(merged["version"], str)
-            or any(type(v) is not int or v <= 0 for k, v in merged.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract"})
+            or any(type(v) is not int or v <= 0 for k, v in merged.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"})
             or merged.get("citation_resolution_contract") not in (None, CITATION_RESOLUTION_CONTRACT)
             or merged.get("analysis_feedback_contract") not in (None, ANALYSIS_FEEDBACK_CONTRACT)
             or merged.get("model_snapshot_view_contract") not in (None, MODEL_SNAPSHOT_VIEW_CONTRACT)
+            or merged.get("model_transport_contract") not in (None, MODEL_TRANSPORT_CONTRACT)
             or merged["model_concurrency"] != 1 or merged["rounds"] > 2
             or merged["closeout_seconds"] + merged["review_reserve_seconds"] >= merged["wall_seconds"]):
         raise IntelligenceError("INVALID_STARTUP")

@@ -94,7 +94,8 @@ def test_unknown_model_view_contract_cannot_admit_a_job(local_topic, contract):
 
 
 def test_8111_policy_hash_and_legacy_snapshot_object_are_byte_exact():
-    legacy = {k: v for k, v in module.DEFAULT_POLICY.items() if k != "model_snapshot_view_contract"}
+    legacy = {k: v for k, v in module.DEFAULT_POLICY.items()
+        if k not in {"model_snapshot_view_contract", "model_transport_contract"}}
     legacy["version"] = "2026-11-07.2"
     parsed = module.trusted_policy_value(legacy)
     assert "model_snapshot_view_contract" not in parsed
