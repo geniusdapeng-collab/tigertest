@@ -1013,41 +1013,52 @@ class DeepSeekRequiredClient:
 
         def invoke():
             for ordinal in (1, 2):
-                self._last_chat_transport = None
-                try:
+                from .resume_native import cached_attempt
+                cached = cached_attempt(self.execution, ordinal, inputs, observation)
+                if cached is None:
+                    self._last_chat_transport = None
                     try:
-                        verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
-                            input_tokens=inputs["input_token_estimate"], output_ceiling=inputs["output_ceiling"],
-                            registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
-                    except TokenBudgetError as error:
-                        _fail(error.code)
-                    native, body_hash = self._post_json("/chat/completions", request)
-                    if native.get("model") != MODEL:
-                        _fail("RESPONSE_MODEL_MISMATCH")
-                    if native.get("object") != "chat.completion":
-                        _fail("RESPONSE_OBJECT_MISMATCH")
-                    response_id = self._identifier(native.get("id"))
-                    if self._api_key in response_id or response_id in self._observed_response_ids:
-                        _fail("RESPONSE_IDENTITY_REUSED_OR_UNSAFE")
-                    choices = native.get("choices")
-                    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
-                        _fail("INVALID_CHOICES")
-                    choice, message = choices[0], choices[0].get("message")
-                    if choice.get("finish_reason") == "length":
-                        _fail("MODEL_OUTPUT_TRUNCATED")
-                    if (type(choice.get("index")) is not int or choice["index"] != 0
-                            or choice.get("finish_reason") != "stop" or not isinstance(message, dict)
-                            or message.get("role") != "assistant" or message.get("tool_calls") or message.get("function_call")):
-                        _fail("INCOMPLETE_MODEL_RESPONSE")
-                    self._usage(native.get("usage"), "enabled")
-                    self._observed_response_ids.add(response_id)
-                except RequiredModelUnavailable as error:
-                    _, entry = record(ordinal, error=error)
-                    raise self._observation_failure(entry["diagnostic"], observation) from None
-                attempt, entry = record(ordinal, native=native, body_hash=body_hash)
+                        try:
+                            verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
+                                input_tokens=inputs["input_token_estimate"], output_ceiling=inputs["output_ceiling"],
+                                registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
+                        except TokenBudgetError as error:
+                            _fail(error.code)
+                        native, body_hash = self._post_json("/chat/completions", request)
+                        if native.get("model") != MODEL:
+                            _fail("RESPONSE_MODEL_MISMATCH")
+                        if native.get("object") != "chat.completion":
+                            _fail("RESPONSE_OBJECT_MISMATCH")
+                        response_id = self._identifier(native.get("id"))
+                        if self._api_key in response_id or response_id in self._observed_response_ids:
+                            _fail("RESPONSE_IDENTITY_REUSED_OR_UNSAFE")
+                        choices = native.get("choices")
+                        if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+                            _fail("INVALID_CHOICES")
+                        choice, message = choices[0], choices[0].get("message")
+                        if choice.get("finish_reason") == "length":
+                            _fail("MODEL_OUTPUT_TRUNCATED")
+                        if (type(choice.get("index")) is not int or choice["index"] != 0
+                                or choice.get("finish_reason") != "stop" or not isinstance(message, dict)
+                                or message.get("role") != "assistant" or message.get("tool_calls") or message.get("function_call")):
+                            _fail("INCOMPLETE_MODEL_RESPONSE")
+                        self._usage(native.get("usage"), "enabled")
+                        self._observed_response_ids.add(response_id)
+                    except RequiredModelUnavailable as error:
+                        _, entry = record(ordinal, error=error)
+                        raise self._observation_failure(entry["diagnostic"], observation) from None
+                    attempt, entry = record(ordinal, native=native, body_hash=body_hash)
+                else:
+                    attempt, entry = cached
+                    response = attempt["response"]
+                    response_id = None if response is None else response["id"]
+                    body_hash = attempt["transport"]["body_sha256"]
+                    message = {} if response is None else response["choices"][0]["message"]
                 verdict = replay_attempt(attempt, inputs)
                 # Redaction must never turn invalid original JSON into an
                 # accepted result or authorize a second billable request.
+                if cached is not None and attempt["content_redacted"]:
+                    _fail("RESPONSE_OBJECT_MISMATCH")
                 if attempt["content_redacted"]:
                     try:
                         original = _json_loads(message["content"])
