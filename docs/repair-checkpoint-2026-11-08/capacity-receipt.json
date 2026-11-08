@@ -1,0 +1,304 @@
+{
+  "schema": "tiger.capacity-governance-handoff/v1",
+  "at_utc": "2026-11-08T03:31:11.010333+00:00",
+  "reason": "Parent conveyed the user explicitly requested stopping new implementation and paid work because credits are nearly exhausted, freezing current code and preparing a detailed handoff.",
+  "source": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+  "observed_head": "97aa30cd84d4d57043e7f2e503c59a1b7f12e332",
+  "working_tree_dirty": true,
+  "owned_files": [
+    {
+      "path": "tests/test_research_work_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/tests/test_research_work_proof.py",
+      "sha256": "3ed4d9bbeb41ed84944f262b3475b7e9a0e8c10d7f3622f30ab1b3ba5fa8a508",
+      "bytes": 37628,
+      "lines": 677,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/intelligence_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/intelligence_proof.py",
+      "sha256": "9b62f946ae98b0fe62479a889552ebf989078b8e323ef0ce723f19287762967a",
+      "bytes": 113469,
+      "lines": 1777,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/work_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/work_proof.py",
+      "sha256": "7d4427e326458d96e566791b71a9e22d2ec2c6e1b5b214e00f0defa346826740",
+      "bytes": 44447,
+      "lines": 766,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    }
+  ],
+  "paid_calls": 0,
+  "github_operations": 0,
+  "shared_git_index_operations": 0,
+  "running_own_tests": false,
+  "ep02": {
+    "local_commit": "e9196bca5e22bcd563f44a3965300978fd02fd05",
+    "root_integration": "d0746b9",
+    "report": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/REPORT.md",
+    "delivery": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/delivery.json",
+    "budget_sha256": "17c466a10dabeb3d63c3df2bf7baf66b4d886ea76c034c0e520609c4dd4ef0b5",
+    "original_requests_offline_counts": {
+      "002": 9926,
+      "008": 504055,
+      "009": 850560,
+      "009_legal_output": 198016
+    }
+  },
+  "tests": [
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/baseline-failures.xml",
+      "exists": true,
+      "sha256": "b3f2f45b0f68bbe14721dbd0ee9b7017498776f39e09da8c5b6bcc5a03ab241d",
+      "tests": 4,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 4.674000000000001,
+      "execution_outcome": "failed_or_expected_red"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/initial-counter-passing-v2.xml",
+      "exists": true,
+      "sha256": "88645ab8fcfc19b0abec2f43966c1c27ae2d7cd7bb80582cb150fa1f1a7100be",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 4.719,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/budget-unit-final-with-replay-hook.xml",
+      "exists": true,
+      "sha256": "f33c4371d8658b8a1e03bce728f19efa150e665ee478d19acbcc9156f9c5f8f4",
+      "tests": 37,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 10.167,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/targeted-regression-v1.xml",
+      "exists": true,
+      "sha256": "f23097c7e22d8fe4f553c3223b955a102bc5a0b1b8c966512ab77c57f2e6ae5c",
+      "tests": 373,
+      "failures": 85,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 263.019,
+      "execution_outcome": "failed_or_expected_red"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/ep02/targeted-regression-fixed-v2.xml",
+      "exists": true,
+      "sha256": "da38f03489a2a1015b00e0b1363de9d748820e4ffb491651a46274fcf0291e5e",
+      "tests": 85,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 27.328000000000003,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-red.xml",
+      "exists": true,
+      "sha256": "d369dc8a90e464c0056e10780a7dd1fbc3ceff191c9540496e7763b83e902a2a",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 0.0,
+      "execution_outcome": "failed_or_expected_red"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-first.xml",
+      "exists": true,
+      "sha256": "addb5d953a05d271eb9e779b2a72f04789a61cae2c5f1f8ddda7765b220f2190",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 0.289,
+      "execution_outcome": "failed_or_expected_red"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-doc-snapshot.xml",
+      "exists": true,
+      "sha256": "b8e665935a9e0f6e8e0f1a8e829e55712790214104de9d6dd210a96fd86aa8f1",
+      "tests": 21,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 9.473,
+      "execution_outcome": "failed_or_expected_red"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-accounting-v2.xml",
+      "exists": true,
+      "sha256": "695c45cc85af49ff458371734146b58a774c8d1a29cafdabe9159a5a0a3224ad",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.006,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-parent-history.xml",
+      "exists": true,
+      "sha256": "e63d76c075e19e73cc038510916fa702b1a55bc18aae0a307873b332420ac624",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.083,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-initial.xml",
+      "exists": true,
+      "sha256": "f990a2e07720c80e607ba3e60cb421a4f1431d36f0fa16e2eeb9331f8ec04ab3",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001,
+      "execution_outcome": "interrupted_for_diagnostic_after_461.14_seconds",
+      "passing_receipt": false,
+      "note": "This XML is not a passing receipt despite no XML failure/error; the CPU-hot test process was explicitly interrupted."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-perf-fixed.xml",
+      "exists": true,
+      "sha256": "e74abfd108f5e218144e7c49abff2840f736c8b09c473bdbe6910755dc816a26",
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 171.752,
+      "execution_outcome": "failed_or_expected_red"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-before-full-v3.xml",
+      "exists": true,
+      "sha256": "dd0f8180e8948f0e00f2a28a40d50d866c20a17d91458475ad477ade3ce4f3a6",
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 12.274999999999997,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3.xml",
+      "exists": true,
+      "sha256": "ccca0fdd53dbd74276132c12b9e7c81be1de86f7dbb4774922cd3aabf1143609",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 196.448,
+      "execution_outcome": "passed_for_that_recorded_revision"
+    }
+  ],
+  "passing_full_fixture": {
+    "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3-work/test_all_five_model_stages_and0/run",
+    "source_tree": "75e5591ac6ff29407bc45ecf5edb3af9d64d9398e4ec395959ffda2d5815ecfc",
+    "source_manifest_sha256": "7eb0b0e4dab7fed66a43b5d141f681548cd141c51f86557d869536eab7f52a34",
+    "runtime_files": 179,
+    "head_at_freeze": "9d545ab4a7dc4c586dc11e6eb212c9e0dbe93eee",
+    "stages": 41,
+    "documents": 110,
+    "synthetic_chat_calls": 224,
+    "chat_stage_counts": {
+      "clean.llm_semantic": 220,
+      "tech.sentiment": 1,
+      "tech.risk": 1,
+      "sector.narrative": 1,
+      "decision.debate": 1
+    },
+    "source_requests": 140,
+    "native_searches": 85,
+    "paid": false,
+    "result": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3-work/test_all_five_model_stages_and0/run/TEST_FIXTURE-result.json",
+    "admission": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3-work/test_all_five_model_stages_and0/run/TEST_FIXTURE-admission.json"
+  },
+  "untested_latest_delta": [
+    "verify_source_index and verify_report_identity helpers; corresponding 10 coherent public-index/run-id mutation tests were added after last 50-case pass and have not run.",
+    "Current unified source after other owners last changes is not the exact 75e5591 frozen passing fixture and has not been rerun here.",
+    "No nearest legacy regression suite or full current repository suite was run by this agent after the new proof integration.",
+    "No paid real237 run, GitHub CI, main merge or SOURCE release was performed by this agent."
+  ],
+  "segmentation": {
+    "implementation_started": false,
+    "new_segment_module_created": false,
+    "event_identity_modified_by_this_agent": false,
+    "work_semantics_modified_by_this_agent": false,
+    "work_required_clean_modified_by_this_agent": false,
+    "relations_limits_modified_by_this_agent": false,
+    "accepted_design_only": true,
+    "policy_knobs_removed_by_root": true,
+    "removed_knobs": [
+      "segmentation_contract",
+      "segment_max_count",
+      "segment_context_neighbors"
+    ],
+    "required_future_changes": [
+      "Real deterministic legal-window/structure core segmentation with exact whole-original coverage",
+      "Per-range local spans mapped by program to original global positions; namespace IDs and preserve all literals",
+      "Merge every typed fact, bind metadata synthesis, review every segment against all merged facts, final bounded global review or explicit unresolved failure",
+      "Source-bound closed annotation_limits from verified segment plan; old default caps and small-document wire unchanged",
+      "Independent plan/coverage/merge/native/review proof and real gold regression; no frozen golden edits"
+    ],
+    "policy_segmentation_keys_present": []
+  },
+  "reading": {
+    "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/capacity-governance-handoff/reading-current.json",
+    "total": 41,
+    "counts": {
+      "A": 19,
+      "B": 3,
+      "C": 19,
+      "D": 0
+    }
+  },
+  "next_for_root": [
+    "Freeze/checkpoint only under latest user stop instruction; no new implementation or paid work now.",
+    "Run only the short necessary syntax checks root has chosen; report latest source-index/run-id changes unverified unless actually checked.",
+    "When separately resumed, run the 10 last-added tests, current dedicated proof suite and nearest historical regressions, then a new frozen full fixture.",
+    "Only after new authorization resume EP09 design implementation and remaining EP/real237/main/release scope."
+  ],
+  "test_commands": [
+    {
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "command": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-cloud-run-20261104/python-venv/bin/python -m pytest tests/test_research_work_proof.py -k \"not all_five_model_stages\" -q --basetemp=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-before-full-v3-work --junitxml=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-before-full-v3.xml",
+      "observed": "50 passed, 1 deselected in 12.76s; before the last 10 source-index/report-ID cases."
+    },
+    {
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "command": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-cloud-run-20261104/python-venv/bin/python -m pytest tests/test_research_work_proof.py::test_all_five_model_stages_and_source_children_pass_independent_full_replay -q -x --durations=5 --basetemp=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3-work --junitxml=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3.xml",
+      "observed": "1 passed in 196.88s; frozen tree75e5591 only."
+    },
+    {
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "command": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-cloud-run-20261104/python-venv/bin/python -m pytest tests/test_research_work_proof.py -k \"partial_work or parent_counted or failed_parent or late_known or prepared_intent\" -q -x --basetemp=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-accounting-v2-work --junitxml=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-accounting-v2.xml",
+      "observed": "6 passed, 24 deselected in 1.24s."
+    },
+    {
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "command": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-cloud-run-20261104/python-venv/bin/python -m pytest tests/test_research_work_proof.py -k \"archived_parent or parent_attempt_event or old_policy or parser_manifest\" -q --basetemp=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-parent-history-work --junitxml=/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-parent-history.xml",
+      "observed": "10 passed, 30 deselected in 1.49s."
+    }
+  ]
+}

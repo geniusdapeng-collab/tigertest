@@ -1,0 +1,6 @@
+{
+  "schema": "tiger.checkpoint-syntax/v1",
+  "files": 321,
+  "errors": [],
+  "scope": "All tracked and new trading_system/tests Python files; syntax only, not full tests"
+}

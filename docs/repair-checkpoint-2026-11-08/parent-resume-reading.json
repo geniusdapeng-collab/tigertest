@@ -1,0 +1,398 @@
+{
+  "schema": "tiger.impl-snapshots-handoff/v1",
+  "stopped_at_utc": "2026-11-08T03:27:50Z",
+  "user_instruction": "Stop new implementation and expanded testing; preserve code and detailed handoff.",
+  "root": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+  "head": "97aa30cd84d4d57043e7f2e503c59a1b7f12e332",
+  "index_touched_by_handoff": false,
+  "parent_feature_complete": false,
+  "reading_categories": {
+    "complete_read_before_edits": 20,
+    "new_authored_not_final_reviewed": 3,
+    "not_read_in_parent_subtask": 8,
+    "partial_read_current_dependency": 5,
+    "prior_complete_read_receipt": 2
+  },
+  "files": [
+    {
+      "path": "trading_system/agent_runner.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 28012,
+      "lines": 537,
+      "sha256": "25a30361a5d8e3cd75f5c7fe1bac3047324944d6b34c4fc6948354a4e983fada"
+    },
+    {
+      "path": "trading_system/agent_runtime.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 69616,
+      "lines": 1199,
+      "sha256": "d250a7b26856ad7423841619fd22ea0b4f908a6009bc39bca562cd6690f1eb4a"
+    },
+    {
+      "path": "trading_system/agent_supervisor.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 34388,
+      "lines": 710,
+      "sha256": "3f7140c4e26a0353a8fc497313cca3d760a907c8afa66a8897f19903981dbfe2"
+    },
+    {
+      "path": "trading_system/providers/base.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 9050,
+      "lines": 206,
+      "sha256": "5c9b8105a4f041202564badaa52fdb17c5e2a8f2b5fef40c549e322a2244fe4a"
+    },
+    {
+      "path": "trading_system/admission_guards.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 8900,
+      "lines": 183,
+      "sha256": "e2949083cdff2682feb66572f30234392b9a4950e0b3cbd6f6f983808c07cc59"
+    },
+    {
+      "path": "trading_system/intelligence_workflow.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 22209,
+      "lines": 392,
+      "sha256": "69b77bfb41d1eba9bb5fe3d64409571f62d0bb6c41a4d919a0b60f0c4baf98c1"
+    },
+    {
+      "path": "trading_system/research_work.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 4203,
+      "lines": 97,
+      "sha256": "7e35c0b49dabccc82130cf73c583bb7d9efbda35e5ce19699bc3190bb803b12d"
+    },
+    {
+      "path": "trading_system/research_snapshot.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 3392,
+      "lines": 63,
+      "sha256": "190fedb7380e29f7fc670627b0e00ef44f979ecb7e29b3a45daad0ffb661d1e9"
+    },
+    {
+      "path": "trading_system/research_sources.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 11476,
+      "lines": 200,
+      "sha256": "10f6b29783acf49ba43e7c9fd80f75e90a9e0fcae969512ad971850d73263055"
+    },
+    {
+      "path": "trading_system/research_followup.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 10924,
+      "lines": 191,
+      "sha256": "cf3227dec71ebb0defd8054852e421d50e2e4aa4e54410af83d05094d248ca73"
+    },
+    {
+      "path": "trading_system/llm/work_required.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 30786,
+      "lines": 590,
+      "sha256": "c86bd766309d3aa8a6ee19a3b449c781f108b3e0aeb67de347ca919c104afbf3"
+    },
+    {
+      "path": "scripts/tiger-agent.mjs",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 4106,
+      "lines": 74,
+      "sha256": "338c1aadd5a2fa77aa6a12cec4220efe7424c28cbb20fba112b43f9e7020815c"
+    },
+    {
+      "path": "scripts/tiger-agent-mcp.mjs",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 14347,
+      "lines": 238,
+      "sha256": "e36bf842a5c18e14224bdaf4f2bc8cf21111036bda7468b74c99d7ba46a77d4f"
+    },
+    {
+      "path": "bundles/trading/agent-workflow.schema.json",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 10859,
+      "lines": 183,
+      "sha256": "9ee18d6cccd2fd2c484d9053862cf3529cb9c5bda8a0a55702e34617c6bc0719"
+    },
+    {
+      "path": "bundles/trading/capabilities/workflow-client.mjs",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 31047,
+      "lines": 501,
+      "sha256": "f5b4df3e9adc02e333cafdc5ac9938ac3f7013731b73b96ca528253db9201530"
+    },
+    {
+      "path": "tests/agent_workflow_fixtures.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 6680,
+      "lines": 141,
+      "sha256": "ff696567ddfbcb9deaf37c997588998052698ea82b2cfa31b089e34051c31e05"
+    },
+    {
+      "path": "tests/test_agent_runner.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 15518,
+      "lines": 322,
+      "sha256": "2ce1426a640252b191dd0c31e0d6eb87daffcb6194f5ccd0464d26e99b257637"
+    },
+    {
+      "path": "tests/test_agent_supervisor.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 14852,
+      "lines": 324,
+      "sha256": "f80240228a5698b9a372e5c12f9302b2536fd37452f1a53d12c4898c181f2057"
+    },
+    {
+      "path": "tests/test_agent_runtime_policy.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 21860,
+      "lines": 413,
+      "sha256": "5f95e1b0a3af79e0913bf069cce053a0e1a9245b92bd187035f39e055bc1c010"
+    },
+    {
+      "path": "tests/test_deepseek_strict_clean.py",
+      "reading_category": "complete_read_before_edits",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 37675,
+      "lines": 666,
+      "sha256": "e210157aa4327ec15a028b9b6dc30e8c6fb34dff7f967fc36c622046032a3277"
+    },
+    {
+      "path": "trading_system/agent_evidence.py",
+      "reading_category": "prior_complete_read_receipt",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 23422,
+      "lines": 471,
+      "sha256": "f37d91824234e421bbc79b33c49c541d988267f5a7b63e2a3e97fb73af2f3643"
+    },
+    {
+      "path": "trading_system/redline/execution.py",
+      "reading_category": "prior_complete_read_receipt",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 28218,
+      "lines": 615,
+      "sha256": "b30b7b46f30a7a878c93f7b515fd24548414098e55260174a9ac4c3149571bc1"
+    },
+    {
+      "path": "trading_system/llm/deepseek_required.py",
+      "reading_category": "partial_read_current_dependency",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 66499,
+      "lines": 1226,
+      "sha256": "828b0e19e08c83e73500275adf70b8dd50e466dbb511f3c14d9707f5812aeb4f"
+    },
+    {
+      "path": "trading_system/llm/json_observation.py",
+      "reading_category": "partial_read_current_dependency",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 14447,
+      "lines": 235,
+      "sha256": "75c72cb1194acf257fc1c27cb32d69165714707e7373bec86d85b7c36bce4db6"
+    },
+    {
+      "path": "trading_system/llm/strict_clean_transport.py",
+      "reading_category": "partial_read_current_dependency",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 18002,
+      "lines": 295,
+      "sha256": "a139e6fb5d1477ca08f30b2ca5d07b2df0c4537350dbdf759195deed38bb6b7d"
+    },
+    {
+      "path": "trading_system/intelligence/archive.py",
+      "reading_category": "partial_read_current_dependency",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 48868,
+      "lines": 755,
+      "sha256": "a816afe853cc7e5e53d66d89e72d7d622f30f731b5b436c1076396c75998d4a1"
+    },
+    {
+      "path": "trading_system/intelligence/service.py",
+      "reading_category": "partial_read_current_dependency",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 87131,
+      "lines": 1295,
+      "sha256": "78d99dc63ae1ff1775a997d379b42e316da1e582742b737d3fbc5949fbc2d596"
+    },
+    {
+      "path": "trading_system/research_resume.py",
+      "reading_category": "new_authored_not_final_reviewed",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 24404,
+      "lines": 436,
+      "sha256": "ee2f3a19d36adc55aabad87686fa5f49c37bf8f60cfb08be275d9678b66191e8"
+    },
+    {
+      "path": "trading_system/research_replay.py",
+      "reading_category": "new_authored_not_final_reviewed",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 14987,
+      "lines": 283,
+      "sha256": "3597d117416a1313f6cabc9120768b82a6e54ad5084d354de4790cfefa2d5569"
+    },
+    {
+      "path": "tests/test_research_parent_resume.py",
+      "reading_category": "new_authored_not_final_reviewed",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 11861,
+      "lines": 204,
+      "sha256": "a22ea5f1bd4374951f06a57bb40283677c24f5274eb90ded4f49fde23357cea5"
+    },
+    {
+      "path": "main.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 50538,
+      "lines": 935,
+      "sha256": "68a3066d83ca48cfa7c2b9ee364df8d268549ec34828ce78f51e467a2e35fa4a"
+    },
+    {
+      "path": "trading_system/pipeline.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 71119,
+      "lines": 1206,
+      "sha256": "c1a149a163a141aa80881316903cb6dcdd086b98c96e4c3eb0125a29a05d4ff1"
+    },
+    {
+      "path": "trading_system/paper_proof.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 9697,
+      "lines": 165,
+      "sha256": "f0835e70549d1c1387b40df13f434be0f73190380a87ead858ea7facc084a447"
+    },
+    {
+      "path": "trading_system/market_close.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 14803,
+      "lines": 286,
+      "sha256": "dbdc1b908cef92203f40f1fa071cfa4c97153566309f3efc86f3b4574c93cfde"
+    },
+    {
+      "path": "trading_system/security_roster.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 11425,
+      "lines": 253,
+      "sha256": "755655b5c1c42bc658786827f13df3234096a8e7409005e3ec08f0ef7970d95a"
+    },
+    {
+      "path": "trading_system/llm/work_proof.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 44447,
+      "lines": 766,
+      "sha256": "7d4427e326458d96e566791b71a9e22d2ec2c6e1b5b214e00f0defa346826740"
+    },
+    {
+      "path": "trading_system/research_status.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 20180,
+      "lines": 341,
+      "sha256": "c3374c588e6242c650281954052278a1b5d570b335a097ad99f2a664be5dc749"
+    },
+    {
+      "path": "trading_system/research_evaluation.py",
+      "reading_category": "not_read_in_parent_subtask",
+      "exists": true,
+      "current_hash_is_historical_full_read_receipt": false,
+      "note": "Current hash is a stop-time B inventory. Full reading refers to baseline plus authored changes; later changes by other owners are not claimed as exact-SHA full reading.",
+      "bytes": 26896,
+      "lines": 450,
+      "sha256": "c1538e350d7bb15a5dbda8592fa14485348a54aa376e202a92ed58c5e00fc4ce"
+    }
+  ]
+}

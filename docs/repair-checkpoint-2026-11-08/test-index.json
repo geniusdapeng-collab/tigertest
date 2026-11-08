@@ -1,0 +1,455 @@
+{
+  "schema": "tiger.checkpoint-test-index/v1",
+  "reports": [
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/checkpoint-focused.xml",
+      "sha256": "a664043f2255d0a45e624c409294e87d0c1a18a4ec0466e4a75260c836afe070",
+      "tests": 75,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.864,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/evaluation-after.xml",
+      "sha256": "5505bb68e2affe8109c5a266ac7f086217ec75b794f0312fbce98c0c5c08602b",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.078,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/evaluation-before.xml",
+      "sha256": "242699e251fcefd81e764518c874cd9f0e57db7b21ce41bfd98748e8d3ed3dbc",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 0.079,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/followup-frontier-after.xml",
+      "sha256": "dafa3aa00648e358c71cb0113bd83dfc788f51677c2679eafbf03a75c3fccf14",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.542,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/followup-frontier-before.xml",
+      "sha256": "292087af46bf773047a37f43e200b412694cb1ec3661129e9fc7dba7c919da4b",
+      "tests": 11,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.476,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/parse-regression-committed.xml",
+      "sha256": "7b7e8cf9cf47b56257c515c05fa19727b6777894cf0cebc94263131cb5ed4dbe",
+      "tests": 193,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 60.517,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/parse-regression-final.xml",
+      "sha256": "9fe1609a537d002700101ab78f274d39093986bd9d88ac6a0cc83a672058085f",
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 60.248,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/parse-regression.xml",
+      "sha256": "ab83e528da3717f03ddcf30c445305638a372da8659b65e547fab2a2043e9ee9",
+      "tests": 80,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 8.244,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/rejected-native-after.xml",
+      "sha256": "a1c389a5d23ebd2609a97b2e69277910fb6af845be5360b38ef06c654c90567e",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.395,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/rejected-native-before.xml",
+      "sha256": "06b3e5d3482bc16aba22268b164740630def3270d55eab3a4c7c53898de9e28e",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 0.147,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/rejected-native-regression.xml",
+      "sha256": "315d3917c4932fadcf94e5c4dc3689f1eab2822fc867da5380bb7aeb55630ec1",
+      "tests": 107,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 5.479,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/rejected-native-v3-identity-after.xml",
+      "sha256": "a6fc8580f2bd27603ca0c492c301c48f4d52d5d4194b5dccbf3309f24dfe09d4",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.887,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/rejected-native-v3-identity.xml",
+      "sha256": "2ec093cec8783e2a93050c35f9c4f7c545392336191ef6b66871c6505e33731f",
+      "tests": 11,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.543,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/relations-after-v2.xml",
+      "sha256": "f7d574c641e80958b63ccc7b19557fdb27464f573ca48cc981e92e0a6a448513",
+      "tests": 78,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.721,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/relations-after.xml",
+      "sha256": "25f49424f13db9be6356c026464315dea93e624b588e94bbd34adb0bf3b01abf",
+      "tests": 7,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.408,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/relations-before.xml",
+      "sha256": "2af80314d9fdbcdebedc11659726d0bba5444adb3e808b9085108764443681a2",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 0.435,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/research-status-before.xml",
+      "sha256": "b59b76e3b1a1b0c5a21d431c9a26c617e9afc6542b71545d3c420cbd6a4cd0c4",
+      "tests": 20,
+      "failures": 20,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.239,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/research-status-focused.xml",
+      "sha256": "8f24f1c5d451dc77abdc409890c9c1e03c029f72dafbbf63fc69c44d00e1143e",
+      "tests": 29,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.147,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/research-status-full-regression.xml",
+      "sha256": "8fa765d75066238d4f77eddc996e18eda15aeab3d112de50e479241f40b4d4aa",
+      "tests": 185,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 104.326,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/research-status-hardening-before.xml",
+      "sha256": "0104a273bd6019f2a8090d8e4c358cc847c63051134f68394d845eb44b152e85",
+      "tests": 29,
+      "failures": 5,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.167,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/research-status-report-regression.xml",
+      "sha256": "38f5c96c097ceab199dc674e88b8983debcf6888ee947c4cda7d7caffab3e828",
+      "tests": 99,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 4.641,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/scope-source-index.xml",
+      "sha256": "1cd60eb1b26614d2a492450091babf745f2136d0f54426eb6be0953415aed194",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.317,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/source-concurrency-final.xml",
+      "sha256": "e96581d1b0b552a14feb68dca49200bb1020b3f906ff5427dcd4f994ff88d3b3",
+      "tests": 350,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 108.165,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/source-concurrency-regression.xml",
+      "sha256": "ed3b88b37b38de0339893c51338f08ca7bc28e43cf6b51baef978514123eaaeb",
+      "tests": 131,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 58.05,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/source-parser-snapshot-regression.xml",
+      "sha256": "8029ab9a25f8f0a415ccc93c754febd71925050f95106308af8563b02930a5b2",
+      "tests": 228,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 51.696,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-nested-review-after.xml",
+      "sha256": "81c8b31ae418af81d313a58c8b36546e9a56952d69c6aa55b7dc3cce988d317c",
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 21.521,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-nested-review-before.xml",
+      "sha256": "44a7dea77cb117cf9ca8c6702dd6dcd98fc97cbaa2167339f2976c9910d45790",
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 2.616,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-before.xml",
+      "sha256": "932b3367a229fe7c0e236ab5b3073178873c27ce54e1414d9cf2b17c19e25c42",
+      "tests": 20,
+      "failures": 19,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.373,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-complete-final.xml",
+      "sha256": "31fe6570005392349fcd3cbb3f7dce613e74acfce527b7f84fef13a8887c8536",
+      "tests": 389,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "seconds": 262.513,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-final.xml",
+      "sha256": "00ac6cd3cdcd47163aa0b1bc1f42b2b4e23ebf2f7e77fdb2a976e3b36b246921",
+      "tests": 383,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "seconds": 240.886,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-first.xml",
+      "sha256": "5fbfac9ed8d6daf8c289012f5b3b669308791e25c0a8e924b8f6701126089e83",
+      "tests": 82,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 39.845,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-focused-final.xml",
+      "sha256": "8ca8833dbf44a7b8e32bb2d4efed6c1e2c9e6076a71234e82067ccabedbf160d",
+      "tests": 44,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 39.061,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-loopback.xml",
+      "sha256": "701ce41b39f6d14a312cc2ac1c4ef9896862475b8e603f8ee51f257db65c18e2",
+      "tests": 35,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 15.656,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-regression.xml",
+      "sha256": "a62425e5e0650d0ece5c1a3724f3a0e334c8b1eddd795b85fc59c3cac5e7d460",
+      "tests": 380,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 2,
+      "seconds": 241.192,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/topic-semantics-targeted.xml",
+      "sha256": "2a2fa23468c4bc1c7e5becd388181d9b1337ac92d4fe4bce69073d347c399cf5",
+      "tests": 38,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 18.723,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-accounting-v2.xml",
+      "sha256": "695c45cc85af49ff458371734146b58a774c8d1a29cafdabe9159a5a0a3224ad",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.234,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-before-full-v3.xml",
+      "sha256": "dd0f8180e8948f0e00f2a28a40d50d866c20a17d91458475ad477ade3ce4f3a6",
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 12.753,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-doc-snapshot.xml",
+      "sha256": "b8e665935a9e0f6e8e0f1a8e829e55712790214104de9d6dd210a96fd86aa8f1",
+      "tests": 21,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 9.884,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-first.xml",
+      "sha256": "addb5d953a05d271eb9e779b2a72f04789a61cae2c5f1f8ddda7765b220f2190",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 1.058,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-current-v3.xml",
+      "sha256": "ccca0fdd53dbd74276132c12b9e7c81be1de86f7dbb4774922cd3aabf1143609",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 196.879,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-initial.xml",
+      "sha256": "f990a2e07720c80e607ba3e60cb421a4f1431d36f0fa16e2eeb9331f8ec04ab3",
+      "tests": 0,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 461.137,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-full-perf-fixed.xml",
+      "sha256": "e74abfd108f5e218144e7c49abff2840f736c8b09c473bdbe6910755dc816a26",
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 172.196,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-parent-history.xml",
+      "sha256": "e63d76c075e19e73cc038510916fa702b1a55bc18aae0a307873b332420ac624",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.494,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-partial-v1.xml",
+      "sha256": "0ec70989e88ba355ee2eaff994691f70a78ed5234604b70107ad96f79214d748",
+      "tests": 27,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 11.446,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    },
+    {
+      "path": "/Users/mac/Documents/Codex/2026-11-04/ni/outputs/tiger-repair-implementation-20261108/work-proof-red.xml",
+      "sha256": "d369dc8a90e464c0056e10780a7dd1fbc3ceff191c9540496e7763b83e902a2a",
+      "tests": 1,
+      "failures": 0,
+      "errors": 1,
+      "skipped": 0,
+      "seconds": 0.442,
+      "note": "A report records its own run only; interrupted runs must be interpreted using agent receipts."
+    }
+  ]
+}
