@@ -40,6 +40,16 @@ def test_program_owns_identity_and_preserves_distinct_originals():
         validate_raw_documents([raw(), raw()])
 
 
+def test_new_document_contract_keeps_multi_issuer_roundups_but_legacy_stays_bounded():
+    from trading_system.llm.required_schemas import clean_schema
+    from trading_system.llm.work_semantics import extraction_schema
+
+    new_schema = extraction_schema(["XLK"])
+    assert new_schema["properties"]["annotation"]["properties"]["tickers"]["maxItems"] == 64
+    legacy = clean_schema(["program-owned"], structured=True, target_ids=["XLK"])
+    assert legacy["properties"]["documents"]["items"]["properties"]["tickers"]["maxItems"] == 8
+
+
 def test_extract_normalize_validate_keeps_original_and_comparisons():
     from trading_system.llm.work_semantics import normalize_annotation, validate_annotation
     original, native = raw(), annotation()

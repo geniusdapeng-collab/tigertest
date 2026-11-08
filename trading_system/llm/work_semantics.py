@@ -21,6 +21,7 @@ from .required_schemas import clean_schema, PLAIN_TEXT_PATTERN, PUBLIC_TEXT_PATT
 _TEXT = r"^(?!\s*$)[^\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]+$"
 _CHECKS = ("subjects", "time_and_period", "amounts_units_currency", "counterevidence",
            "citations", "material_facts")
+WORK_MAX_DOCUMENT_TICKERS = 64
 _ANNOTATION_FIELDS = ("tickers", "sentiment", "sentiment_score", "events", "summary_zh",
                       "relevance", "subjects", "evidence_spans", "event_records", "claims")
 
@@ -53,6 +54,9 @@ def _allow_plain_comparisons(value):
 def extraction_schema(target_ids, *, limits: dict | None = None) -> dict:
     annotation = deepcopy(clean_schema(["program-owned"], structured=True,
                                       target_ids=target_ids)["properties"]["documents"]["items"])
+    # The historical batch contract keeps its eight-ticker cap. The new
+    # per-document contract must not force a source roundup to hide issuers.
+    annotation["properties"]["tickers"]["maxItems"] = WORK_MAX_DOCUMENT_TICKERS
     del annotation["properties"]["id"]
     annotation["required"].remove("id")
     if limits is not None:

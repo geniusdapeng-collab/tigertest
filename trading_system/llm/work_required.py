@@ -27,7 +27,7 @@ from .model_budget import TokenBudgetError
 from .work_semantics import (annotation_payload, digest, extraction_schema, merge_segment_annotations,
     namespace_segment_annotation, normalize_annotation, review_schema, source_payload,
     summary_schema, task_evidence_view, text_digest, validate_annotation,
-    validate_document_review, validate_raw_documents)
+    validate_document_review, validate_raw_documents, WORK_MAX_DOCUMENT_TICKERS)
 
 assessment_context = legacy.assessment_context
 SOURCE_CONTENT_CONTRACT = legacy.SOURCE_CONTENT_CONTRACT
@@ -53,6 +53,9 @@ _EXTRACT = (
     "每事件subject_ids非空，source_span_ids覆盖主体和时间/期间的全部span，claims引用本事件的span。"
     "每份原件可含多个主体、期间和事件；主要报告is_primary=true，历史对照false。"
     "target_ids只选给定裸产业链ID或ETF，不得使用chain:/security:/global:等采集前缀。"
+    f"tickers按正文直接相关去重后最多{WORK_MAX_DOCUMENT_TICKERS}个，不能为满足数量隐藏不同发行人。"
+    "所有引用ID数组（subject_ids、span_ids、source_span_ids等）必须去重且顺序稳定。"
+    "event_type只能使用schema枚举中的事件类型；analysis是claim_kind，不是event_type，无法归类时用other或unknown。"
     "企业展望forward_guidance、披露issuer_disclosure、报道reported_fact、分析analysis、传言rumor，"
     "不把预期变已实现。保留所有重大事实、负面指引、反证、冲突和修订；relation为supports/refutes/mentions。"
     "无可核事实可以空subjects/events/claims，仍据实摘要并说明未能确证的部分。"
