@@ -673,9 +673,14 @@ class WorkStore:
                 raise ValueError
         except Exception:
             raise WorkUnitError("RESULT_REJECTED", "Work-unit validator rejected the result") from None
-        unit = self.unit(lease.unit_id)
-        deps = {name: self.unit(name)["result_ref"]["sha256"] for name in unit["spec"]["dependencies"]
-                if self.read_result(name) is not None}
+        snapshot = self._result_snapshot()
+        unit = snapshot["units"].get(lease.unit_id)
+        if unit is None:
+            raise WorkUnitError("UNIT_MISSING", "Work-unit does not exist")
+        deps = {}
+        for name in unit["spec"]["dependencies"]:
+            self._read_result_from(name, snapshot)
+            deps[name] = snapshot["units"][name]["result_ref"]["sha256"]
         dispositions = detached({} if dispositions is None else dispositions)
         if type(dispositions) is not dict or set(dispositions) != set(unit["spec"]["terminal_documents"]):
             raise WorkUnitError("DISPOSITION_INVALID", "Every terminal document requires a bound disposition")
@@ -683,8 +688,7 @@ class WorkStore:
             if type(row) is not dict or set(row) != {"state", "reason"} or row["state"] not in DISPOSITIONS:
                 raise WorkUnitError("DISPOSITION_INVALID", "Invalid document disposition")
             plain_label(row["reason"], "disposition reason")
-        with self._tx() as connection:
-            plan = self._meta(connection, "plan")
+        plan = snapshot["plan"]
         original_hashes = {row["id"]: row["sha256"] for row in plan["originals"] if row["id"] in dispositions}
         envelope = {"schema": RESULT_SCHEMA, "tenant_id": lease.tenant_id, "run_id": lease.run_id,
                     "manifest_sha256": self.manifest_sha256, "unit_id": lease.unit_id,
@@ -710,25 +714,61 @@ class WorkStore:
             row.update(state="validated", owner=None, lease_until=None, result_ref=ref, error_code=None, retryable=0)
             self._change(connection, "result_validated", {"units": [row]})
 
-    def read_result(self, unit_id):
-        unit = self.unit(unit_id)
+    def _result_snapshot(self, projections=None):
+        """Read one coherent graph; memoization lives only in this operation.
+
+        Each reused artifact is still read and rehashed. Shared dependencies
+        and the complete plan are decoded once per recovery pass rather than
+        once for every path through a DAG.
+        """
+        if projections is None:
+            with self._tx() as connection:
+                units = self._rows(connection, "units")
+                plan = self._meta(connection, "plan")
+        else:
+            units = projections["units"]
+            plan = next(row["value"] for row in projections["meta"] if row["key"] == "plan")
+        return {"units": {row["unit_id"]: row for row in units}, "plan": plan,
+                "originals": {} if plan is None else {row["id"]: row["sha256"] for row in plan["originals"]},
+                "memo": {}, "visiting": set()}
+
+    def _read_result_from(self, unit_id, snapshot):
+        if unit_id in snapshot["memo"]:
+            return snapshot["memo"][unit_id]
+        unit = snapshot["units"].get(unit_id)
+        if unit is None:
+            raise WorkUnitError("UNIT_MISSING", "Work-unit does not exist")
         if unit["state"] != "validated" or unit["result_ref"] is None:
             raise WorkUnitError("RESULT_MISSING", "Unit has no validated result")
+        if unit_id in snapshot["visiting"]:
+            raise WorkUnitError("DEPENDENCY_INVALID", "Saved result dependency graph is cyclic")
+        snapshot["visiting"].add(unit_id)
         value = self._read_blob(unit["result_ref"], RESULT_SCHEMA)
-        with self._tx() as connection:
-            plan = self._meta(connection, "plan")
-        deps = {name: self.unit(name)["result_ref"]["sha256"] for name in unit["spec"]["dependencies"]
-                if self.read_result(name) is not None}
-        documents = {row["id"]: row["sha256"] for row in plan["originals"] if row["id"] in unit["spec"]["terminal_documents"]}
+        deps = {}
+        for name in unit["spec"]["dependencies"]:
+            self._read_result_from(name, snapshot)
+            deps[name] = snapshot["units"][name]["result_ref"]["sha256"]
+        documents = {name: snapshot["originals"][name] for name in unit["spec"]["terminal_documents"]}
         expected = {"schema": RESULT_SCHEMA, "tenant_id": self.manifest["tenant_id"], "run_id": self.manifest["run_id"],
                     "manifest_sha256": self.manifest_sha256, "unit_id": unit_id,
                     "input_sha256": value_hash(unit["spec"]["inputs"]), "contract_sha256": value_hash(unit["spec"]["contract"]),
                     "epoch": unit["epoch"], "dependency_results": deps, "document_sha256": documents}
         if type(value) is not dict or set(value) != set(expected) | {"value", "dispositions"} or any(value[key] != item for key, item in expected.items()):
             raise WorkUnitError("RESULT_BINDING_INVALID", "Work-unit result binding differs")
-        if set(value["dispositions"]) != set(documents):
+        if type(value["dispositions"]) is not dict or set(value["dispositions"]) != set(documents):
             raise WorkUnitError("DISPOSITION_INVALID", "Saved dispositions differ from original scope")
+        for disposition in value["dispositions"].values():
+            if (type(disposition) is not dict or set(disposition) != {"state", "reason"}
+                    or disposition["state"] not in DISPOSITIONS):
+                raise WorkUnitError("DISPOSITION_INVALID", "Saved document disposition differs")
+            plain_label(disposition["reason"], "disposition reason")
+        snapshot["visiting"].remove(unit_id)
+        snapshot["memo"][unit_id] = value
         return value
+
+    def read_result(self, unit_id):
+        identifier(unit_id, "unit")
+        return self._read_result_from(unit_id, self._result_snapshot())
 
     def fail(self, lease, error_code, *, retryable=False):
         identifier(error_code, "error code")
@@ -804,23 +844,24 @@ class WorkStore:
         return self.status()
 
     def resume_plan(self):
-        with self._tx() as connection:
-            units = self._rows(connection, "units")
+        snapshot = self._result_snapshot()
+        units = list(snapshot["units"].values())
         reusable = []
         for row in units:
             if row["state"] == "validated":
-                self.read_result(row["unit_id"])
+                self._read_result_from(row["unit_id"], snapshot)
                 reusable.append(row["unit_id"])
         return {"reusable": reusable, "pending": [row["unit_id"] for row in units if row["state"] != "validated"]}
 
     def document_dispositions(self):
-        with self._tx() as connection:
-            plan = self._meta(connection, "plan")
-            units = self._rows(connection, "units")
+        return self._document_dispositions_from(self._result_snapshot())
+
+    def _document_dispositions_from(self, snapshot):
+        plan, units = snapshot["plan"], list(snapshot["units"].values())
         values = {}
         for row in units:
             if row["state"] == "validated":
-                values.update(self.read_result(row["unit_id"])["dispositions"])
+                values.update(self._read_result_from(row["unit_id"], snapshot)["dispositions"])
         originals = [] if plan is None else [row["id"] for row in plan["originals"]]
         return {"admitted": len(originals), "terminal": len(values),
                 **{state: sum(value["state"] == state for value in values.values()) for state in sorted(DISPOSITIONS)},
@@ -896,7 +937,10 @@ class WorkStore:
             raise WorkUnitError("PROJECTION_INVALID", "Work-unit projection differs from its event chain")
         if next(row["value"] for row in projections["meta"] if row["key"] == "manifest") != self.manifest:
             raise WorkUnitError("MANIFEST_MISMATCH", "Work-unit manifest differs")
-        self.resume_plan()
+        result_snapshot = self._result_snapshot(projections)
+        for row in projections["units"]:
+            if row["state"] == "validated":
+                self._read_result_from(row["unit_id"], result_snapshot)
         plan = next(row["value"] for row in projections["meta"] if row["key"] == "plan")
         if plan is None:
             if projections["units"] or projections["attempts"] or projections["retry_claims"]:
@@ -922,7 +966,7 @@ class WorkStore:
             if (row["attempt_id"] not in attempts
                     or native["request_sha256"] != attempts[row["attempt_id"]]["request_ref"]["sha256"]):
                 raise WorkUnitError("ATTEMPT_MISMATCH", "Native task receipt belongs to another intent")
-        documents = self.document_dispositions()
+        documents = self._document_dispositions_from(result_snapshot)
         return {"schema": CONTRACT, "manifest_sha256": self.manifest_sha256, "event_count": len(events),
                 "last_event_sha256": previous, "unit_count": len(projections["units"]),
                 "document_count": documents["admitted"]}
