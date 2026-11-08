@@ -85,13 +85,15 @@ class ParserResourcePool:
     must reserve through their persistent scheduler before using this pool.
     A rejected reservation has not spawned a worker or sent any external IO.
     """
-    def __init__(self, *, max_workers, memory_bytes, temporary_bytes):
+    def __init__(self, *, max_workers, memory_bytes, temporary_bytes, wait_for_capacity=False):
         if any(type(value) is not int or value <= 0
-               for value in (max_workers, memory_bytes, temporary_bytes)):
+               for value in (max_workers, memory_bytes, temporary_bytes)) or type(wait_for_capacity) is not bool:
             raise IntelligenceError("CONTRACT_INVALID", "Invalid parser pool capacity")
         self.max_workers, self.memory_bytes, self.temporary_bytes = max_workers, memory_bytes, temporary_bytes
         self._workers = self._memory = self._temporary = 0
         self._lock = threading.Lock()
+        self._available = threading.Condition(self._lock)
+        self.wait_for_capacity = wait_for_capacity
 
     def snapshot(self):
         with self._lock:
@@ -101,23 +103,36 @@ class ParserResourcePool:
                 "temporary_capacity_bytes": self.temporary_bytes}
 
     @contextmanager
-    def reserve(self, *, memory_bytes, temporary_bytes):
+    def reserve(self, *, memory_bytes, temporary_bytes, timeout=None):
         if any(type(value) is not int or value < 0 for value in (memory_bytes, temporary_bytes)):
             raise IntelligenceError("CONTRACT_INVALID", "Invalid parser reservation")
-        with self._lock:
-            if (self._workers >= self.max_workers or self._memory + memory_bytes > self.memory_bytes
-                    or self._temporary + temporary_bytes > self.temporary_bytes):
+        if timeout is not None and (type(timeout) not in {int, float} or not math.isfinite(timeout) or timeout < 0):
+            raise IntelligenceError("CONTRACT_INVALID", "Invalid parser reservation deadline")
+        if self.wait_for_capacity and timeout is None:
+            raise IntelligenceError("CONTRACT_INVALID", "Queued parsing requires an original deadline")
+        cutoff = None if timeout is None else time.monotonic() + timeout
+        with self._available:
+            if memory_bytes > self.memory_bytes or temporary_bytes > self.temporary_bytes:
                 raise IntelligenceError("PARSER_CAPACITY_UNAVAILABLE", "Parser admission capacity exhausted")
+            while (self._workers >= self.max_workers or self._memory + memory_bytes > self.memory_bytes
+                    or self._temporary + temporary_bytes > self.temporary_bytes):
+                if not self.wait_for_capacity:
+                    raise IntelligenceError("PARSER_CAPACITY_UNAVAILABLE", "Parser admission capacity exhausted")
+                remaining = cutoff - time.monotonic()
+                if remaining <= 0:
+                    raise IntelligenceError("PARSER_DEADLINE_EXCEEDED", "Original parser deadline expired in capacity queue")
+                self._available.wait(timeout=remaining)
             self._workers += 1
             self._memory += memory_bytes
             self._temporary += temporary_bytes
         try:
             yield
         finally:
-            with self._lock:
+            with self._available:
                 self._workers -= 1
                 self._memory -= memory_bytes
                 self._temporary -= temporary_bytes
+                self._available.notify_all()
 
 
 FAILURE_CODES = frozenset({"PARSER_INPUT_TOO_LARGE", "PARSER_DEADLINE_EXCEEDED", "PARSER_MEMORY_EXCEEDED",
@@ -126,6 +141,19 @@ FAILURE_CODES = frozenset({"PARSER_INPUT_TOO_LARGE", "PARSER_DEADLINE_EXCEEDED",
 _WORKER_PHASES = frozenset({"started", "policy_ready", "limits_ready", "input_read", "builtin_complete",
     "scrapling_started", "scrapling_complete", "output_ready"})
 _RUNTIME_SINK = ContextVar("tiger_parser_runtime", default=None)
+_RESOURCE_POOL = ContextVar("tiger_parser_resources", default=None)
+
+
+@contextmanager
+def trusted_parser_resources(pool):
+    """Bind one admitted coordinator pool on the current source worker only."""
+    if not isinstance(pool, ParserResourcePool):
+        raise IntelligenceError("CONTRACT_INVALID", "Trusted parser pool required")
+    token = _RESOURCE_POOL.set(pool)
+    try:
+        yield
+    finally:
+        _RESOURCE_POOL.reset(token)
 
 
 @contextmanager
@@ -284,6 +312,7 @@ def _resident_bytes(pid, remaining):
 
 
 def isolated_extract(response, *, original_url=None, trusted_filing=False, policy=None, deadline=None, resource_pool=None):
+    resource_pool = resource_pool if resource_pool is not None else _RESOURCE_POOL.get()
     policy = ParsePolicy.from_value(policy)
     started = time.monotonic()
     cutoff = min(started + policy.timeout_seconds, deadline) if deadline is not None else started + policy.timeout_seconds
@@ -321,7 +350,8 @@ def isolated_extract(response, *, original_url=None, trusted_filing=False, polic
                     "temporary_bytes": len(payload)}
         if resource_pool is not None and not isinstance(resource_pool, ParserResourcePool):
             raise IntelligenceError("CONTRACT_INVALID", "Trusted parser resource pool required")
-        reservation = (resource_pool.reserve(**estimate) if resource_pool is not None else nullcontext())
+        reservation = (resource_pool.reserve(**estimate, timeout=max(0, cutoff - time.monotonic()))
+                       if resource_pool is not None else nullcontext())
         reservation.__enter__()
         reserved = True
         if policy.manifest_version is not None and shutil.disk_usage(tempfile.gettempdir()).free < len(payload):

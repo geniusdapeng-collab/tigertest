@@ -30,7 +30,7 @@ from .agent_runtime import (
     committed_pointer, freeze_source, frozen_clock, pointer_read, policy_manifest,
     run_environment, stage_account, stage_calendar, startup_runtime_input, validate_clock, verify_run,
     DEADLINE_SECONDS, INTELLIGENCE_PROFILE, RUNTIME_POLICY_ENV,
-    source_observation_contract, source_inventory,
+    source_observation_contract, source_inventory, source_research_work_policy,
 )
 from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
                                PreparationExpired, thread_submission)
@@ -334,6 +334,7 @@ def _submit(state: Path, request: dict, *, source: Path,
             policy = policy_manifest(request["profile"],
                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
                                      intelligence_input=intelligence_input, runtime_input=runtime_input,
+                                     research_work=source_research_work_policy(frozen_source["files"], request["profile"]),
                                      response_observation_contract=source_observation_contract(
                                          frozen_source["files"], request["profile"]))
             atomic_json(run, "policy.json", policy, exclusive=True)
@@ -447,9 +448,11 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
         if operation == "doctor":
             return doctor(state, mode)
         if operation == "describe":
+            inventory = source_inventory(SOURCE_ROOT)
             selected = policy_manifest(request["profile"], runtime_input=startup_runtime_input(request["profile"]),
+                research_work=source_research_work_policy(inventory, request["profile"]),
                 response_observation_contract=source_observation_contract(
-                    source_inventory(SOURCE_ROOT), request["profile"]))
+                    inventory, request["profile"]))
             value = envelope(operation, data={"profile": selected, "access_mode": mode})
             value["limitations"] = selected["limitations"]
             return value

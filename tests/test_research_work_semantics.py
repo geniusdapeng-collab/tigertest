@@ -1,0 +1,126 @@
+"""The new research contract owns identities and preserves complete evidence."""
+from copy import deepcopy
+from datetime import datetime, timezone
+
+import pytest
+
+from trading_system.search.models import RawDocument
+
+
+def raw(identity="source-1", content="Example revenue was 120 USD in fiscal year 2025."):
+    return RawDocument(identity, "public", "Annual result", "https://example.org/report",
+                       content, "2026-11-01T12:00:00+00:00", 1793534400,
+                       {"completeness": "complete", "text_kind": "html_main", "audit_only": "retained"})
+
+
+def annotation():
+    return {"tickers": [], "sentiment": "neutral", "sentiment_score": 0,
+            "events": ["earnings"], "summary_zh": "收入120 USD，低于目标；普通比较120 < 130。",
+            "relevance": 1, "subjects": [{"id": "s1", "type": "issuer", "name": "Example",
+                "identifiers": [], "span_ids": ["p1"]}],
+            "evidence_spans": [{"id": "p1", "start": None, "end": None,
+                "quote": "Example revenue was 120 USD in fiscal year 2025."}],
+            "event_records": [{"id": "e1", "event_type": "earnings", "subject_ids": ["s1"],
+                "is_primary": True, "event_identifiers": [],
+                "report_period": {"kind": "fiscal_year", "value": "2025", "span_ids": ["p1"]},
+                "event_time": {"value": None, "precision": "unknown", "span_ids": []},
+                "effective_time": {"value": None, "precision": "unknown", "span_ids": []},
+                "source_span_ids": ["p1"], "claim_kind": "reported_fact", "target_ids": ["XLK"]}],
+            "claims": [{"id": "c1", "event_id": "e1", "predicate": "revenue", "value": "120",
+                "unit": None, "currency": "USD", "source_span_ids": ["p1"], "relation": "supports",
+                "conflict_group": None, "supersedes_claim_id": None}]}
+
+
+def test_program_owns_identity_and_preserves_distinct_originals():
+    from trading_system.llm.work_semantics import validate_raw_documents, extraction_schema
+    docs = [raw(), raw("source-2")]
+    assert validate_raw_documents(docs) == docs
+    assert "id" not in extraction_schema(["XLK"])["properties"]["annotation"]["properties"]
+    with pytest.raises(ValueError, match="DUPLICATE_DOCUMENT_ID"):
+        validate_raw_documents([raw(), raw()])
+
+
+def test_extract_normalize_validate_keeps_original_and_comparisons():
+    from trading_system.llm.work_semantics import normalize_annotation, validate_annotation
+    original, native = raw(), annotation()
+    untouched = deepcopy(native)
+    result = normalize_annotation(original, native, ["XLK"])
+    assert native == untouched
+    assert result.raw is original and result.raw.content == original.content
+    assert result.evidence_spans[0]["start"] == 0
+    assert "<" in result.summary_zh
+    check = validate_annotation(result, datetime(2026, 11, 8, tzinfo=timezone.utc))
+    assert check["valid"] and check["document_id"] == "source-1"
+    assert "scoring" not in result.eligibility["claims"][0]["allowed_uses"]
+
+
+@pytest.mark.parametrize("mutation,code", [
+    (lambda x: x.update(id="wrong"), "OUTPUT_SCHEMA"),
+    (lambda x: x["evidence_spans"][0].update(quote="absent"), "SPAN"),
+    (lambda x: x["claims"][0].update(value="999"), "ANNOTATION_INVALID"),
+    (lambda x: x["claims"][0].update(currency="EUR"), "ANNOTATION_INVALID"),
+    (lambda x: x["event_records"][0]["report_period"].update(value="2024"), "ANNOTATION_INVALID"),
+    (lambda x: x["subjects"][0].update(name="Different issuer"), "ANNOTATION_INVALID"),
+])
+def test_wrong_identity_and_unbound_financial_facts_fail(mutation, code):
+    from trading_system.llm.work_semantics import normalize_annotation, validate_annotation
+    value = annotation()
+    mutation(value)
+    with pytest.raises(ValueError, match=code):
+        document = normalize_annotation(raw(), value, ["XLK"])
+        validate_annotation(document, datetime(2026, 11, 8, tzinfo=timezone.utc))
+
+
+def test_ambiguous_quote_cannot_bind_arbitrary_occurrence():
+    from trading_system.llm.work_semantics import normalize_annotation
+    with pytest.raises(ValueError, match="SPAN"):
+        normalize_annotation(raw(content=raw().content * 2), annotation(), ["XLK"])
+
+
+def test_review_binds_extract_and_omissions_block_completion():
+    from trading_system.llm.work_semantics import normalize_annotation, validate_document_review
+    document = normalize_annotation(raw(), annotation(), ["XLK"])
+    accepted = {"complete": True, "checks": {key: True for key in
+        ("subjects", "time_and_period", "amounts_units_currency", "counterevidence", "citations", "material_facts")},
+        "omissions": [], "contradictions": [], "notes": "已逐项核对完整正文。"}
+    receipt = validate_document_review(document, accepted)
+    assert receipt["complete"] and receipt["annotation_sha256"]
+    with pytest.raises(ValueError, match="DOCUMENT_REVIEW_FAILED"):
+        validate_document_review(document, {**accepted, "omissions": ["遗漏负面指引"]})
+
+
+def test_task_view_keeps_all_facts_counterevidence_and_omission_index():
+    from trading_system.llm.work_semantics import normalize_annotation, task_evidence_view
+    document = normalize_annotation(raw(), annotation(), ["XLK"])
+    full = task_evidence_view([document], compact=False)
+    assert full["documents"][0]["content"] == document.raw.content
+    assert "audit_only" not in full["documents"][0]
+    compact = task_evidence_view([document], compact=True)
+    assert compact["documents"][0]["claims"] == document.claims
+    assert compact["selection_manifest"][0]["omitted_ranges"] == []
+    document.raw = raw(content="Header\n" + raw().content + "\nFooter")
+    document.evidence_spans[0].update(start=7, end=7 + len(raw().content))
+    compact = task_evidence_view([document], compact=True)
+    assert compact["selection_manifest"][0]["omitted_ranges"] == [[0, 7], [55, 62]]
+
+
+def test_admitted_contract_is_explicit_and_closed():
+    from trading_system.research_work import research_work_policy, validate_research_work_policy
+    policy = research_work_policy()
+    assert validate_research_work_policy(policy) == policy
+    with pytest.raises(ValueError, match="RESEARCH_WORK_POLICY"):
+        validate_research_work_policy({**policy, "format_retry_limit": 2})
+
+
+def test_frozen_source_index_keeps_every_version_without_invented_publication():
+    from trading_system.research_snapshot import research_source_index
+    from dataclasses import replace
+    first = raw()
+    second = replace(raw('version-2'), published='', meta={})
+    result = research_source_index([first, second])
+    assert [row['id'] for row in result] == ['source-1', 'version-2']
+    assert result[0]['completeness'] == 'complete'
+    assert result[1]['published_at'] is None and result[1]['completeness'] == 'unknown'
+    assert result[0]['content_sha256'] == result[1]['content_sha256']
+    with pytest.raises(ValueError, match='DUPLICATE'):
+        research_source_index([first, first])

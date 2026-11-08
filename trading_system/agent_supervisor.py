@@ -592,6 +592,9 @@ def engine(run: Path) -> int:
             account_version_before=(admission["parent"] or {}).get("version_sha256"),
             response_observation_contract=policy.get("model_contract", {}).get("response_observation_contract", ""),
         )
+        if "research_work" in policy:
+            from trading_system.research_work import attach_research_work
+            attach_research_work(execution, admission, policy)
         main_file = run / "source" / "main.py"
         spec = importlib.util.spec_from_file_location("tiger_frozen_main", main_file)
         if spec is None or spec.loader is None:

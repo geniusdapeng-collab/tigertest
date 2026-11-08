@@ -83,6 +83,28 @@ def source_observation_contract(files, profile):
     return RESPONSE_OBSERVATION_CONTRACT if RESPONSE_OBSERVATION_RELATIVE in paths else ""
 
 
+def source_research_work_policy(files, profile):
+    if profile != INTELLIGENCE_PROFILE:
+        return None
+    paths = {item["path"] for item in files}
+    required = {"trading_system/research_work.py", "trading_system/research_snapshot.py",
+                "trading_system/research_sources.py",
+                "trading_system/research_risk.py",
+                "trading_system/research_followup.py",
+                "trading_system/research_relations.py", "trading_system/research_resume.py",
+                "trading_system/research_replay.py", "trading_system/llm/rejected_native.py",
+                "trading_system/llm/work_required.py", "trading_system/llm/work_semantics.py",
+                "trading_system/llm/work_proof.py", "trading_system/tasks/contracts.py",
+                "trading_system/tasks/store.py", "trading_system/tasks/context.py",
+                "trading_system/tasks/scheduler.py", "trading_system/tasks/recovery.py"}
+    if "trading_system/research_work.py" not in paths:
+        return None
+    if not required <= paths:
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen research-work implementation is incomplete")
+    from .research_work import research_work_policy
+    return research_work_policy()
+
+
 def validate_runtime_input(value: object, profile: str) -> dict:
     """Validate the complete frozen extension, never an arbitrary policy flag."""
     if (profile != INTELLIGENCE_PROFILE or not isinstance(value, dict)
@@ -144,10 +166,15 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     authoritative_paper: bool = True, intelligence_input: dict | None = None,
                     runtime_input: dict | None = None,
                     response_observation_contract: str | None = None,
-                    model_counter_id: str | None = None) -> dict:
+                    model_counter_id: str | None = None, research_work: dict | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
+    if research_work is not None:
+        from .research_work import validate_research_work_policy
+        if not intelligence:
+            raise EvidenceInvalid("RESULT_INVALID", "Research work requires the intelligence profile")
+        research_work = validate_research_work_policy(research_work)
     if response_observation_contract is None:
         response_observation_contract = TOOL_OBSERVATION_CONTRACT if intelligence else ""
     if (type(response_observation_contract) is not str
@@ -188,6 +215,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         runtime_input = validate_runtime_input(runtime_input, profile)
         value["business_deadline_seconds"] = runtime_input["business_deadline_seconds"]
         value["runtime_input_sha256"] = digest(json_bytes(runtime_input))
+    if research_work is not None:
+        value["research_work"] = research_work
     if required:
         if authoritative_paper:
             value["paper_ledger_contract"] = PAPER_LEDGER_CONTRACT
@@ -643,7 +672,7 @@ def stage_calendar(run: Path) -> dict:
     return record
 
 
-def validate_admission(run: Path) -> tuple[dict, dict, dict]:
+def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> tuple[dict, dict, dict]:
     admission = read_json(run, "admission.json")
     request = read_json(run, "request.json")
     policy = read_json(run, "policy.json")
@@ -695,6 +724,7 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
         except TokenBudgetError as exc:
             raise EvidenceInvalid("RESULT_INVALID", "Frozen model input counter is unknown") from exc
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
+                                      research_work=source_research_work_policy(source["files"], request["profile"]),
                                       event_contract=event_contract,
                                       risk_evidence_contract=RISK_EVIDENCE_CONTRACT
                                       if RISK_EVIDENCE_RELATIVE in frozen_files else "",
@@ -710,7 +740,7 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
     if (read_json(run, "calendar-input.json") != calendar_record
-            or read_bytes(run, calendar_record["work_path"]) != calendar_content):
+            or validate_working_calendar and read_bytes(run, calendar_record["work_path"]) != calendar_content):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Calendar input differs from its frozen source")
     if admission["parent"] is not None:
         validate_pointer(admission["parent"])

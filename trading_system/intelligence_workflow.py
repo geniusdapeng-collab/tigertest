@@ -258,7 +258,8 @@ def _held_symbols(portfolio_state: dict | None) -> tuple[list[str] | None, list[
 def build_frontier(market_data: dict, universe: list[str], security_ids: dict[str, str], *,
                    as_of: datetime, market_snapshot_ref: dict,
                    portfolio_state: dict | None = None, scan_filters=None,
-                   sector_symbols=None, top_n: int = config.SCAN_TOP_N) -> dict:
+                   sector_symbols=None, top_n: int = config.SCAN_TOP_N,
+                   research_scope: dict | None = None) -> dict:
     """Reuse exact scanner rank/filter rules without SHS or entry supplements."""
     if (as_of.utcoffset() is None or type(top_n) is not int or not 1 <= top_n <= 1000
             or len(set(universe)) != len(universe)
@@ -309,7 +310,11 @@ def build_frontier(market_data: dict, universe: list[str], security_ids: dict[st
                                       "benchmark_sha256": value_hash(market_data["spy"]),
                                       "stock_sha256": stock_hashes},
              "not_a_trade_approval": True}
-    return {**value, "manifest_sha256": value_hash(value)}
+    frontier = {**value, "manifest_sha256": value_hash(value)}
+    if research_scope is not None:
+        from .research_followup import apply_scope
+        frontier = apply_scope(frontier, research_scope, market_data["stock_ohlcv"])
+    return frontier
 
 
 def entity_registry(frontier: dict) -> dict:
@@ -323,10 +328,12 @@ def entity_registry(frontier: dict) -> dict:
 
 def verify_frontier(value: dict, market_data: dict, universe: list[str], *,
                     as_of: datetime, market_snapshot_ref: dict,
-                    portfolio_state=None, scan_filters=None, sector_symbols=None) -> None:
+                    portfolio_state=None, scan_filters=None, sector_symbols=None,
+                    top_n: int = config.SCAN_TOP_N, research_scope: dict | None = None) -> None:
     expected = build_frontier(market_data, universe, value["security_ids"], as_of=as_of,
         market_snapshot_ref=market_snapshot_ref, portfolio_state=portfolio_state,
-        scan_filters=scan_filters, sector_symbols=sector_symbols)
+        scan_filters=scan_filters, sector_symbols=sector_symbols,
+        top_n=top_n, research_scope=research_scope)
     if normalize(value) != normalize(expected):
         raise ExecutionContractError("Research frontier differs from frozen market facts")
 

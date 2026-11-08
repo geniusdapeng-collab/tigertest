@@ -536,8 +536,14 @@ class WorkStore:
     def attempts_for_unit(self, unit_id):
         self.unit(unit_id)
         with self._tx() as connection:
-            return sorted((row for row in self._rows(connection, "attempts") if row["unit_id"] == unit_id),
-                          key=lambda row: row["ordinal"])
+            columns = TABLES["attempts"][1]
+            raw = connection.execute(f"SELECT {','.join(columns)} FROM attempts WHERE unit_id=? ORDER BY ordinal", (unit_id,))
+            return [{name: strict_json(row[name]) if name in JSON_COLUMNS and row[name] is not None else row[name]
+                     for name in columns} for row in raw]
+
+    def attempts(self):
+        with self._tx() as connection:
+            return self._rows(connection, "attempts")
 
     def format_retry_claim(self):
         with self._tx() as connection:
@@ -805,6 +811,42 @@ class WorkStore:
             if changed_units or changed_attempts:
                 self._change(connection, "leases_recovered", {"units": changed_units, "attempts": changed_attempts})
         return {"ready": ready, "unknown": unknown}
+
+    def recover_stopped_workers(self, *, verifier):
+        """Fence workers proven stopped by the owning parent process locks.
+
+        This explicit host-only transition avoids waiting out a live-looking
+        lease after its entire process group has stopped. It never clears a
+        dispatched unknown, cancels an accepted task or revives a permanent
+        semantic failure. The trusted verifier runs before the write lock.
+        """
+        if not callable(verifier):
+            raise WorkUnitError("VERIFIER_REQUIRED", "Stopped worker recovery requires its owner verifier")
+        try:
+            if verifier() is not None:
+                raise ValueError
+        except Exception:
+            raise WorkUnitError("RECOVERY_REJECTED", "Stopped worker ownership was not verified") from None
+        with self._tx(write=True) as connection:
+            self._admission(connection)
+            attempts = self._rows(connection, "attempts")
+            if any(row["state"] in {"dispatched", "observed"} for row in attempts):
+                raise WorkUnitError("ATTEMPT_UNKNOWN", "Unresolved external attempt requires native reconciliation")
+            units = self._rows(connection, "units")
+            if any(row["state"] == "failed" and not row["retryable"] for row in units):
+                raise WorkUnitError("RETRY_NOT_ADMITTED", "Permanent business failures cannot be revived")
+            changed_units, changed_attempts = [], []
+            for row in units:
+                if row["state"] == "running" or row["state"] == "failed" and row["retryable"]:
+                    row.update(state="ready", owner=None, lease_until=None, error_code=None, retryable=0)
+                    changed_units.append(row)
+            for row in attempts:
+                if row["state"] == "prepared":
+                    row["state"] = "not_sent"
+                    changed_attempts.append(row)
+            if changed_units or changed_attempts:
+                self._change(connection, "stopped_workers_recovered", {"units": changed_units, "attempts": changed_attempts})
+        return {"ready": [row["unit_id"] for row in changed_units]}
 
     def retry_units(self, unit_ids):
         if not isinstance(unit_ids, (list, tuple)) or not unit_ids or len(set(unit_ids)) != len(unit_ids):

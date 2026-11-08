@@ -5,16 +5,22 @@ from concurrent.futures import ThreadPoolExecutor, wait as wait_futures, FIRST_C
 from threading import Event, Lock, get_ident
 import time
 
-from .contracts import UnitResult, UnitSpec, WorkUnitError, detached, timestamp_number
+from .contracts import UnitResult, UnitSpec, WorkUnitError, detached, timestamp_number, identifiers
 from .context import UnitContext
 
 
 class Coordinator:
     def __init__(self, store, *, max_workers=1, client_factory=None, lease_seconds=60,
-                 resource_capacity=None, resource_cost=None):
+                 resource_capacity=None, resource_cost=None, unit_ids=None):
         if type(max_workers) is not int or not 1 <= max_workers <= 64:
             raise WorkUnitError("CONTRACT_INVALID", "Worker count must be bounded between one and 64")
         self.store, self.max_workers, self.client_factory = store, max_workers, client_factory
+        self.unit_ids = None if unit_ids is None else identifiers(unit_ids, "coordinator scope")
+        if self.unit_ids is not None:
+            if not self.unit_ids:
+                raise WorkUnitError("CONTRACT_INVALID", "Coordinator scope cannot be empty")
+            for unit_id in self.unit_ids:
+                store.unit(unit_id)
         self.lease_seconds = timestamp_number(lease_seconds)
         if not self.lease_seconds:
             raise WorkUnitError("CONTRACT_INVALID", "Lease duration must be positive")
@@ -62,6 +68,12 @@ class Coordinator:
 
     def _status(self):
         value = self.store.status()
+        rows = value["units"] if self.unit_ids is None else [
+            row for row in value["units"] if row["unit_id"] in self.unit_ids]
+        states = {row["state"] for row in rows}
+        value["scope_state"] = ("completed" if rows and states == {"validated"} else
+            "failed" if states & {"failed", "unknown"} else "cancelled" if "cancelled" in states else
+            "running" if "running" in states else "ready")
         with self._resource_lock:
             value["resources"] = {"capacity": dict(self.resource_capacity), "used": dict(self._resource_used)}
         return value
@@ -89,15 +101,17 @@ class Coordinator:
             self._release_resources(cost)
 
     def _next_lease(self):
-        if not self.resource_capacity:
+        if not self.resource_capacity and self.unit_ids is None:
             return self.store.claim_ready("coordinator-" + str(self._owner), lease_seconds=self.lease_seconds), {}
         reusable = set(self.store.resume_plan()["reusable"])
         for row in self.store.status()["units"]:
+            if self.unit_ids is not None and row["unit_id"] not in self.unit_ids:
+                continue
             if row["state"] not in {"ready", "blocked"} or not set(row["spec"]["dependencies"]) <= reusable:
                 continue
             code = None
             try:
-                cost = detached(self.resource_cost(UnitSpec.from_dict(row["spec"])))
+                cost = detached(self.resource_cost(UnitSpec.from_dict(row["spec"]))) if self.resource_capacity else {}
                 if (type(cost) is not dict or not set(cost) <= set(self.resource_capacity)
                         or any(type(amount) is not int or amount < 0 for amount in cost.values())):
                     raise ValueError
@@ -179,7 +193,7 @@ class Coordinator:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             status = self.tick(handlers, validators=validators)
-            if status["graph_state"] in {"completed", "cancelled", "cancelling"} or not self._futures:
+            if status["scope_state"] in {"completed", "cancelled"} or status["cancel_requested"] or not self._futures:
                 return status
             if self._stop_observing.is_set() or deadline is not None and time.monotonic() >= deadline:
                 return status

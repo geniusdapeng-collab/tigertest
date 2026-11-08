@@ -53,7 +53,8 @@ def prepared(tmp_path, monkeypatch, seconds=5400):
     from trading_system.intelligence_workflow import stage_input_packet
     intelligence = stage_input_packet(run, as_of=datetime.fromisoformat(clock["admitted_at_utc"]))
     policy = runtime.policy_manifest(PROFILE, intelligence_input=intelligence, runtime_input=packet,
-        scene_policy_path=run / "source" / runtime.SCENE_POLICY_RELATIVE)
+        scene_policy_path=run / "source" / runtime.SCENE_POLICY_RELATIVE,
+        research_work=runtime.source_research_work_policy(source["files"], PROFILE))
     atomic_json(run, "request.json", V2_REQUEST)
     atomic_json(run, "runtime-input.json", packet)
     atomic_json(run, "policy.json", policy)

@@ -41,6 +41,7 @@ from .tech_chain.agents import (
 )
 from .tech_chain.fusion import TechChainFusionAgent, signals_to_bonus_map
 from .tech_chain.risk_evidence import risk_coverage
+from .research_snapshot import research_source_index
 from .tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS, TECH_SUBCHAINS
 from .universe import load_universe
 
@@ -511,6 +512,9 @@ def run_pipeline(
             from .llm import required as semantic
             if getattr(execution, "intelligence", False):
                 from .llm import intelligence_required as semantic
+                from .research_work import active_research_work
+                if active_research_work(execution):
+                    from .llm import work_required as semantic
             try:
                 llm = DeepSeekRequiredClient(execution)
                 assessment = semantic.assessment_context(execution)
@@ -757,7 +761,8 @@ def run_pipeline(
                 "universe": universe, "portfolio_state": portfolio_state}) as frontier_stage:
             frontier = build_frontier(market_data, universe, security_roster["symbols"],
                 as_of=execution.admitted_at, market_snapshot_ref=market_ref,
-                portfolio_state=portfolio_state, scan_filters=scan_filt, sector_symbols=spec.sector_symbols)
+                portfolio_state=portfolio_state, scan_filters=scan_filt, sector_symbols=spec.sector_symbols,
+                research_scope=getattr(execution, "research_scope", None))
             frontier_stage.output(frontier)
 
     with tracer.step("search.collect", {"chains": CHAIN_TOPICS, "sectors": SECTOR_TOPICS,
@@ -796,7 +801,11 @@ def run_pipeline(
 
     with tracer.step("clean.rule_base", {"documents": raw_docs,
                      **({"source_content_contract": semantic.SOURCE_CONTENT_CONTRACT} if required else {})}) as stage:
-        base_docs = rule_base_clean(raw_docs, preserve_source=required)
+        if execution is not None and getattr(execution, "research_work_policy", None) is not None:
+            from .llm.work_semantics import validate_raw_documents
+            base_docs = validate_raw_documents(raw_docs)
+        else:
+            base_docs = rule_base_clean(raw_docs, preserve_source=required)
         logger.info("clean.rule_base: %d→%d（去重/格式校验）", len(raw_docs), len(base_docs))
 
         stage.output({"documents": base_docs})
@@ -841,6 +850,8 @@ def run_pipeline(
                 "documents": cleaned, "stats": cv_stats}) as frozen_stage:
             intelligence_bundle = intelligence_state.freeze(cleaned, cv_stats)
             frozen_stage.output(intelligence_bundle)
+        if getattr(execution, "research_work_policy", None) is not None:
+            semantic.prepare_analysis(llm, score_docs, spec.sector_symbols)
 
     # WFA 调优参数：默认【不加载】——tuned_params.json 属于上一轮生产残留，
     # 零基线纪律下每轮从零开始；仅当调用方显式 use_tuned=True 时才覆盖默认闸门。
@@ -991,6 +1002,10 @@ def run_pipeline(
                 audit_row["market_selection"] = audit_row.get("selection")
                 audit_row["selection"] = "research_missing"
             candidates = context["watchlist"]
+            if getattr(execution, "research_work_policy", None) is not None:
+                from .research_followup import pending_candidates
+                intelligence_state.pending_candidates = pending_candidates(frontier,
+                    context["scan_decisions"], execution.research_work_store.manifest)
         stage.output({"candidates": candidates, "scan_stats": context["scan_stats"],
                       **({"scan_decisions": context["scan_decisions"],
                           "scan_elapsed_ms": round((time.perf_counter() - scan_started) * 1000, 1)}
@@ -1123,6 +1138,8 @@ def run_pipeline(
             market_view=context.get("market_view", ""),
             notes=notes,
             raw={
+                **({"run_id": execution.run_id}
+                   if getattr(execution, "research_work_policy", None) else {}),
                 "scan_stats": context.get("scan_stats", {}),
                 "elapsed_s": round(time.time() - started, 1),
                 "universe_mode": universe_mode,
@@ -1155,6 +1172,8 @@ def run_pipeline(
                 # v6.3 S3：交叉验证统计与 AH 主题开关（数据层披露）
                 "cross_validation": cv_stats,
                 **({"intelligence": {**intelligence_state.disclosure(),
+                    **({"source_index": research_source_index(cleaned)}
+                       if getattr(execution, "research_work_policy", None) else {}),
                     "bundle": {key: intelligence_bundle[key] for key in
                         ("bundle_id", "manifest_sha256", "state", "missing_required", "usage",
                          "frozen_at", "frontier_manifest_hash")},

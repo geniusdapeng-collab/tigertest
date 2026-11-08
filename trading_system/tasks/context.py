@@ -101,6 +101,19 @@ class UnitExecutionContext(ExecutionContext):
                          account_version_before=parent.account_version_before,
                          response_observation_contract=parent.response_observation_contract)
         self._specs = tuple(specs)
+        rejected_contract = getattr(parent, "rejected_native_contract", None)
+        research_policy = getattr(parent, "research_work_policy", None)
+        if research_policy is not None:
+            from ..research_work import validate_research_work_policy
+            declared = validate_research_work_policy(research_policy)["rejected_native_contract"]
+            if rejected_contract is not None and rejected_contract != declared:
+                raise WorkUnitError("CHILD_CONTRACT_INVALID", "Parent native accounting policies disagree")
+            rejected_contract = declared
+        if rejected_contract is not None:
+            from ..llm.rejected_native import CONTRACT as REJECTED_NATIVE_CONTRACT
+            if rejected_contract != REJECTED_NATIVE_CONTRACT:
+                raise WorkUnitError("CHILD_CONTRACT_INVALID", "Unknown native accounting contract")
+            self.rejected_native_contract = REJECTED_NATIVE_CONTRACT
         self.work_store, self.lease, self.child_root = work_store, lease, root
         self._task_attempt = None
         self._task_request = None
@@ -256,7 +269,7 @@ class UnitExecutionContext(ExecutionContext):
             raise WorkUnitError("ATTEMPT_MISMATCH", "Native reply ordinal differs from durable dispatch")
         from ..llm.json_observation import validate_attempt
         value = validate_attempt(value, self._task_request)
-        native = value.get("response")
+        native = value.get("response") or value.get("rejected_native")
         state = self.work_store.attempt(self._task_attempt.attempt_id)["state"]
         if self._task_attempt.reused:
             if state != "settled" or value != self.work_store.read_attempt_response(self._task_attempt.attempt_id):

@@ -118,7 +118,12 @@ def validate_attempt(value, inputs):
     fields = {"schema", "call_id", "ordinal", "request_sha256", "transport", "response",
         "response_sha256", "content_redacted", "reasoning_state", "fingerprint_valid", "transport_diagnostic"}
     expected = contract_schemas(inputs.get("response_observation_contract", CONTRACT))["attempt"]
-    if (not isinstance(value, dict) or set(value) != fields or value["schema"] != expected
+    from .rejected_native import CONTRACT as REJECTED_NATIVE_CONTRACT
+    rejection_enabled = inputs.get("rejected_native_contract") == REJECTED_NATIVE_CONTRACT
+    if "rejected_native_contract" in inputs and not rejection_enabled:
+        raise ValueError("Unknown rejected native contract")
+    allowed_fields = (fields, fields | {"rejected_native"}) if rejection_enabled else (fields,)
+    if (not isinstance(value, dict) or set(value) not in allowed_fields or value["schema"] != expected
             or value["call_id"] != inputs["call_id"] or value["request_sha256"] != inputs["request_sha256"]
             or type(value["ordinal"]) is not int or value["ordinal"] not in {1, 2}):
         raise ValueError("Native observation differs from its request")
@@ -137,6 +142,11 @@ def validate_attempt(value, inputs):
         if (diagnostic.get("json_stage") != "http_envelope"
                 or diagnostic.get("transport") != value["transport"]):
             raise ValueError("Unknown native usage requires an envelope diagnostic")
+        if "rejected_native" in value:
+            from .rejected_native import replay as replay_rejection
+            verdict = replay_rejection(value["rejected_native"], inputs, ordinal=value["ordinal"], transport=value["transport"])
+            if verdict["diagnostic"] != diagnostic:
+                raise ValueError("Rejected native diagnostic differs from observation")
     elif (not isinstance(value["response"], dict) or value["response_sha256"] != digest(value["response"])
             or type(value["content_redacted"]) is not bool or type(value["fingerprint_valid"]) is not bool
             or type(value["reasoning_state"]) is not str
@@ -147,7 +157,9 @@ def validate_attempt(value, inputs):
             or value["transport"]["body_whitespace_only"] not in {False, None}
             or value["transport"]["body_bytes"] is not None and value["transport"]["body_bytes"] <= 0):
         raise ValueError("Invalid known native response observation")
-    if current and value["response"] is not None and (
+    if value["response"] is not None and "rejected_native" in value:
+        raise ValueError("Native observation has two different response projections")
+    if current and (value["response"] is not None or "rejected_native" in value) and (
             value["transport"]["final_response_url"] != inputs["endpoint"]
             or value["transport"]["redirected"] is not False):
         raise ValueError("Known native response route differs")
@@ -168,6 +180,9 @@ Generic valid usage is retained even if a later budget/mode check rejects it.
         _json_loads, sanitize_model_value, validate_schema)
     from ..redline.model_diagnostics import RequiredModelUnavailable
     value = validate_attempt(value, inputs)
+    if "rejected_native" in value:
+        from .rejected_native import replay as replay_rejection
+        return replay_rejection(value["rejected_native"], inputs, ordinal=value["ordinal"], transport=value["transport"])
     if value["response"] is None:
         return {"parsed": None, "diagnostic": value["transport_diagnostic"],
                 "usage": None, "retry_eligible": False}

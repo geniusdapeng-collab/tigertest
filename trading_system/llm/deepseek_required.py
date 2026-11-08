@@ -962,10 +962,16 @@ class DeepSeekRequiredClient:
             "input_token_estimate": input_tokens, "output_ceiling": ceiling,
             "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
             "tokenizer_sha256": TOKENIZER_SHA256}
+        rejected_contract = getattr(self.execution, "rejected_native_contract", None)
+        if rejected_contract is not None:
+            from .rejected_native import CONTRACT as REJECTED_NATIVE_CONTRACT
+            if rejected_contract != REJECTED_NATIVE_CONTRACT:
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
+            inputs["rejected_native_contract"] = rejected_contract
         observation = {"schema": contract, "call_id": call_id, "request_sha256": inputs["request_sha256"],
                        "attempts": [], "retry_used": False}
 
-        def record(ordinal, *, native=None, body_hash=None, error=None):
+        def record(ordinal, *, native=None, body_hash=None, error=None, rejected_native=None):
             transport = self._last_chat_transport
             if native is not None and transport is None:
                 # Test adapters may provide a complete decoded native object;
@@ -983,6 +989,8 @@ class DeepSeekRequiredClient:
                 "request_sha256": inputs["request_sha256"], "transport": transport,
                 "response": None, "response_sha256": None, "content_redacted": None,
                 "reasoning_state": None, "fingerprint_valid": None, "transport_diagnostic": diagnostic}
+            if rejected_native is not None:
+                attempt["rejected_native"] = rejected_native
             if native is not None:
                 content = native["choices"][0]["message"].get("content")
                 safe_content, redacted = self._safe_native_content(content)
@@ -1017,6 +1025,7 @@ class DeepSeekRequiredClient:
                 cached = cached_attempt(self.execution, ordinal, inputs, observation)
                 if cached is None:
                     self._last_chat_transport = None
+                    native, body_hash = None, None
                     try:
                         try:
                             verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
@@ -1045,7 +1054,11 @@ class DeepSeekRequiredClient:
                         self._usage(native.get("usage"), "enabled")
                         self._observed_response_ids.add(response_id)
                     except RequiredModelUnavailable as error:
-                        _, entry = record(ordinal, error=error)
+                        from .rejected_native import capture
+                        rejected = capture(native, inputs, ordinal=ordinal, body_hash=body_hash,
+                            code=error.diagnostic["code"], secret=self._api_key,
+                            sanitize_identifier=self._safe_native_content)
+                        _, entry = record(ordinal, error=error, rejected_native=rejected)
                         raise self._observation_failure(entry["diagnostic"], observation) from None
                     attempt, entry = record(ordinal, native=native, body_hash=body_hash)
                 else:
