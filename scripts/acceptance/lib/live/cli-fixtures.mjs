@@ -1,7 +1,7 @@
 /** Isolated, committed fixture repositories for real CLI tests; credentials are synthetic. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,11 @@ export function fixture(t, overrides = {}) {
 export function run(f, flags = [], extraEnv = {}, { timeoutMs = 60_000 } = {}) {
   // The committed temporary repo contains source only. Resolve browser packages
   // from this test's installed root without copying dependencies or ambient keys.
-  const nodePath = [...new Set([join(source, "node_modules"), ...[process.env.NODE_PATH, extraEnv.NODE_PATH].flatMap((value) => typeof value === "string" ? value.split(delimiter).filter(Boolean) : [])])].join(delimiter);
+  const installedModules = [
+    join(source, "node_modules"),
+    join(source, "governance", "node_modules"),
+  ].filter(existsSync);
+  const nodePath = [...new Set([...installedModules, ...[process.env.NODE_PATH, extraEnv.NODE_PATH].flatMap((value) => typeof value === "string" ? value.split(delimiter).filter(Boolean) : [])])].join(delimiter);
   return spawnSync(process.execPath, [join(f.repo, "scripts/acceptance/live.mjs"), "--out", f.out, "--no-auto-keys", "--no-keys-from-client", ...flags], { cwd: f.repo, encoding: "utf8", timeout: timeoutMs, maxBuffer: 1024 * 1024,
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: tmpdir(), ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}), ...extraEnv, NODE_PATH: nodePath } });
 }

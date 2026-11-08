@@ -469,7 +469,7 @@ def _check_lock_descriptor(fd: int, path: Path) -> None:
 
 
 def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
-               ack_fd: int) -> int:
+               ack_fd: int, resume_mode: str | None = None) -> int:
     run = state / "runs" / run_id
     acknowledged = False
     bootstrap_guard = None
@@ -479,7 +479,11 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
         bootstrap_guard.__enter__()
         _check_lock_descriptor(account_fd, state / "account.lock")
         _check_lock_descriptor(run_fd, run / "run.lock")
-        admission, _policy, _source = validate_admission(run)
+        if resume_mode is None:
+            admission, _policy, _source = validate_admission(run)
+        else:
+            admission, _policy, _source = validate_admission(
+                run, validate_working_calendar=False)
         remaining = (datetime.fromisoformat(admission["clock"]["deadline_at_utc"])
                      - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
@@ -500,6 +504,12 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
                     exclusive=True)
         atomic_json(run, "status.json", {"schema": "tiger.status.v1", "run_id": run_id,
                                         "status": "running", "error": None})
+        if _policy.get("research_work") is not None:
+            from trading_system.research_resume import begin_parent_attempt
+            if resume_mode is None:
+                begin_parent_attempt(run, admission, _policy)
+            elif resume_mode not in {"resume", "closeout"}:
+                raise EvidenceInvalid("RESULT_INVALID", "Unknown internal recovery role")
         try:
             _send_control(ack_fd, {"accepted": True, "run_id": run_id})
         except BrokenPipeError:
@@ -513,8 +523,14 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
             raise SupervisorInterrupted("Supervisor was interrupted")
         signal.signal(signal.SIGTERM, interrupted)
         signal.signal(signal.SIGINT, interrupted)
-        process_receipt = supervise_group(run, lock_fds=(account_fd, run_fd), deadline=deadline)
-        atomic_json(run, "process-exit.json", process_receipt, exclusive=True)
+        if resume_mode != "closeout":
+            process_receipt = supervise_group(run, lock_fds=(account_fd, run_fd), deadline=deadline)
+            atomic_json(run, "process-exit.json", process_receipt, exclusive=True)
+        elif _policy.get("research_work") is not None:
+            read_json(run, "process-exit.json")
+        if _policy.get("research_work") is not None:
+            from trading_system.research_resume import publish_parent_completion
+            publish_parent_completion(run, admission, _policy)
         verified = seal_and_publish(state, run, deadline=deadline)
         atomic_json(run, "status.json", {"schema": "tiger.status.v1", "run_id": run_id,
                                         "status": verified["status"], "error": None})
@@ -583,15 +599,20 @@ def engine(run: Path) -> int:
         policy_args = dict(policy["execution"])
         policy_args["provider_names"] = tuple(policy_args["provider_names"])
         policy_args["search_source_names"] = tuple(policy_args["search_source_names"])
-        execution = ExecutionContext(
-            run_id=run.name, run_date=date.fromisoformat(admission["clock"]["run_date"]),
-            admitted_at=datetime.fromisoformat(admission["clock"]["admitted_at_utc"]),
-            paths=paths, policy=ExecutionPolicy(**policy_args),
-            store=EvidenceStore(run, run.name),
-            authoritative_paper=bool(policy.get("paper_ledger_contract")),
-            account_version_before=(admission["parent"] or {}).get("version_sha256"),
-            response_observation_contract=policy.get("model_contract", {}).get("response_observation_contract", ""),
-        )
+        context_args = {
+            "run_id": run.name, "run_date": date.fromisoformat(admission["clock"]["run_date"]),
+            "admitted_at": datetime.fromisoformat(admission["clock"]["admitted_at_utc"]),
+            "paths": paths, "policy": ExecutionPolicy(**policy_args),
+            "authoritative_paper": bool(policy.get("paper_ledger_contract")),
+            "account_version_before": (admission["parent"] or {}).get("version_sha256"),
+            "response_observation_contract": policy.get("model_contract", {}).get("response_observation_contract", ""),
+        }
+        if policy.get("research_work") is not None:
+            from trading_system.research_resume import execution_context
+            execution = execution_context(run, admission, policy, **context_args)
+        else:
+            execution = ExecutionContext(
+                store=EvidenceStore(run, run.name), **context_args)
         if "research_work" in policy:
             from trading_system.research_work import attach_research_work
             attach_research_work(execution, admission, policy)
@@ -659,8 +680,11 @@ def engine(run: Path) -> int:
         if execution is not None and execution.response_observation_contract:
             try:
                 from trading_system.llm.intelligence_proof import verify_partial_intelligence_model
+                from trading_system.research_resume import current_parent_attempt
+                attempt = current_parent_attempt(run, admission)
                 accounting = verify_partial_intelligence_model(run, admission,
-                    scene_policy_path=run / "source" / "governance/bundles/trading/model-policy.yml")
+                    scene_policy_path=run / "source" / "governance/bundles/trading/model-policy.yml",
+                    event_relative=attempt["events_path"])
                 accounting["runtime_network_diagnostic"] = {
                     "fixed_provider_host": "api.deepseek.com",
                     "trusted_proxy_bypass_configured": "api.deepseek.com" in os.environ.get("NO_PROXY", "").split(","),
@@ -697,9 +721,12 @@ def _main() -> int:
         # requires settled search workers; failure must not wait forever for a
         # broken executor during Python interpreter shutdown.
         os._exit(code)
-    if role == "supervisor" and len(args) == 6:
+    if role in {"supervisor", "resume-supervisor", "closeout-supervisor"} and len(args) == 6:
         return supervisor(Path(args[1]), args[2], account_fd=int(args[3]),
-                          run_fd=int(args[4]), ack_fd=int(args[5]))
+                          run_fd=int(args[4]), ack_fd=int(args[5]),
+                          resume_mode=("resume" if role == "resume-supervisor"
+                                       else "closeout" if role == "closeout-supervisor"
+                                       else None))
     if role == "guardian" and len(args) == 5:
         return guardian(Path(args[1]), parent_fd=int(args[2]), control_fd=int(args[3]),
                         deadline=float(args[4]))

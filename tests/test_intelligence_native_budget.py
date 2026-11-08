@@ -51,14 +51,17 @@ def test_native_body_cannot_be_read_past_remaining_aggregate_bytes(configured, m
 
 def test_retry_uses_the_same_total_budget_and_counts_both_http_calls(configured, monkeypatch):
     native = response({"results": []})
-    outcomes = [Response({"error": "retry fixture"}, status=503), native]
+    retry = Response({"error": "retry fixture"}, status=503)
+    outcomes = [retry, native]
     monkeypatch.setattr(requests, "post", lambda *args, **kwargs: outcomes.pop(0))
     monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda seconds: None)
     client = DeepSeekRequiredClient(configured)
     with client.native_io_budget(max_bytes=1024, deadline=time.monotonic() + 5) as meter:
         assert client.search("fixture", count=1) == []
-    assert meter["request_count"] == 2 and meter["bytes_received"] == len(native.body)
+    assert meter["request_count"] == 2
+    assert meter["bytes_received"] == len(retry.body) + len(native.body)
     assert client.search_receipts[0]["transport_usage"]["request_count"] == 2
+    assert client.search_receipts[0]["transport_usage"]["bytes_received"] == len(retry.body) + len(native.body)
 
 
 def test_native_transport_envelope_never_changes_chat_legal_window(configured, monkeypatch):

@@ -15,6 +15,19 @@ is never executed. The other four model stages retain their content JSON
 requests and scene thinking policy. The current official protocol reference is
 [DeepSeek tool calls](https://api-docs.deepseek.com/guides/tool_calls/).
 
+For the opt-in research-work contract, a whole original that cannot fit the
+admitted input-token budget is split only at deterministic source-structure
+boundaries. Core ranges must cover `[0, len(original))` exactly; a plan may use
+at most 64 segments and never truncates the tail. Each segment has an isolated
+extract and independent document review. Program-owned IDs are namespaced and
+every span is offset back into the parent character coordinates. A bounded
+metadata-synthesis call contributes only the final summary; every typed fact,
+contradiction and counterevidence row is merged from reviewed segments without
+model deletion. The terminal document result binds the segment manifest,
+review hashes and summary, and the independent proof reconstructs the same plan
+and every child join. If any complete structural segment cannot fit the fixed
+window, the original remains unresolved and the business run fails closed.
+
 The input still contains every planned original and its complete metadata.
 The original final array schema remains in the prompt and in the saved request
 snapshot. The transport grammar requires a `documents` object with one required

@@ -144,12 +144,13 @@ def verify_required_model(run, result: dict, admission: dict, *, scene_policy_pa
 
 def _verify(run, result, admission, *, scene_policy_path=None, source_content_contract=None,
             company_evidence_contract=None, event_contract=None, risk_evidence_contract=None):
-    counter_contract = frozen_budget_contract(read_bytes(run, "source/trading_system/llm/model_budget.py"))
     clock = admission["clock"]
     run_date, market_timezone = clock["run_date"], clock["market_timezone"]
     if (type(run_date) is not str or date.fromisoformat(run_date).isoformat() != run_date
             or type(market_timezone) is not str or market_timezone != "America/New_York"):
         _fail()
+    counter_contract = frozen_budget_contract(read_bytes(
+        run, "source/trading_system/llm/model_budget.py"))
     assessment = {"run_date": run_date, "market_timezone": market_timezone}
     events = [strict_json(line) for line in read_bytes(run, "events.jsonl").splitlines()]
     by_stage = {row["stage"]: row for row in events if row["kind"] == "end"}

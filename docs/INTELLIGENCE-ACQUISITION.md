@@ -355,3 +355,9 @@ python scripts/intelligence-replay.py \
 | `PLAN_CONFLICT` / `JOB_REVISION_CONFLICT` | 同一身份的输入或冻结版本冲突；不可覆盖原证据 |
 | `INFLIGHT_ATTEMPTS` / `FROZEN_BUNDLE` | 在途请求不得冻结；已冻结任务不得补改 |
 | `EVIDENCE_NOT_FOUND` / `HASH_MISMATCH` | 证据缺失或损坏；拒绝生成成功摘要，不重写 hash 兜底 |
+
+## 同 run 恢复与候选补研
+
+已停止的 v2 paper run 可由可信 paper 模式调用 `resume`，请求只含原 `run_id`。系统先取得原账户和 run 锁，再校验 frozen admission、原 source/policy/account-before/calendar/deadline；不会刷新截止、换幂等键或复制账户。已验证 WorkStore 结果直接复用，已收到的 native 先复算 usage；`dispatched/observed` 与来源 `inflight/unknown` 保留预留并阻断新发送，直到原身份完成对账。失败 attempt 的事件、I/O、work、日志和进程证据只增不改归档。engine 已完成但尚未发布时只执行 closeout，不再运行 pipeline。
+
+已独立核验的父 receipt 若包含 `pending_candidates`，可信 paper 模式可调用 `supplement`。请求仅含 `schema_version`、`parent_run_id`、已审定 `symbols` 和一个新幂等键。父候选 manifest、父 receipt、证券身份和 requested-at 必须重新核对；新任务重新观察行情、执行完整采集/原文/五阶段语义/数值风险和账户 CAS。旧信号过截止只标记 `original_signal_expired`，不继承旧批准。`status` 返回四轴投影和 pending 候选状态，最终仍以新 run 的 receipt/verify 为准。

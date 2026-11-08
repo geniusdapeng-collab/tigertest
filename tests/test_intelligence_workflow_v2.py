@@ -459,7 +459,10 @@ def test_v2_actual_submitted_worker_without_model_key_fails_before_external_io(t
     run = state / "runs" / accepted["run_id"]
     assert (run / "source/trading_system/intelligence/service.py").is_file()
     assert not (run / "receipt.json").exists() and pointer_read(state) is None
-    events = [json.loads(line) for line in (run / "events.jsonl").read_text().splitlines()]
+    assert not (run / "events.jsonl").exists()
+    events_path = run / "parent-attempts/1/events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert (run / "model-failure-accounting.json").is_file()
     assert [event["stage"] for event in events if event["kind"] == "begin"] == [
         "daily.preflight", "state.reset", "pipeline.prepare"]
     assert events[-1]["stage"] == "pipeline.prepare" and events[-1]["status"] == "failed"

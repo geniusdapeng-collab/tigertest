@@ -270,7 +270,12 @@ def _recover_work_store(run, admission, policy, verifier):
     from .tasks.store import WorkStore
     from .llm.json_observation import replay_attempt
     store = WorkStore.create(run / "tasks", work_manifest(admission))
-    if store.status()["cancel_requested"]:
+    status = store.status()
+    if status["unknown_attempts"] or source_unknown_attempts(run):
+        raise EvidenceInvalid("RECONCILIATION_REQUIRED", "An original external attempt remains unknown; retain its reservation")
+    if not status["units"] and status["plan_sha256"] is None:
+        return store
+    if status["cancel_requested"]:
         raise EvidenceInvalid("RESUME_NOT_RETRYABLE", "An explicitly cancelled research task cannot be resumed")
     for row in store.attempts():
         if row["state"] == "observed" and row["usage"] is not None:
@@ -281,8 +286,6 @@ def _recover_work_store(run, admission, policy, verifier):
             if usage is None or {name: usage[name] for name in row["usage"]} != row["usage"]:
                 raise EvidenceInvalid("RECONCILIATION_REQUIRED", "Observed model usage did not pass native replay")
             store.settle_attempt(row["attempt_id"])
-    if store.status()["unknown_attempts"] or source_unknown_attempts(run):
-        raise EvidenceInvalid("RECONCILIATION_REQUIRED", "An original external attempt remains unknown; retain its reservation")
     if any(row["state"] == "failed" and not row["retryable"] for row in store.status()["units"]):
         raise EvidenceInvalid("RESUME_NOT_RETRYABLE", "A complete non-retryable business failure remains a failure")
     store.recover_stopped_workers(verifier=verifier)

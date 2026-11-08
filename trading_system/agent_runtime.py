@@ -83,7 +83,7 @@ def source_observation_contract(files, profile):
     return RESPONSE_OBSERVATION_CONTRACT if RESPONSE_OBSERVATION_RELATIVE in paths else ""
 
 
-def source_research_work_policy(files, profile):
+def source_research_work_policy(files, profile, source_root: Path | None = None):
     if profile != INTELLIGENCE_PROFILE:
         return None
     paths = {item["path"] for item in files}
@@ -102,7 +102,11 @@ def source_research_work_policy(files, profile):
     if not required <= paths:
         raise EvidenceInvalid("RESULT_INVALID", "Frozen research-work implementation is incomplete")
     from .research_work import research_work_policy
-    return research_work_policy()
+    legacy = False
+    if source_root is not None:
+        marker = read_bytes(source_root, "trading_system/research_work.py")
+        legacy = b"SEGMENT_CONTRACT" not in marker or b"segment_contract" not in marker
+    return research_work_policy(legacy=legacy)
 
 
 def validate_runtime_input(value: object, profile: str) -> dict:
@@ -166,7 +170,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     authoritative_paper: bool = True, intelligence_input: dict | None = None,
                     runtime_input: dict | None = None,
                     response_observation_contract: str | None = None,
-                    model_counter_id: str | None = None, research_work: dict | None = None) -> dict:
+                    model_counter_id: str | None = None, research_work: dict | None = None,
+                    research_scope_sha256: str | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
@@ -175,6 +180,10 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         if not intelligence:
             raise EvidenceInvalid("RESULT_INVALID", "Research work requires the intelligence profile")
         research_work = validate_research_work_policy(research_work)
+    if research_scope_sha256 is not None:
+        if (not intelligence or research_work is None or not isinstance(research_scope_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", research_scope_sha256) is None):
+            raise EvidenceInvalid("RESULT_INVALID", "Research scope requires admitted intelligence work")
     if response_observation_contract is None:
         response_observation_contract = TOOL_OBSERVATION_CONTRACT if intelligence else ""
     if (type(response_observation_contract) is not str
@@ -217,6 +226,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         value["runtime_input_sha256"] = digest(json_bytes(runtime_input))
     if research_work is not None:
         value["research_work"] = research_work
+    if research_scope_sha256 is not None:
+        value["research_scope_sha256"] = research_scope_sha256
     if required:
         if authoritative_paper:
             value["paper_ledger_contract"] = PAPER_LEDGER_CONTRACT
@@ -640,13 +651,23 @@ def materialize_version(state: Path, run: Path, admission: dict) -> dict:
     version_root = _account_root(state) / "versions" / run.name
     checked_root(version_root, create=True)
     for ref in files:
-        atomic_bytes(version_root, ref["path"],
-                     verify_ref(run / "work" / "reports", ref), exclusive=True)
+        content = verify_ref(run / "work" / "reports", ref)
+        target = safe_path(version_root, ref["path"], must_exist=False)
+        if target.exists():
+            if read_bytes(version_root, ref["path"]) != content:
+                raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing account version differs")
+        else:
+            atomic_bytes(version_root, ref["path"], content, exclusive=True)
     version = {"schema": "tiger.account-version.v1", "account": ACCOUNT,
                "run_id": run.name, "parent": admission["parent"],
                "run_date": admission["clock"]["run_date"], "files": files}
-    atomic_json(version_root, "version.json", version, exclusive=True)
-    atomic_json(run, "account-version.json", version, exclusive=True)
+    for root, relative in ((version_root, "version.json"), (run, "account-version.json")):
+        target = safe_path(root, relative, must_exist=False)
+        if target.exists():
+            if read_bytes(root, relative) != json_bytes(version):
+                raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing account version metadata differs")
+        else:
+            atomic_json(root, relative, version, exclusive=True)
     return version
 
 
@@ -677,8 +698,9 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
     request = read_json(run, "request.json")
     policy = read_json(run, "policy.json")
     base_fields = {"schema", "run_id", "clock", "parent", "request_sha256", "policy_sha256", "source_sha256"}
-    if (not isinstance(admission, dict) or set(admission) not in (
-            base_fields, base_fields | {"runtime_input_sha256"})
+    optional_fields = {"runtime_input_sha256", "research_scope_sha256"}
+    if (not isinstance(admission, dict) or not base_fields <= set(admission)
+            or set(admission) - base_fields - optional_fields
             or not isinstance(request, dict) or not isinstance(policy, dict)
             or admission.get("schema") != "tiger.admission.v1"
             or admission.get("run_id") != run.name or not RUN_RE.fullmatch(run.name)
@@ -696,6 +718,29 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
     if (("runtime_input_sha256" in admission) != (runtime_input is not None)
             or runtime_input is not None and admission["runtime_input_sha256"] != digest(json_bytes(runtime_input))):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission runtime input binding differs")
+    research_scope_sha256 = admission.get("research_scope_sha256")
+    if research_scope_sha256 is not None:
+        if request["profile"] != INTELLIGENCE_PROFILE:
+            raise EvidenceInvalid("RESULT_INVALID", "Only intelligence-paper research admits a supplement scope")
+        from .research_followup import validate_scope, _time
+        try:
+            research_scope = validate_scope(read_json(run, "research-scope.json"))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Frozen supplement scope is invalid") from exc
+        if (research_scope["manifest_sha256"] != research_scope_sha256
+                or _time(research_scope["requested_at"]) > _time(admission["clock"]["admitted_at_utc"])):
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Supplement scope admission binding differs")
+        parent = verify_run(run.parent.parent, research_scope["parent_run_id"], current_source=None)
+        if parent["pointer"]["receipt_sha256"] != research_scope["parent_receipt_sha256"]:
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Supplement parent receipt differs")
+        parent_intelligence = (parent["summary"].get("disclosures") or {}).get("intelligence") or {}
+        if parent_intelligence.get("pending_candidates") != research_scope["parent_candidate_manifest"]:
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH",
+                                  "Supplement candidate manifest differs from its verified parent")
+    if research_scope_sha256 is not None and policy.get("research_scope_sha256") != research_scope_sha256:
+        raise EvidenceInvalid("RESULT_INVALID", "Admission scope is absent from the frozen policy")
+    if research_scope_sha256 is None and policy.get("research_scope_sha256") is not None:
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen policy scope is absent from admission")
     validate_clock(admission["clock"], expected_seconds=(runtime_input["business_deadline_seconds"]
                                                        if runtime_input else DEADLINE_SECONDS))
     source = verify_source(run)
@@ -724,7 +769,9 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
         except TokenBudgetError as exc:
             raise EvidenceInvalid("RESULT_INVALID", "Frozen model input counter is unknown") from exc
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
-                                      research_work=source_research_work_policy(source["files"], request["profile"]),
+                                      research_work=source_research_work_policy(
+                                          source["files"], request["profile"], run / "source"),
+                                      research_scope_sha256=research_scope_sha256,
                                       event_contract=event_contract,
                                       risk_evidence_contract=RISK_EVIDENCE_CONTRACT
                                       if RISK_EVIDENCE_RELATIVE in frozen_files else "",
@@ -999,6 +1046,15 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
     if configured_runtime:
         verify_ref(run, receipt["runtime_input"], schema=RUNTIME_INPUT_SCHEMA)
         expected_paths["runtime_input"] = "runtime-input.json"
+    research_history = None
+    if policy.get("research_work") is not None:
+        research_history = receipt.get("research_parent_history")
+        if research_history is None:
+            raise EvidenceInvalid("RESULT_INVALID", "Research receipt lacks parent history")
+        verify_ref(run, research_history, schema="tiger.parent-history/v1")
+        expected_paths["research_parent_history"] = "research-parent-history.json"
+    elif "research_parent_history" in receipt:
+        raise EvidenceInvalid("RESULT_INVALID", "Historical receipt acquired a research-parent history")
     if any(receipt[key]["path"] != path for key, path in expected_paths.items()):
         raise EvidenceInvalid("RESULT_INVALID", "Receipt references unexpected artifacts")
     engine = read_json(run, "engine-result.json")
@@ -1082,6 +1138,9 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
     for ref in version["files"]:
         verify_ref(run / "work" / "reports", ref)
     summary = business_summary(run, admission, receipt["artifacts"])
+    if research_history is not None:
+        from .research_resume import verify_parent_history
+        verify_parent_history(run, admission, policy, research_history)
     if receipt["artifacts"] != engine.get("artifacts") or receipt.get("summary") != summary:
         raise EvidenceInvalid("RESULT_INVALID", "Receipt and actual business artifacts differ")
     if require_committed and committed_pointer(state, run_id) != pointer:
@@ -1127,22 +1186,67 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
 
 def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -> dict:
     admission, policy, _ = validate_admission(run)
+
     def before_publish():
         if ((deadline is not None and time.monotonic() >= deadline)
                 or datetime.now(timezone.utc) >= datetime.fromisoformat(admission["clock"]["deadline_at_utc"])):
             raise TimeoutError("Business deadline elapsed before account publication")
+
     def check_account_parent():
         if pointer_read(state) != admission["parent"]:
             code = "ACCOUNT_VERSION_CONFLICT" if policy.get("paper_ledger_contract") else "RESULT_INVALID"
             raise EvidenceInvalid(code, "Account parent changed before publication")
 
+    def publish_pointer(pointer):
+        before_publish()
+        durable = True
+        try:
+            atomic_json(_account_root(state), "current.json", pointer,
+                        before_publish=before_publish)
+        except OSError:
+            # Replace can succeed before directory fsync fails. A visible
+            # pointer may already be committed; never create a second mutation.
+            if pointer_read(state) != pointer:
+                raise
+            durable = False
+        if pointer_read(state) != pointer:
+            raise EvidenceInvalid("RESULT_INVALID", "Account pointer readback differs")
+        try:
+            atomic_json(run, "publication-durability.json", {
+                "schema": "tiger.publication-durability.v1", "run_id": run.name,
+                "pointer": pointer, "directory_fsync_confirmed": durable,
+            }, exclusive=True)
+        except FileExistsError:
+            durability = read_json(run, "publication-durability.json")
+            if durability.get("pointer") != pointer:
+                raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Publication durability identity differs")
+        except OSError:
+            # Publication already happened. A read-only verifier explicitly
+            # reports missing durability instead of inventing a rollback.
+            pass
+
     before_publish()
     check_account_parent()
+    receipt_path = safe_path(run, "receipt.json", must_exist=False)
+    version_path = safe_path(run, "account-version.json", must_exist=False)
+    if receipt_path.exists() and version_path.exists():
+        prepared = verify_run(state, run.name, require_committed=False, current_source=None)
+        current = pointer_read(state)
+        if current == prepared["pointer"]:
+            return verify_run(state, run.name, current_source=None)
+        if current != admission["parent"]:
+            raise EvidenceInvalid("ACCOUNT_VERSION_CONFLICT", "Account parent changed before closeout")
+        publish_pointer(prepared["pointer"])
+        return verify_run(state, run.name, current_source=None)
     engine = read_json(run, "engine-result.json")
     if engine.get("run_id") != run.name or engine.get("success") is not True:
         raise EvidenceInvalid("RUN_INCOMPLETE", "Engine result is not successful")
     stages = verify_events(run, run.name, policy["stages"])
     summary = business_summary(run, admission, engine["artifacts"])
+    research_history = None
+    if policy.get("research_work") is not None:
+        from .research_resume import publish_parent_completion
+        research_history = publish_parent_completion(run, admission, policy)
     materialize_version(state, run, admission)
     receipt = {
         "schema": "tiger.receipt.v1", "run_id": run.name, "profile": policy["profile"],
@@ -1154,6 +1258,8 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         "event_tail_sha256": stages["last_event_sha256"],
         "summary": summary, "artifacts": engine["artifacts"],
     }
+    if research_history is not None:
+        receipt["research_parent_history"] = research_history
     for name, path, schema in (
         ("admission", "admission.json", "tiger.admission.v1"),
         ("request", "request.json", "tiger.agent-request/v1"),
@@ -1171,29 +1277,12 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         receipt[name] = file_ref(run, path, schema)
     if "runtime_input_sha256" in policy:
         receipt["runtime_input"] = file_ref(run, "runtime-input.json", RUNTIME_INPUT_SCHEMA)
-    atomic_json(run, "receipt.json", receipt, exclusive=True)
+    if receipt_path.exists():
+        if read_bytes(run, "receipt.json") != json_bytes(receipt):
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing receipt differs")
+    else:
+        atomic_json(run, "receipt.json", receipt, exclusive=True)
     prepared = verify_run(state, run.name, require_committed=False, current_source=None)
     check_account_parent()
-    before_publish()
-    durable = True
-    try:
-        atomic_json(_account_root(state), "current.json", prepared["pointer"],
-                    before_publish=before_publish)
-    except OSError:
-        # Replace can succeed before directory fsync fails. A visible pointer
-        # may already be committed; never create a second business mutation.
-        if pointer_read(state) != prepared["pointer"]:
-            raise
-        durable = False
-    if pointer_read(state) != prepared["pointer"]:
-        raise EvidenceInvalid("RESULT_INVALID", "Account pointer readback differs")
-    try:
-        atomic_json(run, "publication-durability.json", {
-            "schema": "tiger.publication-durability.v1", "run_id": run.name,
-            "pointer": prepared["pointer"], "directory_fsync_confirmed": durable,
-        }, exclusive=True)
-    except OSError:
-        # Publication already happened. A read-only verifier explicitly reports
-        # missing durability confirmation instead of inventing a rollback.
-        pass
+    publish_pointer(prepared["pointer"])
     return verify_run(state, run.name, current_source=None)

@@ -7,9 +7,10 @@ stage stream. Historical intelligence_required contracts remain unchanged.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
+import re
 
 from ..agent_evidence import (atomic_bytes, normalize, read_bytes, read_snapshot,
                               verify_ref)
@@ -18,12 +19,14 @@ from ..research_work import (WORK_CLEAN_CONTRACT, RESEARCH_WORK_CONTRACT,
 from ..search.models import RawDocument
 from ..tasks.contracts import UnitResult, UnitSpec, WorkUnitError
 from ..tasks.context import UnitExecutionContext, verify_child_seal
+from ..tasks.recovery import make_document_segments, verify_document_segments
 from ..tasks.scheduler import Coordinator
 from . import intelligence_required as legacy
 from .deepseek_required import DeepSeekRequiredClient, validate_schema
 from .model_budget import TokenBudgetError
-from .work_semantics import (annotation_payload, digest, extraction_schema, normalize_annotation,
-    review_schema, source_payload, task_evidence_view, text_digest, validate_annotation,
+from .work_semantics import (annotation_payload, digest, extraction_schema, merge_segment_annotations,
+    namespace_segment_annotation, normalize_annotation, review_schema, source_payload,
+    summary_schema, task_evidence_view, text_digest, validate_annotation,
     validate_document_review, validate_raw_documents)
 
 assessment_context = legacy.assessment_context
@@ -76,6 +79,165 @@ def document_arguments(phase, raw, target_ids, assessment, *, annotation=None):
     return {"system": _SYSTEM, "user": _EXTRACT if phase == "extract" else _REVIEW,
             "schema_hint": {}, "schema": extraction_schema(target_ids) if phase == "extract" else review_schema(),
             "public_payload": payload}
+
+
+def _segment_raw(raw, start, end, number):
+    meta = deepcopy(raw.meta)
+    meta["segment"] = {
+        "contract": "tiger.document-semantics-segments/v1",
+        "parent_document_id": raw.doc_id,
+        "segment_id": f"segment-{number}",
+        "start": start,
+        "end": end,
+    }
+    return replace(raw, doc_id=f"{raw.doc_id}:segment-{number}",
+                   content=raw.content[start:end], meta=meta)
+
+
+def _segment_boundaries(content):
+    boundaries = {0, len(content)}
+    for match in re.finditer(r"\n(?=#{1,6}\s)|\n{2,}|(?<=[.!?。！？])\s+|\n", content):
+        if 0 < match.end() < len(content):
+            boundaries.add(match.end())
+    return sorted(boundaries)
+
+
+def _plan_tokens(llm, arguments):
+    try:
+        return llm.plan_chat(**arguments)[1]
+    except TokenBudgetError as error:
+        if error.code == "INPUT_CONTEXT_EXCEEDED":
+            return None
+        raise
+
+
+def plan_document_segments(llm, raw, target_ids, assessment, policy):
+    """Return a deterministic whole-original segment plan only when required."""
+    full = document_arguments("extract", raw, target_ids, assessment)
+    full_tokens = _plan_tokens(llm, full)
+    limit = policy["segment_input_token_limit"]
+    if full_tokens is not None and full_tokens <= limit:
+        return None
+    boundaries = _segment_boundaries(raw.content)
+    spans, cursor, number = [], 0, 1
+    while cursor < len(raw.content):
+        if number > policy["segment_max_count"]:
+            raise WorkUnitError("SEGMENT_LIMIT_EXCEEDED",
+                                "The original cannot fit the admitted segment count")
+        candidates = [value for value in boundaries if value > cursor]
+        if not candidates:
+            raise WorkUnitError("SEGMENTS_INVALID", "No legal structural boundary remains")
+        left, right, best = 0, len(candidates) - 1, None
+        while left <= right:
+            middle = (left + right) // 2
+            end = candidates[middle]
+            segment = _segment_raw(raw, cursor, end, number)
+            tokens = _plan_tokens(llm, document_arguments(
+                "extract", segment, target_ids, assessment))
+            if tokens is not None and tokens <= limit:
+                best, left = end, middle + 1
+            else:
+                right = middle - 1
+        if best is None or best <= cursor:
+            raise WorkUnitError("SEGMENT_WINDOW_EXCEEDED",
+                                "A complete structural segment cannot fit the admitted model window")
+        spans.append([cursor, best])
+        cursor, number = best, number + 1
+    manifest = make_document_segments(
+        raw.doc_id, raw.content, spans,
+        context_characters=policy["segment_context_characters"],
+    )
+    verify_document_segments(raw.doc_id, raw.content, manifest["segments"])
+    segments = [_segment_raw(raw, row["start"], row["end"], index)
+                for index, row in enumerate(manifest["segments"], 1)]
+    return manifest, segments
+
+
+def segment_summary_arguments(raw, segment_results, assessment):
+    summaries = [{"segment_id": row["segment_id"], "summary_zh": row["summary_zh"]}
+                 for row in segment_results]
+    return {
+        "system": _SYSTEM,
+        "user": (
+            "只综合已由程序覆盖并逐段复核的摘要，生成一条不超过600字符的完整中文摘要。"
+            "不得新增事实、删除重大反证或改变证券、期间、单位、币种与数值。"
+        ),
+        "schema_hint": {},
+        "schema": summary_schema(),
+        "public_payload": {
+            "contract": "tiger.document-semantics-segments/v1",
+            "phase": "metadata_synthesis",
+            "assessment": assessment,
+            "document_id": raw.doc_id,
+            "segments": summaries,
+        },
+    }
+
+
+def merged_annotation_limits(segment_count):
+    if type(segment_count) is not int or not 1 <= segment_count <= 64:
+        raise WorkUnitError("SEGMENTS_INVALID", "Segment count is outside the admitted bound")
+    return {
+        "evidence_spans": 128 * segment_count,
+        "subjects": 64 * segment_count,
+        "event_records": 64 * segment_count,
+        "claims": 128 * segment_count,
+    }
+
+
+def document_unit_specs(raw, plan, target_ids, assessment, validation_context, policy):
+    """Build the exact small-or-segmented document graph used by execution and proof."""
+    specs, entries = [], {}
+    units = {"extracts": [], "reviews": [], "summary": None, "global": None}
+    if plan is None:
+        extract = _document_id(raw, "extract")
+        review = _document_id(raw, "document_review")
+        units.update(extracts=[extract], reviews=[review])
+        for phase, name, dependencies, terminal in (
+                ("extract", extract, (), ()),
+                ("document_review", review, (extract,), (raw.doc_id,))):
+            entries[name] = {"raw": raw, "phase": phase, "segment": None, "manifest": None}
+            specs.append(UnitSpec(name, "document." + phase,
+                {"raw": asdict(raw), "target_ids": list(target_ids), "assessment": assessment,
+                 "validation_context": validation_context},
+                {"schema": WORK_CLEAN_CONTRACT, "validator": "document-" + phase + "/v1",
+                 "phase": phase, "stage": "clean.llm_semantic"},
+                dependencies=dependencies, document_ids=(raw.doc_id,),
+                terminal_documents=terminal))
+        return specs, units, entries
+    manifest, segments = plan
+    for number, (segment, record) in enumerate(
+            zip(segments, manifest["segments"], strict=True), 1):
+        extract = f"{raw.doc_id}:segment-{number}:extract"
+        review = f"{raw.doc_id}:segment-{number}:review"
+        units["extracts"].append(extract)
+        units["reviews"].append(review)
+        for phase, name, dependencies in (
+                ("extract", extract, ()),
+                ("document_review", review, (extract,))):
+            entries[name] = {"raw": raw, "segment_raw": segment,
+                "phase": phase, "segment": record, "manifest": manifest}
+            specs.append(UnitSpec(name, "document." + phase,
+                {"segment": deepcopy(record), "segment_raw": asdict(segment),
+                 "target_ids": list(target_ids), "assessment": assessment,
+                 "validation_context": validation_context,
+                 "segment_contract": policy["segment_contract"]},
+                {"schema": WORK_CLEAN_CONTRACT,
+                 "validator": "document-segment-" + phase + "/v1",
+                 "phase": phase, "stage": "clean.llm_semantic",
+                 "segment_id": record["id"]},
+                dependencies=dependencies, document_ids=(raw.doc_id,)))
+    summary = f"{raw.doc_id}:segment-summary"
+    units["summary"], units["global"] = summary, summary
+    entries[summary] = {"raw": raw, "segment": None, "manifest": manifest}
+    specs.append(UnitSpec(summary, "document.metadata_synthesis",
+        {"assessment": assessment, "summary_schema": summary_schema(),
+         "segment_contract": policy["segment_contract"]},
+        {"schema": WORK_CLEAN_CONTRACT, "validator": "document-summary/v1",
+         "stage": "clean.llm_semantic"},
+        dependencies=tuple(units["reviews"]), document_ids=(raw.doc_id,),
+        terminal_documents=(raw.doc_id,)))
+    return specs, units, entries
 
 
 def _store(llm):
@@ -183,71 +345,146 @@ def clean_round(llm, docs, *, acquisition):
     store = _store(llm)
     assessment = assessment_context(llm.execution)
     validation_context = _validation_context(acquisition)
-    specs, by_unit = [], {}
+    policy = validate_research_work_policy(llm.execution.research_work_policy)
+    plans, specs, by_unit, document_units = {}, [], {}, {}
     for raw in docs:
-        extract = _document_id(raw, "extract")
-        for phase in ("extract", "document_review"):
-            name = _document_id(raw, phase)
-            by_unit[name] = raw
-            specs.append(UnitSpec(name, "document." + phase,
-                {"raw": asdict(raw), "target_ids": list(TARGET_IDS), "assessment": assessment,
-                 "validation_context": validation_context},
-                {"schema": WORK_CLEAN_CONTRACT, "validator": "document-" + phase + "/v1",
-                 "phase": phase, "stage": "clean.llm_semantic"},
-                dependencies=() if phase == "extract" else (extract,), document_ids=(raw.doc_id,),
-                terminal_documents=(raw.doc_id,) if phase == "document_review" else ()))
-    _extend(store, specs, [{"id": raw.doc_id, "sha256": text_digest(raw.content)} for raw in docs])
+        plan = plan_document_segments(llm, raw, TARGET_IDS, assessment, policy)
+        plans[raw.doc_id] = plan
+        document_specs, units, entries = document_unit_specs(
+            raw, plan, TARGET_IDS, assessment, validation_context, policy)
+        specs.extend(document_specs)
+        by_unit.update(entries)
+        document_units[raw.doc_id] = units
+    originals = list({raw.doc_id: {"id": raw.doc_id, "sha256": text_digest(raw.content)}
+                      for raw in docs}.values())
+    _extend(store, specs, originals)
 
     def arguments(spec):
-        raw = by_unit[spec.unit_id]
+        entry = by_unit[spec.unit_id]
+        raw = entry["raw"]
         phase = spec.contract["phase"]
+        source = entry.get("segment_raw", raw)
         annotation = (None if phase == "extract" else
                       store.read_result(spec.dependencies[0])["value"]["output"]["annotation"])
-        return document_arguments(phase, raw, TARGET_IDS, assessment, annotation=annotation)
+        return document_arguments(phase, source, TARGET_IDS, assessment, annotation=annotation)
+
+    def summary_arguments_for(spec):
+        entry = by_unit[spec.unit_id]
+        values = [store.read_result(unit_id)["value"]["output"]["annotation"]
+                  for unit_id in spec.dependencies]
+        segments = []
+        for unit_id, value in zip(spec.dependencies, values, strict=True):
+            segments.append({"segment_id": unit_id.rsplit(":", 2)[1],
+                             "summary_zh": value["summary_zh"]})
+        return segment_summary_arguments(entry["raw"], segments, assessment)
 
     def cost(spec):
-        request, tokens, _ = llm.plan_chat(**arguments(spec))
+        if spec.kind == "document.metadata_synthesis":
+            request, tokens, _ = llm.plan_chat(**summary_arguments_for(spec))
+        else:
+            request, tokens, _ = llm.plan_chat(**arguments(spec))
         return {"tokens": tokens, "memory_bytes": len(str(request).encode()) * 8 + 8 * 1024 * 1024}
 
     def handler(unit):
         spec = UnitSpec.from_dict(store.unit(unit.lease.unit_id)["spec"])
-        raw = by_unit[spec.unit_id]
-        phase = spec.contract["phase"]
-        args = arguments(spec)
+        entry = by_unit[spec.unit_id]
+        raw = entry["raw"]
         client = unit.client
+        if spec.kind == "document.metadata_synthesis":
+            args = summary_arguments_for(spec)
+            manifest = entry["manifest"]
+            with client.execution.step("clean.llm_semantic",
+                    {"contract": policy["segment_contract"],
+                     "phase": "metadata_synthesis", "unit_id": spec.unit_id,
+                     "arguments": args}) as stage:
+                native = client.complete_json(**args)
+                validate_schema(native, summary_schema())
+                reviews = [store.read_result(unit_id)["value"]["output"]["review"]
+                           for unit_id in spec.dependencies]
+                if (len(reviews) != len(manifest["segments"])
+                        or any(row.get("complete") is not True for row in reviews)):
+                    raise WorkUnitError("DOCUMENT_SEGMENT_REVIEW_INCOMPLETE",
+                                        "Not every source-bound segment passed independent review")
+                global_review = {"schema": "tiger.document-global-review/v1",
+                    "contract": policy["segment_contract"], "document_id": raw.doc_id,
+                    "source_sha256": text_digest(raw.content),
+                    "manifest_sha256": digest(manifest),
+                    "segment_review_sha256": [row["review_sha256"] for row in reviews],
+                    "summary_sha256": digest(native["summary_zh"]), "complete": True,
+                    "checks": {key: True for key in (
+                        "whole_original_coverage", "segment_reviews", "metadata_synthesis")}}
+                output = {"phase": "metadata_synthesis", "document_id": raw.doc_id,
+                          "native": native, "summary_zh": native["summary_zh"],
+                          "global_review": global_review}
+                stage.output(output)
+            value = {"child_seal_ref": client.execution.seal(), "output": output}
+            disposition = "eligible" if raw.meta.get("completeness") == "complete" else "unverifiable"
+            return UnitResult(value, {raw.doc_id: {"state": disposition,
+                "reason": "all_segments_reviewed_source_qualification_separate"}})
+        phase = spec.contract["phase"]
+        source = entry.get("segment_raw", raw)
+        args = arguments(spec)
         with client.execution.step("clean.llm_semantic", {"contract": WORK_CLEAN_CONTRACT,
                 "phase": phase, "unit_id": spec.unit_id, "arguments": args}) as stage:
             native = client.complete_json(**args)
             if phase == "extract":
-                document = normalize_annotation(raw, native["annotation"], TARGET_IDS)
+                document = normalize_annotation(source, native["annotation"], TARGET_IDS)
                 validation = validate_annotation(document, llm.execution.admitted_at, **validation_context)
-                output = {"phase": phase, "document_id": raw.doc_id, "native": native,
+                output = {"phase": phase, "document_id": raw.doc_id,
+                          "segment_id": entry["segment"]["id"] if entry["segment"] else None,
+                          "native": native,
                           "annotation": annotation_payload(document), "validation": validation}
             else:
-                document = normalize_annotation(raw, args["public_payload"]["annotation"], TARGET_IDS)
+                document = normalize_annotation(source, args["public_payload"]["annotation"], TARGET_IDS)
                 validation = validate_annotation(document, llm.execution.admitted_at, **validation_context)
                 review = validate_document_review(document, native)
-                output = {"phase": phase, "document_id": raw.doc_id, "native": native,
+                output = {"phase": phase, "document_id": raw.doc_id,
+                          "segment_id": entry["segment"]["id"] if entry["segment"] else None,
+                          "native": native,
                           "annotation": annotation_payload(document), "validation": validation, "review": review}
             stage.output(output)
         value = {"child_seal_ref": client.execution.seal(), "output": output}
-        if phase == "document_review":
+        if phase == "document_review" and entry["segment"] is None:
             # Semantic completion and source qualification are distinct axes.
             disposition = "eligible" if raw.meta.get("completeness") == "complete" else "unverifiable"
             return UnitResult(value, {raw.doc_id: {"state": disposition,
                 "reason": "semantic_review_complete_source_qualification_separate"}})
         return value
 
-    _run(llm, {"document.extract": handler, "document.document_review": handler},
-         workers=llm.execution.research_work_policy["document_workers"], resource_cost=cost,
+    _run(llm, {"document.extract": handler, "document.document_review": handler,
+               "document.metadata_synthesis": handler},
+         workers=policy["document_workers"], resource_cost=cost,
          unit_ids=[spec.unit_id for spec in specs])
     cleaned = []
     for raw in docs:
-        _join(llm, _document_id(raw, "extract"))
-        reviewed = _join(llm, _document_id(raw, "document_review"))
-        document = normalize_annotation(raw, reviewed["annotation"], TARGET_IDS)
-        validate_annotation(document, llm.execution.admitted_at, **validation_context)
-        validate_document_review(document, reviewed["native"])
+        units = document_units[raw.doc_id]
+        if plans[raw.doc_id] is None:
+            _join(llm, units["extracts"][0])
+            reviewed = _join(llm, units["reviews"][0])
+            document = normalize_annotation(raw, reviewed["annotation"], TARGET_IDS)
+            validate_annotation(document, llm.execution.admitted_at, **validation_context)
+            validate_document_review(document, reviewed["native"])
+        else:
+            manifest, segments = plans[raw.doc_id]
+            annotations = []
+            for number, unit_id in enumerate(units["reviews"], 1):
+                _join(llm, units["extracts"][number - 1])
+                reviewed = _join(llm, unit_id)
+                validate_document_review(
+                    normalize_annotation(segments[number - 1], reviewed["annotation"], TARGET_IDS),
+                    reviewed["native"])
+                annotations.append(namespace_segment_annotation(
+                    reviewed["annotation"], number, manifest["segments"][number - 1]["start"]))
+            synthesis = _join(llm, units["summary"])
+            summary = synthesis["summary_zh"]
+            global_review = synthesis["global_review"]
+            if (global_review["manifest_sha256"] != digest(manifest)
+                    or global_review["complete"] is not True):
+                raise ValueError("DOCUMENT_GLOBAL_REVIEW_MISMATCH")
+            document = merge_segment_annotations(
+                raw, annotations, summary_zh=summary,
+                limits=merged_annotation_limits(len(segments)), target_ids=TARGET_IDS)
+            validate_annotation(document, llm.execution.admitted_at, **validation_context)
         cleaned.append(document)
     return cleaned
 

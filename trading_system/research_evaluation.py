@@ -278,19 +278,38 @@ def _collect_record(state, entry, mode):
             record['evidence']['work_ledger'] = store.verify()
             status, documents = store.status(), store.document_dispositions()
             record['originals'], record['eligible_originals'] = documents['admitted'], documents['eligible']
-            record['validated_originals'] = documents['terminal']
+            # Processing completion and evidence eligibility are different
+            # axes. A rejected/quarantined terminal document is not eventually
+            # valid merely because every unit reached a terminal state.
+            record['validated_originals'] = documents['eligible']
             # First attempt means every model unit for an original was validated
             # in epoch one and no second format attempt was dispatched.
             first = []
-            for identity in documents['documents']:
+            for identity, disposition in documents['documents'].items():
+                if disposition['state'] != 'eligible':
+                    continue
                 units = [row for row in status['units'] if identity in row['spec']['document_ids']]
                 if units and all(row['state'] == 'validated' and row['epoch'] == 1
                     and all(attempt['ordinal'] == 1 for attempt in store.attempts_for_unit(row['unit_id'])) for row in units):
                     first.append(identity)
             record['first_attempt_valid_originals'] = len(first)
-            recovered = [row for row in status['units'] if row['epoch'] > 1]
-            record['recoverable_units'] = len(recovered) + sum(row['state'] == 'failed' and row['retryable'] for row in status['units'])
-            record['recovered_units'] = sum(row['state'] == 'validated' for row in recovered)
+            attempts_by_unit = {}
+            for attempt in store.attempts():
+                attempts_by_unit.setdefault(attempt['unit_id'], []).append(attempt)
+            recoverable = []
+            for row in status['units']:
+                attempts = attempts_by_unit.get(row['unit_id'], [])
+                retried = row['epoch'] > 1 or any(attempt['ordinal'] > 1
+                                                  for attempt in attempts)
+                unresolved = (row['state'] == 'unknown'
+                              or row['state'] == 'failed' and row['retryable'])
+                restartable = row['state'] in {'ready', 'blocked'} and attempts and any(
+                    attempt['state'] in {'not_sent', 'prepared', 'dispatched', 'observed'}
+                    for attempt in attempts)
+                if retried or unresolved or restartable:
+                    recoverable.append(row)
+            record['recoverable_units'] = len(recoverable)
+            record['recovered_units'] = sum(row['state'] == 'validated' for row in recoverable)
     except (EvidenceInvalid, EvaluationError, OSError, KeyError, TypeError, ValueError) as error:
         record['full_chain_verified'] = False
         record['verification_error'] = getattr(error, 'code', 'EVALUATION_RUN_UNVERIFIED')

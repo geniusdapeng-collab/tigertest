@@ -151,7 +151,7 @@ class _Replay:
         self.policy = read_json(self.run, "policy.json") if (self.run / "policy.json").exists() else None
         if self.policy is not None:
             counter = self.policy.get("model_contract", {})
-            expected_counter = self.budget_contract
+            expected_counter = self.model_budget_contract()
             if counter.get("tokenizer_sha256") != expected_counter["tokenizer_sha256"]:
                 _fail()
             from .model_budget import LEGACY_COUNTER_ID
@@ -201,6 +201,20 @@ class _Replay:
         return read_snapshot(self.run, row[role + "_ref"], run_id=self.run.name,
                              stage=row["stage"], role=role)
 
+    def model_budget_contract(self):
+        value = getattr(self, "budget_contract", None)
+        if value is None:
+            try:
+                value = frozen_budget_contract(read_bytes(
+                    self.run, "source/trading_system/llm/model_budget.py"))
+            except EvidenceInvalid:
+                # A manually constructed planner replay may only need the
+                # current reviewed contract; complete proof construction still
+                # requires the frozen source and sets this field in __init__.
+                value = budget_contract()
+            self.budget_contract = value
+        return value
+
     def value(self, stage):
         return self.outputs[stage]["value"]
 
@@ -235,7 +249,7 @@ class _Replay:
             return plan_request(chat_request_core(system=system, user=user, schema=schema,
                 schema_hint={}, thinking_mode=mode, effort=effort, temperature=0.2,
                 **({"clean_protocol": args["clean_protocol"]} if "clean_protocol" in args else {})),
-                counter_id=self.budget_contract["counter_id"])
+            counter_id=self.model_budget_contract()["counter_id"])
         return plan
 
     def chat(self, stage, call, request, proof, payload, schema):
@@ -250,7 +264,7 @@ class _Replay:
         mode, effort = thinking["type"], thinking.get("effort")
         metadata = {"thinking_mode": mode, "reasoning_effort": effort,
             "input_token_estimate": estimate, "output_ceiling": ceiling,
-            **{key: self.budget_contract[key] for key in (
+            **{key: self.model_budget_contract()[key] for key in (
                 "policy_version", "registry_version", "tokenizer_sha256")}}
         body = request["request"]
         observed = bool(self.observation_contract)

@@ -21,8 +21,8 @@ import uuid
 
 from ..agent_evidence import EvidenceInvalid, atomic_json, read_json, read_bytes, strict_json
 from ..llm.deepseek_required import BASE_URL, DeepSeekRequiredClient, sanitize_model_value
-from ..llm.model_budget import (CONTEXT_TOKENS, MAX_OUTPUT_TOKENS, MODEL_ID,
-    TokenBudgetError, count_json_tokens)
+from ..llm.model_budget import (CONTEXT_TOKENS, LEGACY_COUNTER_ID, MAX_OUTPUT_TOKENS,
+    MODEL_ID, TokenBudgetError, count_json_tokens)
 from ..llm.scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config
 from ..redline.model_diagnostics import RequiredModelUnavailable
 from .contracts import IntelligenceError, aware, canonical, digest, identifier, safe_value, timestamp, utc_now
@@ -278,7 +278,17 @@ class TopicStore:
                     for row in db.execute("SELECT * FROM topic_attempts WHERE tenant=? AND job_id=? ORDER BY rowid", (self.tenant, job_id))]
 
     def reserve(self, job_id, stage, request):
-        hold = count_json_tokens(request) + request.get("max_tokens", 0)
+        try:
+            input_tokens = count_json_tokens(request)
+        except TokenBudgetError as error:
+            if error.code != "COUNTER_UNVERIFIED":
+                raise
+            # Reserve is also a generic quota guard for reduced caller
+            # objects. A complete provider wire still uses the current framing
+            # counter; a non-wire request can only bracket its serialized
+            # quota with the explicit historical JSON counter.
+            input_tokens = count_json_tokens(request, counter_id=LEGACY_COUNTER_ID)
+        hold = input_tokens + request.get("max_tokens", 0)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             job = self._get(db, job_id)

@@ -108,8 +108,36 @@ def test_admitted_contract_is_explicit_and_closed():
     from trading_system.research_work import research_work_policy, validate_research_work_policy
     policy = research_work_policy()
     assert validate_research_work_policy(policy) == policy
+    legacy = research_work_policy(legacy=True)
+    assert "segment_contract" not in legacy
+    assert validate_research_work_policy(legacy) == legacy
     with pytest.raises(ValueError, match="RESEARCH_WORK_POLICY"):
         validate_research_work_policy({**policy, "format_retry_limit": 2})
+
+
+def test_structural_segment_plan_covers_every_original_character_without_truncation():
+    from trading_system.llm.work_required import plan_document_segments
+    from trading_system.research_work import research_work_policy
+
+    class Planner:
+        def plan_chat(self, **arguments):
+            return {}, len(arguments["public_payload"]["source"]["content"]), 1
+
+    text = ("Section one. Revenue was 120 USD.\n\n"
+            "Section two. Risk was 80 USD.\n")
+    policy = research_work_policy()
+    policy["segment_input_token_limit"] = 24
+    manifest, segments = plan_document_segments(
+        Planner(), raw(content=text), ["XLK"], {}, policy)
+    assert manifest["complete"] is True
+    assert manifest["segments"][0]["start"] == 0
+    assert manifest["segments"][-1]["end"] == len(text)
+    assert "".join(segment.content for segment in segments) == text
+    assert all(row["end"] - row["start"] <= 24 for row in manifest["segments"])
+    policy["segment_max_count"] = 1
+    with pytest.raises(ValueError) as caught:
+        plan_document_segments(Planner(), raw(content=text), ["XLK"], {}, policy)
+    assert caught.value.code == "SEGMENT_LIMIT_EXCEEDED"
 
 
 def test_frozen_source_index_keeps_every_version_without_invented_publication():

@@ -95,6 +95,8 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 - 两者绑定相同 `run_id` 和非空、相同的 `verification.receipt_sha256`；receipt 的 `summary` 非空。verify 不提供业务摘要。
 - 按已验证 summary 如实报告数据时点、模型与来源缺口、关注/等待理由、入场和失效条件、风险，以及 paper 持仓、待成交、现金和权益。不得从未验证文件或宿主自行推测补出结果。
 
+`status.data.research_status` 另列 `process / evidence / decision / account` 四轴。流程完成、证据充分、形成合格决策与账户已提交分别判断，不能用一个 `completed` 标签合并。
+
 五个语义阶段要求真实、完整的 admitted DeepSeek 回复；缺 key、无效模型回复、证据不足导致的失败不能改称成功。无合格买入也可有真实完成的 WAIT/AVOID 结果。纸面信号和模拟成交不是券商订单，也不是实际收益。
 
 ## 场景三：断线、超时或失败后继续对话
@@ -111,6 +113,29 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 | ACCOUNT_BUSY | 保留原请求；该新键未被消费时，稍后可按同一请求重试 |
 
 调查并解决失败原因后，只有明确发起新的逻辑尝试才分配新键；同一 profile 的连续 paper 账户仍使用原 root。没有原 root 或原请求的必要信息时，说明缺什么，不猜测或新建账户掩盖历史。
+
+对 `us-public-intelligence-paper-v2`，若原 worker 已停止且原 admission 尚未过期，操作者明确要求继续时调用 `resume`：
+
+```json
+{"run_id":"run-实际原身份"}
+```
+
+`resume` 只接收该字段，不建新 run、不换幂等键、不刷新 admission/source/policy/账户 before-state/deadline。已验证 WorkStore 成果复用；已收到但未结算的原 native 先复核 usage；任何 in-flight/unknown 外部调用保持预留并返回 `RECONCILIATION_REQUIRED`。永久业务失败不复活，已提交 run 只做幂等读取。
+
+### 场景三之后：补研已审定候选
+
+receipt 的逐证券卡把范围外候选标成 `PENDING_RESEARCH` 且操作者要求补研时，使用 `supplement`。它始终创建新的完整 run 和新的账户比较交换，不扩写旧快照，也不复用旧交易批准：
+
+```json
+{
+  "schema_version": "tiger.research-supplement-request/v1",
+  "parent_run_id": "run-已核验父身份",
+  "symbols": ["NVDA"],
+  "idempotency_key": "operator-supplement-20261108-001"
+}
+```
+
+父 receipt 必须已独立验真，symbols 必须来自父结果 `pending_candidates` 且身份未变。新 run 会重新观察行情、获取必需证据、运行全部语义阶段、重做数值风险和账户 CAS；旧信号过期时保留 `original_signal_expired`，不能沿用旧批准。
 
 ## 平台接入与证据等级
 

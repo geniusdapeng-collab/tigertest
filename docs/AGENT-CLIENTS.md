@@ -77,7 +77,7 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
 
 ## 2. CLI：提交一次，持续查询同一个身份
 
-六个操作为 `doctor`、`describe`、`run`、`status`、`receipt`、`verify`。业务输入使用 `--input-file path.json` 或 `--input-file -`；stdin 必须是一个 UTF-8 JSON 对象，最大 64 KiB。重复键、未知字段、非有限数值、任意命令和路径覆写都会被拒绝。
+八个操作为 `doctor`、`describe`、`run`、`resume`、`supplement`、`status`、`receipt`、`verify`。业务输入使用 `--input-file path.json` 或 `--input-file -`；stdin 必须是一个 UTF-8 JSON 对象，最大 64 KiB。重复键、未知字段、非有限数值、任意命令和路径覆写都会被拒绝。`resume` 只接收原 `run_id`；`supplement` 只接收父 run、已审定 pending symbols 和新幂等键。
 
 请求文件只含以下四个字段；为一次逻辑任务分配一个持久、可恢复的幂等键：
 
@@ -116,7 +116,7 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 查询可以保持 readonly，但必须使用提交时同一个 state-root。`receipt` 独立验证证据和账户提交后才提供选股、持仓、挂单、现金、权益、日期及数据/模型限制；`verify` 提供验证结果而不重复业务动作。CLI 每次仅输出一个 JSON envelope；所有返回字段的契约在 `bundles/trading/agent-workflow.schema.json`。
 
-需要持续等待时，原 `run` 命令可加 `--wait`，可选 `--wait-timeout-seconds 1..3600`。默认观察窗口 2460 秒；Python 业务 deadline 默认独立为 2400 秒。Node 单次提交/查询上限 60 秒，等待循环只轮询已有 `run_id`，不会重新提交。
+需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，可选 `--wait-timeout-seconds 1..3600`。默认观察窗口 2460 秒；Python 业务 deadline 默认独立为 2400 秒。Node 单次提交/查询上限 60 秒，等待循环只轮询已有 `run_id`，不会重新提交。
 
 仅对 `us-public-intelligence-paper-v2`，可信启动环境可设置 `TIGER_AGENT_RUNTIME_POLICY_FILE`，
 指向 `{"schema":"tiger.agent-runtime-policy/v1","business_deadline_seconds":5400}` 形式的本地文件。
@@ -133,11 +133,13 @@ doctor/describe 可只读检查有效值。新运行把脱敏、无凭据的内�
 | 提交响应丢失，未拿到 run_id | 用完全相同的四字段请求及原幂等键恢复身份；不得自动换新键 |
 | 同一键已有 completed/completed_degraded | run 返回原身份及 `data.observed_status`，仍需 receipt 验证 |
 | 同一键已有 failed/blocked/interrupted | 返回原失败，不重跑内部阶段 |
+| 原 worker 已停止且尚未过期，要求继续 | `resume` 原 run_id；不换请求、key、source、账户基线或 deadline |
+| 原任务已有 unknown/in-flight 外部调用 | 先对账；保持原预留，不发同请求探测 |
 | 新请求遇到 ACCOUNT_BUSY | 新键尚未被消费；之后可重试同一个请求和键 |
 | status 调用成功但 status=failed | 只证明查询成功，不证明业务成功 |
 | receipt/verify 发现证据缺失或损坏 | 返回失败，不读取未验证摘要，不补写或重跑阶段 |
 
-退出码：0 表示当前操作成功；2 输入无效；3 访问拒绝；5 幂等冲突/账户占用；6 数据拒绝；7 runner/证据/持久化错误；8 阶段失败或未完整完成；9 超时/中断；130 取消。退出 0、JSON 合法、存在文件或状态为 accepted 均不能单独证明完整业务交付。
+退出码：0 表示当前操作成功；2 输入无效或补研范围不合法；3 访问拒绝；5 幂等/账户/父 attempt/unknown 对账冲突；6 数据或父候选不可用；7 runner/证据/持久化错误；8 恢复合同不支持、阶段失败或未完整完成；9 超时/中断；130 取消。退出 0、JSON 合法、存在文件或状态为 accepted 均不能单独证明完整业务交付。
 
 ## 3. 独立 Tiger MCP
 
@@ -148,11 +150,15 @@ doctor/describe 可只读检查有效值。新运行把脱敏、无凭据的内�
 | `tiger_doctor` | 检查解释器、依赖和运行条件 | 是 |
 | `tiger_workflow_describe` | 返回固定 profile 和阶段契约 | 是 |
 | `tiger_workflow_run` | 提交完整公开美股 paper 流程 | 否，直接调用也在启动 Python 前拒绝 |
+| `tiger_workflow_resume` | 在可信 paper 模式恢复 stopped intelligence run | 否 |
+| `tiger_research_supplement` | 从已核验 pending candidate 新建完整补研 run | 否 |
 | `tiger_workflow_status` | 读取既有运行状态 | 是 |
 | `tiger_workflow_receipt` | 独立校验证据后读取完成摘要 | 是 |
 | `tiger_workflow_verify` | 独立校验证据和账户提交 | 是 |
 
 工具结果同时包含相同 envelope 的 `structuredContent` 和 JSON 文本；`isError` 表示操作失败。未知工具为 JSON-RPC 参数错误。MCP 取消只停止对应提交/查询的观察，不是业务撤销 API。帧最大 128 KiB，业务输入仍为 64 KiB；最多四个并发请求，重复在途 ID、畸形 JSON、过量输出和断开的流均有有界退出路径。
+
+`status` 的 `data.research_status` 提供四轴状态、稳定计数、逐证券原因和恢复条件。其 `basis` 明确区分 observed records 与完整 `verified_run`；只有后者可把账户轴标为 committed。`receipt` 和 `verify` 仍独立重建冻结源码、事件、模型原生回执、研究快照与账户提交，不用状态投影代替验真。
 
 初始化行为和工具结果遵循已核实的 [MCP 生命周期规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 与 [工具规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)。本服务不要求 task-based execution 扩展。
 
@@ -277,7 +283,7 @@ TIGER_TEST_PYTHON=/absolute/path/to/python node --test \
 
 ## 9. 独立主题研究与持续来源监控
 
-新增 [INTELLIGENCE-TOPICS.md](INTELLIGENCE-TOPICS.md) 定义不写账户的 topic 命名空间。CLI 为 `scripts/tiger-topic.mjs`，STDIO MCP 为 `scripts/tiger-topic-mcp.mjs`；两者调用同一 Python 状态、固定快照和独立报告验证。它们使用自己的 readonly/acquire/research 可信模式，不改变 paper 六操作及四字段合同。
+新增 [INTELLIGENCE-TOPICS.md](INTELLIGENCE-TOPICS.md) 定义不写账户的 topic 命名空间。CLI 为 `scripts/tiger-topic.mjs`，STDIO MCP 为 `scripts/tiger-topic-mcp.mjs`；两者调用同一 Python 状态、固定快照和独立报告验证。它们使用自己的 readonly/acquire/research 可信模式，不改变 paper 八操作及四字段创建合同。
 
 用户仍只需对话。Agent 负责把问题和审定主体转为 topic、提交一次 research、保存原 job_id 并持续查询，最后调用 report 验真。只读宿主可以查询已有证据；需要采集或付费研究时，权限和模型环境必须由已授权的可信部署提供，不能放进工具参数。
 

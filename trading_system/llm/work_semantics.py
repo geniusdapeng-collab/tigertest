@@ -50,11 +50,19 @@ def _allow_plain_comparisons(value):
     return value
 
 
-def extraction_schema(target_ids) -> dict:
+def extraction_schema(target_ids, *, limits: dict | None = None) -> dict:
     annotation = deepcopy(clean_schema(["program-owned"], structured=True,
                                       target_ids=target_ids)["properties"]["documents"]["items"])
     del annotation["properties"]["id"]
     annotation["required"].remove("id")
+    if limits is not None:
+        allowed = {"evidence_spans", "subjects", "event_records", "claims"}
+        if type(limits) is not dict or set(limits) != allowed:
+            raise ValueError("WORK_ANNOTATION_LIMITS_INVALID")
+        for name, maximum in limits.items():
+            if type(maximum) is not int or maximum < 1:
+                raise ValueError("WORK_ANNOTATION_LIMITS_INVALID")
+            annotation["properties"][name]["maxItems"] = maximum
     return _object({"annotation": _allow_plain_comparisons(annotation)})
 
 
@@ -97,10 +105,10 @@ def annotation_payload(document: StructuredDocument) -> dict:
     return {key: deepcopy(getattr(document, key)) for key in _ANNOTATION_FIELDS}
 
 
-def normalize_annotation(raw, native, target_ids) -> StructuredDocument:
+def normalize_annotation(raw, native, target_ids, *, limits=None) -> StructuredDocument:
     validate_raw_documents([raw])
     try:
-        validate_schema({"annotation": native}, extraction_schema(target_ids))
+        validate_schema({"annotation": native}, extraction_schema(target_ids, limits=limits))
     except Exception as error:
         from ..redline import LLMUnavailable
         if not isinstance(error, (LLMUnavailable, TypeError, ValueError)):
@@ -115,6 +123,102 @@ def normalize_annotation(raw, native, target_ids) -> StructuredDocument:
     for span in document.evidence_spans:
         span["start"], span["end"] = spans[span["id"]]["start"], spans[span["id"]]["end"]
     return document
+
+
+def namespace_segment_annotation(value, segment_number: int, global_offset: int) -> dict:
+    """Program-bind segment IDs and map every span into parent character coordinates."""
+    if type(value) is not dict or type(segment_number) is not int or segment_number < 1:
+        raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+    if type(global_offset) is not int or global_offset < 0:
+        raise ValueError("WORK_SEGMENT_OFFSET_INVALID")
+    result = deepcopy(value)
+    prefix = f"seg{segment_number}-"
+    for span in result.get("evidence_spans", []):
+        if type(span.get("id")) is not str:
+            raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        span["id"] = prefix + span["id"]
+        if span.get("start") is not None:
+            span["start"] += global_offset
+        if span.get("end") is not None:
+            span["end"] += global_offset
+    rename = {}
+    for subject in result.get("subjects", []):
+        original = subject.get("id")
+        if type(original) is not str:
+            raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        subject["id"] = prefix + original
+        rename[original] = subject["id"]
+        subject["span_ids"] = [prefix + item for item in subject["span_ids"]]
+    event_rename = {}
+    for event in result.get("event_records", []):
+        original = event.get("id")
+        if type(original) is not str:
+            raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        event["id"] = prefix + original
+        event_rename[original] = event["id"]
+        event["subject_ids"] = [rename.get(item, prefix + item) for item in event["subject_ids"]]
+        for key in ("report_period", "event_time", "effective_time"):
+            event[key]["span_ids"] = [prefix + item for item in event[key]["span_ids"]]
+        event["source_span_ids"] = [prefix + item for item in event["source_span_ids"]]
+    claim_rename = {}
+    for claim in result.get("claims", []):
+        original = claim.get("id")
+        if type(original) is not str:
+            raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        claim["id"] = prefix + original
+        claim_rename[original] = claim["id"]
+    for claim in result.get("claims", []):
+        claim["event_id"] = event_rename.get(claim["event_id"], prefix + claim["event_id"])
+        claim["source_span_ids"] = [prefix + item for item in claim["source_span_ids"]]
+        if claim.get("supersedes_claim_id") is not None:
+            claim["supersedes_claim_id"] = claim_rename.get(
+                claim["supersedes_claim_id"], prefix + claim["supersedes_claim_id"])
+    return result
+
+
+def merge_segment_annotations(raw, annotations, *, summary_zh, limits, target_ids):
+    """Deterministically join every validated segment without dropping typed facts."""
+    validate_raw_documents([raw])
+    if not isinstance(annotations, list) or not annotations:
+        raise ValueError("WORK_SEGMENTS_REQUIRED")
+    rows = []
+    for value in annotations:
+        if type(value) is not dict:
+            raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        row = deepcopy(value)
+        for key in _ANNOTATION_FIELDS:
+            if key not in row:
+                raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        if any(type(row.get(name)) is not list for name in (
+                "tickers", "events", "subjects", "evidence_spans", "event_records", "claims")):
+            raise ValueError("WORK_SEGMENT_ANNOTATION_INVALID")
+        rows.append(row)
+    tickers, events = [], []
+    for row in rows:
+        tickers.extend(item for item in row["tickers"] if item not in tickers)
+        events.extend(item for item in row["events"] if item not in events)
+    weights = [max(1, int(row.get("relevance", 1))) for row in rows]
+    score = sum(float(row.get("sentiment_score", 0)) * weight for row, weight in zip(rows, weights, strict=True)) / sum(weights)
+    score = max(-1.0, min(1.0, round(score, 6)))
+    sentiment = "positive" if score > .1 else "negative" if score < -.1 else "neutral"
+    merged = {
+        "tickers": tickers,
+        "sentiment": sentiment,
+        "sentiment_score": score,
+        "events": events,
+        "summary_zh": summary_zh,
+        "relevance": max(1, min(5, max(int(row.get("relevance", 1)) for row in rows))),
+        "subjects": [item for row in rows for item in row["subjects"]],
+        "evidence_spans": [item for row in rows for item in row["evidence_spans"]],
+        "event_records": [item for row in rows for item in row["event_records"]],
+        "claims": [item for row in rows for item in row["claims"]],
+    }
+    return normalize_annotation(raw, merged, target_ids, limits=limits)
+
+
+def summary_schema() -> dict:
+    return _object({"summary_zh": {"type": "string", "minLength": 1, "maxLength": 600,
+                                     "pattern": _TEXT}})
 
 
 def validate_annotation(document, cutoff, *, security_ids=None, entity_registry=None,

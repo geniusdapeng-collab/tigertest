@@ -8,7 +8,7 @@ import {
 
 export function parseArgs(argv) {
   const operation = argv[0];
-  if (!OPERATIONS.includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Use doctor, describe, run, status, receipt or verify.");
+  if (!OPERATIONS.includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Use doctor, describe, run, resume, supplement, status, receipt or verify.");
   const flags = new Map();
   const allowed = new Set(["--python", "--state-root", "--mode", "--input-file", "--wait", "--wait-timeout-seconds"]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -22,7 +22,8 @@ export function parseArgs(argv) {
     }
   }
   const wait = flags.has("--wait");
-  if ((wait || flags.has("--wait-timeout-seconds")) && operation !== "run") throw new WorkflowError("INVALID_REQUEST", "Only run supports --wait.");
+  if ((wait || flags.has("--wait-timeout-seconds"))
+    && !["run", "resume", "supplement"].includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Only run, resume and supplement support --wait.");
   if (flags.has("--wait-timeout-seconds") && !wait) throw new WorkflowError("INVALID_REQUEST", "A wait deadline requires --wait.");
   let waitMs = LIMITS.waitMs;
   if (flags.has("--wait-timeout-seconds")) {
@@ -51,13 +52,14 @@ export async function main(argv = process.argv.slice(2)) {
     const parsed = parseArgs(argv);
     operation = parsed.operation;
     // Readonly rejects run before even opening an operator-supplied request file.
-    if (operation === "run" && parsed.options.mode === "readonly") throw new WorkflowError("READ_ONLY", "Run is unavailable in readonly deployment.");
+    if (["run", "resume", "supplement"].includes(operation)
+      && parsed.options.mode === "readonly") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
     const input = parsed.file ? await readRequestInput(parsed.file, process.stdin, { signal: controller.signal })
       : operation === "doctor" ? {} : operation === "describe" ? { profile: PROFILE } : {};
     envelope = await invokeWorkflow(operation, input, parsed.options, { signal: controller.signal });
     knownRun = envelope.run_id;
     if (parsed.wait && envelope.operation_ok) envelope = await waitForReceipt(knownRun, parsed.options,
-      { signal: controller.signal, waitMs: parsed.waitMs });
+      { operation: parsed.operation, signal: controller.signal, waitMs: parsed.waitMs });
   } catch (error) { envelope = failureEnvelope(operation, error, knownRun); }
   try {
     if (writable) await new Promise((done, reject) => process.stdout.write(JSON.stringify(envelope) + "\n", (error) => error ? reject(error) : done()));

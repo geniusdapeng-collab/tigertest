@@ -7,7 +7,7 @@
 **No prediction. Process, discipline, audit.（别人预测市场，我们执行纪律。）**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-9A7B2D)](LICENSE)
-[![GitHub](https://img.shields.io/badge/repo-workroom--tiger-1B2A4E)](https://github.com/workloom-ai/workroom-tiger)
+[![GitHub](https://img.shields.io/badge/repo-workroom--tiger-1B2A4E)](https://github.com/geniusdapeng-collab/workroom-tiger)
 
 </div>
 
@@ -299,6 +299,8 @@ python3 main.py --review-reject <id> --reason "..."      # 驳回（原因必填
 
 普通非受控旧入口保留离线演示与透传语义，详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。新的 AI 研究和官网更新必须显式使用受控 CLI/MCP 和 `us-public-intelligence-paper-v2`，按 [Agent 操作指南](docs/AGENT-CLIENTS.md) 加载仓库外受保护环境文件；模板见 [`.env.example`](.env.example)。新配置先冻结独立数值候选，再按研究问题采集登记来源、原文与附件，逐目标验证实体、事件、时间和用途并冻结证据包。缺资料的目标保留 `null` 与缺口；搜索成功不会自动获得评分或行动资格。原 `us-public-model-required-paper-v1` 和更早 profile 保留历史回放。
 
+受控入口提供 `doctor / describe / run / resume / supplement / status / receipt / verify`。`resume` 只恢复同一 stopped run 的原身份、源码、策略、账户 before-state 与 deadline；`supplement` 从已核验 pending candidate 新建完整研究 admission，不复用旧证据快照或交易批准。`status` 的 `data.research_status` 分开显示流程、证据、决策和账户四轴，receipt/verify 仍必须独立通过。
+
 文本语义仍固定 `deepseek-flash` + JSON mode，官方别名于 2026-10-26 观察为 `DeepSeek-V4.1-Flash-1017`，不宣称不可变快照。每次请求使用仓库内固定官方 tokenizer 对完整序列化输入计数，并申请全部合法剩余输出窗口；thinking 由场景策略决定：清洗/舆情非思考，风险/板块叙事 high，最终多空判断 max。工具请求/Fetch/字节/轮次/时限预算与模型窗口分别管理。可选 Brave、Tavily、Exa 仅用于发现资料，不替代文本模型；官方能力见 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)、[Token 用量](https://api-docs.deepseek.com/zh-cn/quick_start/token_usage/) 和 [Search & Fetch](https://api-docs.deepseek.com/guides/search/)。五个模型阶段真实完整且独立校验通过才算完成；disabled、passthrough、规则语义替代或任何失败都不能交付为成功。该配置不启用 active 实验。网站的人读研究包含为什么关注、入场/失效条件、风险及来源；资金和数值为明确标识的模拟参考，富途/老虎真实操作由人执行，实际收益只来自真实成交回报。
 
 独立来源同步/短时监测、原文证据查询和离线 100 题五类合同评测见 [情报采集指南](docs/INTELLIGENCE-ACQUISITION.md)。仓内评测是 synthetic_fixture，不代表真实供应商效果或生产 SLA。
@@ -373,7 +375,7 @@ Apache-2.0。
 
 ## 桌面 Agent 接入（Codex / Qoder / DeepSeek Harness）
 
-完整后端研究使用 `node scripts/tiger-agent.mjs`（固定六操作 CLI）或
+完整后端研究使用 `node scripts/tiger-agent.mjs`（固定八操作 CLI）或
 `node scripts/tiger-agent-mcp.mjs`（独立 STDIO MCP）。通过
 `node scripts/tiger-agent-config.mjs --client codex` 生成 Codex 本机项目配置，默认只读；
 Qoder CLI 与 DSH 分别选择 `--client qoder` 和 `--client dsh`。

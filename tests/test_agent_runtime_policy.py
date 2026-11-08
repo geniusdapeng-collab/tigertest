@@ -167,6 +167,10 @@ def test_default_policy_bytes_and_original_admission_shape_remain_historical(tmp
     assert accepted["operation_ok"], accepted
     assert wait_terminal(state, accepted["run_id"])["status"] == "completed_degraded"
     run = state / "runs" / accepted["run_id"]
+    status = runner.execute("status", {"run_id": run.name}, mode="readonly", state=state)
+    assert status["operation_ok"] and status["status"] == "completed_degraded"
+    assert status["data"]["research_status"]["axes"]["account"]["state"] == "committed"
+    assert status["data"]["research_status"]["axes"]["evidence"]["state"] == "unknown"
     admission, policy, _ = runtime.validate_admission(run)
     assert set(admission) == {"schema", "run_id", "clock", "parent", "request_sha256", "policy_sha256", "source_sha256"}
     assert policy["business_deadline_seconds"] == 2400 and "runtime_input_sha256" not in policy

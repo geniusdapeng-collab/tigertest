@@ -17,7 +17,7 @@ from ..agent_evidence import (EvidenceInvalid, digest, json_bytes, normalize,
     read_bytes, read_json, read_snapshot, verify_ref)
 from ..redline import LLMUnavailable
 from ..research_work import (RESEARCH_WORK_CONTRACT, SNAPSHOT_CONTRACT,
-    WORK_CLEAN_CONTRACT, research_work_policy, validate_research_work_policy, work_manifest)
+    WORK_CLEAN_CONTRACT, validate_research_work_policy, work_manifest)
 from ..search.models import RawDocument
 from ..tasks.contracts import UnitSpec, value_hash
 from ..tasks.context import verify_child_seal
@@ -30,8 +30,8 @@ from .model_budget import (COUNTER_ID, TokenBudgetError, chat_request_core,
                            frozen_budget_contract, plan_request)
 from .scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config
 from .work_semantics import (annotation_payload, digest as semantic_hash, normalize_annotation,
-    task_evidence_view, text_digest, validate_annotation, validate_document_review,
-    validate_raw_documents)
+    merge_segment_annotations, namespace_segment_annotation, task_evidence_view,
+    text_digest, validate_annotation, validate_document_review, validate_raw_documents)
 
 JOIN_SCHEMA = "tiger.work-child-join/v1"
 SUMMARY_SCHEMA = "tiger.research-work-proof/v1"
@@ -80,7 +80,6 @@ class ResearchWorkProof:
     def __init__(self, replay):
         self.replay = replay
         self.policy = validate_research_work_policy(replay.policy["research_work"])
-        _same(self.policy, research_work_policy())
         counter = frozen_budget_contract(read_bytes(replay.run, "source/trading_system/llm/model_budget.py"))
         _same(replay.budget_contract, counter)
         if (replay.run.name != replay.admission["run_id"]
@@ -210,38 +209,125 @@ class ResearchWorkProof:
         return deepcopy(saved["output"]), native, result
 
     @_boundary
-    def verify_document(self, raw, extract_call, review_call, *, validation_context):
-        from .work_required import document_arguments
+    def verify_document(self, raw, extract_call_or_calls, review_call=None, *,
+                        validation_context, return_count=False):
+        from .work_required import (document_arguments, document_unit_specs,
+            merged_annotation_limits, plan_document_segments,
+            segment_summary_arguments, summary_schema)
+
+        class Planner:
+            def __init__(self, verifier):
+                self.verifier = verifier
+
+            def plan_chat(self, **arguments):
+                return self.verifier.plan("clean.llm_semantic", arguments)
 
         validate_raw_documents([raw])
+        calls = (extract_call_or_calls if review_call is None
+                 else [extract_call_or_calls, review_call])
         stage = "clean.llm_semantic"
         if raw.doc_id in self.document_hashes:
             _fail(stage)
-        specs = {phase: _document_unit(raw, phase, assessment=self.replay.assessment,
-                    validation_context=validation_context) for phase in ("extract", "document_review")}
-        args = document_arguments("extract", raw, legacy.TARGET_IDS, self.replay.assessment)
-        value, native, result = self.verify_join(stage, extract_call, specs["extract"], args,
-            stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
-                         "unit_id": specs["extract"].unit_id, "arguments": args})
-        document = normalize_annotation(raw, native["annotation"], legacy.TARGET_IDS)
-        validation = validate_annotation(document, self.replay.cutoff, **validation_context)
-        expected = {"phase": "extract", "document_id": raw.doc_id, "native": native,
-                    "annotation": annotation_payload(document), "validation": validation}
-        _same(value, expected, stage)
-        _same(result["dispositions"], {}, stage)
-        args = document_arguments("document_review", raw, legacy.TARGET_IDS, self.replay.assessment,
-                                  annotation=annotation_payload(document))
-        value, native, result = self.verify_join(stage, review_call, specs["document_review"], args,
-            stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "document_review",
-                         "unit_id": specs["document_review"].unit_id, "arguments": args})
-        review = validate_document_review(document, native)
-        _same(value, {"phase": "document_review", "document_id": raw.doc_id, "native": native,
-            "annotation": annotation_payload(document), "validation": validation, "review": review}, stage)
+        plan = (plan_document_segments(Planner(self), raw, legacy.TARGET_IDS,
+            self.replay.assessment, self.policy)
+            if "segment_input_token_limit" in self.policy else None)
+        specs, units, _entries = document_unit_specs(raw, plan, legacy.TARGET_IDS,
+            self.replay.assessment, validation_context, self.policy)
+        by_id = {spec.unit_id: spec for spec in specs}
+        if len(calls) < len(specs):
+            _fail(stage)
+        calls = calls[:len(specs)]
+        if plan is None:
+            extract_spec = by_id[units["extracts"][0]]
+            args = document_arguments("extract", raw, legacy.TARGET_IDS, self.replay.assessment)
+            value, native, result = self.verify_join(stage, calls[0], extract_spec, args,
+                stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
+                             "unit_id": extract_spec.unit_id, "arguments": args})
+            document = normalize_annotation(raw, native["annotation"], legacy.TARGET_IDS)
+            validation = validate_annotation(document, self.replay.cutoff, **validation_context)
+            _same(value, {"phase": "extract", "document_id": raw.doc_id, "segment_id": None,
+                "native": native, "annotation": annotation_payload(document),
+                "validation": validation}, stage)
+            _same(result["dispositions"], {}, stage)
+            review_spec = by_id[units["reviews"][0]]
+            args = document_arguments("document_review", raw, legacy.TARGET_IDS,
+                self.replay.assessment, annotation=annotation_payload(document))
+            value, native, result = self.verify_join(stage, calls[1], review_spec, args,
+                stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "document_review",
+                             "unit_id": review_spec.unit_id, "arguments": args})
+            review = validate_document_review(document, native)
+            _same(value, {"phase": "document_review", "document_id": raw.doc_id,
+                "segment_id": None, "native": native,
+                "annotation": annotation_payload(document), "validation": validation,
+                "review": review}, stage)
+        else:
+            manifest, segments = plan
+            annotations, review_receipts, index = [], [], 0
+            for number, segment in enumerate(segments, 1):
+                extract_spec = by_id[units["extracts"][number - 1]]
+                args = document_arguments("extract", segment, legacy.TARGET_IDS,
+                                         self.replay.assessment)
+                value, native, result = self.verify_join(stage, calls[index], extract_spec, args,
+                    stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
+                                 "unit_id": extract_spec.unit_id, "arguments": args})
+                local = normalize_annotation(segment, native["annotation"], legacy.TARGET_IDS)
+                validation = validate_annotation(local, self.replay.cutoff, **validation_context)
+                segment_id = manifest["segments"][number - 1]["id"]
+                _same(value, {"phase": "extract", "document_id": raw.doc_id,
+                    "segment_id": segment_id, "native": native,
+                    "annotation": annotation_payload(local), "validation": validation}, stage)
+                _same(result["dispositions"], {}, stage)
+                index += 1
+                review_spec = by_id[units["reviews"][number - 1]]
+                args = document_arguments("document_review", segment, legacy.TARGET_IDS,
+                    self.replay.assessment, annotation=annotation_payload(local))
+                value, native, result = self.verify_join(stage, calls[index], review_spec, args,
+                    stage_input={"contract": WORK_CLEAN_CONTRACT,
+                                 "phase": "document_review",
+                                 "unit_id": review_spec.unit_id, "arguments": args})
+                review = validate_document_review(local, native)
+                _same(value, {"phase": "document_review", "document_id": raw.doc_id,
+                    "segment_id": segment_id, "native": native,
+                    "annotation": annotation_payload(local), "validation": validation,
+                    "review": review}, stage)
+                _same(result["dispositions"], {}, stage)
+                review_receipts.append(review)
+                annotations.append(namespace_segment_annotation(
+                    annotation_payload(local), number,
+                    manifest["segments"][number - 1]["start"]))
+                index += 1
+            summary_spec = by_id[units["summary"]]
+            segment_rows = [{"segment_id": manifest["segments"][number]["id"],
+                             "summary_zh": row["summary_zh"]}
+                            for number, row in enumerate(annotations)]
+            args = segment_summary_arguments(raw, segment_rows, self.replay.assessment)
+            value, native, result = self.verify_join(stage, calls[index], summary_spec, args,
+                stage_input={"contract": self.policy["segment_contract"],
+                             "phase": "metadata_synthesis",
+                             "unit_id": summary_spec.unit_id, "arguments": args})
+            validate_schema(native, summary_schema())
+            global_review = {"schema": "tiger.document-global-review/v1",
+                "contract": self.policy["segment_contract"], "document_id": raw.doc_id,
+                "source_sha256": text_digest(raw.content),
+                "manifest_sha256": semantic_hash(manifest),
+                "segment_review_sha256": [row["review_sha256"] for row in review_receipts],
+                "summary_sha256": semantic_hash(native["summary_zh"]), "complete": True,
+                "checks": {key: True for key in (
+                    "whole_original_coverage", "segment_reviews", "metadata_synthesis")}}
+            _same(value, {"phase": "metadata_synthesis", "document_id": raw.doc_id,
+                "native": native, "summary_zh": native["summary_zh"],
+                "global_review": global_review}, stage)
+            document = merge_segment_annotations(
+                raw, annotations, summary_zh=native["summary_zh"],
+                limits=merged_annotation_limits(len(segments)), target_ids=legacy.TARGET_IDS)
+            validate_annotation(document, self.replay.cutoff, **validation_context)
         disposition = "eligible" if raw.meta.get("completeness") == "complete" else "unverifiable"
         _same(result["dispositions"], {raw.doc_id: {"state": disposition,
-            "reason": "semantic_review_complete_source_qualification_separate"}}, stage)
+            "reason": ("all_segments_reviewed_source_qualification_separate"
+                       if plan is not None else
+                       "semantic_review_complete_source_qualification_separate")}}, stage)
         self.document_hashes[raw.doc_id] = text_digest(raw.content)
-        return document
+        return (document, len(specs)) if return_count else document
 
     @_boundary
     def verify_empty(self, call):
@@ -718,9 +804,10 @@ def verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, p
             "source_policies": registry.public_manifest()}
         if fresh:
             for raw in fresh:
-                cleaned.append(verifier.verify_document(raw, calls[index], calls[index + 1],
-                    validation_context=context))
-                index += 2
+                document, consumed = verifier.verify_document(
+                    raw, calls[index:], validation_context=context, return_count=True)
+                cleaned.append(document)
+                index += consumed
         else:
             verifier.verify_empty(calls[index])
             index += 1

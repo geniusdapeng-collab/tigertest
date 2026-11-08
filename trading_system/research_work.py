@@ -11,12 +11,17 @@ RESEARCH_WORK_CONTRACT = "tiger.research-work/v1"
 WORK_CLEAN_CONTRACT = "tiger.document-semantics/v1"
 EVIDENCE_VIEW_CONTRACT = "tiger.task-evidence-view/v1"
 SNAPSHOT_CONTRACT = "tiger.research-snapshot/v1"
+SEGMENT_CONTRACT = "tiger.document-semantics-segments/v1"
 
 _POLICY = {
     "contract": RESEARCH_WORK_CONTRACT,
     "clean_contract": WORK_CLEAN_CONTRACT,
     "evidence_view_contract": EVIDENCE_VIEW_CONTRACT,
     "snapshot_contract": SNAPSHOT_CONTRACT,
+    "segment_contract": SEGMENT_CONTRACT,
+    "segment_max_count": 64,
+    "segment_input_token_limit": 262144,
+    "segment_context_characters": 0,
     "pending_risk_contract": "tiger.pending-risk/v1",
     "pending_candidates_contract": "tiger.pending-candidates/v1",
     "relations_contract": "tiger.research-relations/v1",
@@ -40,13 +45,18 @@ _POLICY = {
     "resume_identity": "same_run_source_input_account_deadline",
 }
 
+_LEGACY_POLICY = {key: value for key, value in _POLICY.items()
+                  if key not in {"segment_contract", "segment_max_count",
+                                 "segment_input_token_limit",
+                                 "segment_context_characters"}}
 
-def research_work_policy() -> dict:
-    return deepcopy(_POLICY)
+
+def research_work_policy(*, legacy: bool = False) -> dict:
+    return deepcopy(_LEGACY_POLICY if legacy else _POLICY)
 
 
 def validate_research_work_policy(value) -> dict:
-    if value != _POLICY:
+    if value not in (_POLICY, _LEGACY_POLICY):
         raise ValueError("RESEARCH_WORK_POLICY_MISMATCH")
     return deepcopy(value)
 

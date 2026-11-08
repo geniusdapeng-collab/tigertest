@@ -96,6 +96,37 @@ def synthetic_transport(monkeypatch):
     return wires
 
 
+def segmented_transport(monkeypatch):
+    wires, lock = [], Lock()
+    def post(url, **kwargs):
+        wire = json.loads(kwargs["data"])
+        user = wire["messages"][-1]["content"].split("\nJSON schema:\n", 1)[0]
+        payload = json.loads(user.split("\n", 1)[1])
+        phase = payload["phase"]
+        if phase == "extract":
+            content = payload["source"]["content"]
+            quote = min((line.strip() for line in content.splitlines() if line.strip()),
+                        key=len, default=content[:1])
+            value = {"annotation": {
+                "tickers": [], "sentiment": "neutral", "sentiment_score": 0,
+                "events": [], "summary_zh": quote[:600], "relevance": 1,
+                "subjects": [], "evidence_spans": [{
+                    "id": "p1", "start": None, "end": None, "quote": quote}],
+                "event_records": [], "claims": []}}
+        elif phase == "metadata_synthesis":
+            value = {"summary_zh": "分段摘要已按完整原文覆盖并逐段复核。"}
+        else:
+            value = review()
+        with lock:
+            wires.append(wire)
+            identifier = "segment-proof-" + str(len(wires))
+        response = Response(native(json.dumps(value, ensure_ascii=False), identifier))
+        response.url, response.history = url, []
+        return response
+    monkeypatch.setattr(requests, "post", post)
+    return wires
+
+
 @pytest.fixture
 def completed(observed, monkeypatch):
     admission, policy, acquisition, client = prepare_proof_context(observed)
@@ -110,6 +141,27 @@ def completed(observed, monkeypatch):
     return SimpleNamespace(context=observed, admission=admission, policy=policy,
         acquisition=acquisition, store=observed.research_work_store, documents=documents,
         originals=originals, joins=joins, replay=replay, wires=wires)
+
+
+@pytest.fixture
+def segmented_completed(observed, monkeypatch):
+    from trading_system.research_work import _POLICY
+    monkeypatch.setitem(_POLICY, "segment_input_token_limit", 5000)
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    wires = segmented_transport(monkeypatch)
+    content = "\n\n".join(
+        f"Section {number}. Complete issuer disclosure paragraph with revenue "
+        f"and risk evidence number {number}." for number in range(1, 401))
+    original = raw(content=content)
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "segmented proof"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output(documents)
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=[original], joins=joins, replay=replay, wires=wires)
 
 
 def validation_context(fixture):
@@ -134,6 +186,20 @@ def test_native_child_joins_rebuild_distinct_originals_and_accounting_without_io
     assert completed.replay.counts["clean.llm_semantic"] == 4
     assert len(completed.replay.response_ids) == len(completed.wires) == 4
     assert completed.replay.chat_accounting(other_model_io_count=0)["known_usage"]["total_tokens"] == 200
+
+
+def test_segmented_document_proof_rebuilds_every_core_range_and_review(segmented_completed):
+    fixture = segmented_completed
+    assert len(fixture.documents) == 1
+    verifier = ResearchWorkProof(fixture.replay)
+    document, consumed = verifier.verify_document(
+        fixture.originals[0], fixture.joins,
+        validation_context=validation_context(fixture), return_count=True)
+    assert asdict(document) == asdict(fixture.documents[0])
+    assert consumed == len(fixture.joins) > 2
+    summary = verifier.assert_complete()
+    assert summary["document_count"] == 1 and summary["verified_units"] == consumed
+    assert verifier.store.document_dispositions()["documents"][fixture.originals[0].doc_id]["state"] == "eligible"
 
 
 @pytest.mark.parametrize("mutation", ["wrong_join", "changed_value", "missing_parent_copy", "different_original"])

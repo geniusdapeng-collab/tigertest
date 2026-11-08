@@ -88,3 +88,54 @@ def test_semantic_review_failure_does_not_spend_format_retry(observed, monkeypat
     assert store.document_dispositions()["terminal"] == 0
     assert store.status()["settled_attempts"] == 2
     assert store.status()["format_reanswers"] == 0
+
+
+def test_whole_document_segments_rejoin_every_fact_after_independent_reviews(observed, monkeypatch):
+    from dataclasses import replace
+    from trading_system.llm import work_required
+    from trading_system.tasks.recovery import make_document_segments
+
+    store, acquisition, client = prepare(observed)
+    original = raw(content="Section one revenue was 120 USD.\n\nSection two risk was 80 USD.")
+    split = original.content.index("\n\n") + 2
+    manifest = make_document_segments(original.doc_id, original.content, [(0, split), (split, len(original.content))])
+    segments = [replace(original, doc_id=f"{original.doc_id}:segment-{number}",
+                        content=original.content[row["start"]:row["end"]])
+                for number, row in enumerate(manifest["segments"], 1)]
+    monkeypatch.setattr(work_required, "plan_document_segments",
+                        lambda *_args, **_kwargs: (manifest, segments))
+
+    calls, lock = [], Lock()
+    def post(_url, **kwargs):
+        wire = json.loads(kwargs["data"])
+        prompt = wire["messages"][-1]["content"]
+        with lock:
+            calls.append(prompt)
+            identifier = "segment-test-" + str(len(calls))
+        if '"phase":"metadata_synthesis"' in prompt:
+            value = {"summary_zh": "两段都由原文覆盖：收入120 USD，风险80 USD。"}
+        elif '"phase":"extract"' in prompt:
+            if "Section one" in prompt:
+                quote = "Section one revenue was 120 USD."
+            else:
+                quote = "Section two risk was 80 USD."
+            value = {"annotation": {
+                "tickers": [], "sentiment": "neutral", "sentiment_score": 0,
+                "events": [], "summary_zh": quote, "relevance": 1,
+                "subjects": [], "evidence_spans": [{"id": "p1", "start": None, "end": None, "quote": quote}],
+                "event_records": [], "claims": []}}
+        else:
+            value = review()
+        return Response(native(json.dumps(value, ensure_ascii=False), identifier))
+    monkeypatch.setattr(requests, "post", post)
+
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "segmented original"}) as scope:
+        result = clean_round(client, [original], acquisition=acquisition)
+        scope.output({"documents": len(result)})
+    assert len(result) == 1
+    assert result[0].raw is original and result[0].summary_zh.startswith("两段")
+    assert [row["quote"] for row in result[0].evidence_spans] == [
+        "Section one revenue was 120 USD.", "Section two risk was 80 USD."]
+    assert store.document_dispositions()["terminal"] == 1
+    assert store.verify()["unit_count"] == 5
+    assert len(calls) == len(client.receipts) == 5
