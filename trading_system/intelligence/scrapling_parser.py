@@ -58,7 +58,12 @@ def apply_scrapling(result, policy):
             parent = parent.parent
         if not nested:
             roots.append(node)
-    class SelectedPage(_Page):
+    if policy.manifest_version is not None:
+        from .parse_manifest import MappedPage
+        page_type = MappedPage
+    else:
+        page_type = _Page
+    class SelectedPage(page_type):
         def __init__(self, url):
             super().__init__(url)
             self.filtered_stack, self.filtered_depth = [], 0
@@ -89,6 +94,10 @@ def apply_scrapling(result, policy):
         content.feed(node.html_content)
     content.close()
     text = _clean("".join(content.all))
+    structure = None
+    if policy.manifest_version is not None:
+        text, structure = content.projection()
+        structure["locator_source_kind"] = "scrapling_selected_markup"
     headline = _words(result.title)
     headline_inside = bool(headline) and any(_words(heading.get_all_text()) == headline
         for root in roots for heading in root.css("h1") if not _excluded(heading, allow_header=True))
@@ -112,6 +121,8 @@ def apply_scrapling(result, policy):
         "extractor_config_sha256": digest(config), "parse_policy": policy.public(),
         "selector_validation": {"validated": valid, "selected_roots": len(roots),
             "has_title": bool(result.title.strip()), "expected_terms_checked": len(policy.expected_terms)}}
+    if structure is not None:
+        metadata["_parse_structure"] = structure
     if not valid:
         metadata["extraction_error"] = "PARSER_SELECTOR_UNVERIFIED"
     # A correct selector cannot remove an explicit paywall or create complete

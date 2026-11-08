@@ -5,16 +5,19 @@ cookie store, network request or provider credential is available to it.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 import hashlib
+import errno
 import json
 import math
 import os
 from pathlib import Path
 import re
 import subprocess
+import shutil
+import threading
 import sys
 import tempfile
 import time
@@ -32,9 +35,11 @@ class ParsePolicy:
     max_input_bytes: int = 32 * 1024 * 1024
     max_text_bytes: int = 16 * 1024 * 1024
     memory_bytes: int = 768 * 1024 * 1024
+    manifest_version: str | None = None
 
     def __post_init__(self):
-        if (self.html_engine not in {"builtin", "scrapling"}
+        if (self.manifest_version is not None and self.manifest_version != "v1"
+                or self.html_engine not in {"builtin", "scrapling"}
                 or not isinstance(self.selector, str) or not 1 <= len(self.selector) <= 512
                 or not isinstance(self.expected_terms, tuple)
                 or any(not isinstance(x, str) or not 1 <= len(x) <= 256 for x in self.expected_terms)
@@ -52,7 +57,10 @@ class ParsePolicy:
             raise IntelligenceError("CONTRACT_INVALID", "Parser memory boundary is too small")
 
     def public(self):
-        return {**asdict(self), "expected_terms": list(self.expected_terms)}
+        value = {**asdict(self), "expected_terms": list(self.expected_terms)}
+        if self.manifest_version is None:
+            value.pop("manifest_version")
+        return value
 
     @classmethod
     def from_value(cls, value=None):
@@ -70,9 +78,51 @@ class ParsePolicy:
         return cls(**values)
 
 
+class ParserResourcePool:
+    """Atomic process-local reservations shared by one trusted coordinator.
+
+    This does not claim cross-process admission. Multi-process coordinators
+    must reserve through their persistent scheduler before using this pool.
+    A rejected reservation has not spawned a worker or sent any external IO.
+    """
+    def __init__(self, *, max_workers, memory_bytes, temporary_bytes):
+        if any(type(value) is not int or value <= 0
+               for value in (max_workers, memory_bytes, temporary_bytes)):
+            raise IntelligenceError("CONTRACT_INVALID", "Invalid parser pool capacity")
+        self.max_workers, self.memory_bytes, self.temporary_bytes = max_workers, memory_bytes, temporary_bytes
+        self._workers = self._memory = self._temporary = 0
+        self._lock = threading.Lock()
+
+    def snapshot(self):
+        with self._lock:
+            return {"scope": "coordinator_process", "active_workers": self._workers,
+                "reserved_memory_bytes": self._memory, "reserved_temporary_bytes": self._temporary,
+                "max_workers": self.max_workers, "memory_capacity_bytes": self.memory_bytes,
+                "temporary_capacity_bytes": self.temporary_bytes}
+
+    @contextmanager
+    def reserve(self, *, memory_bytes, temporary_bytes):
+        if any(type(value) is not int or value < 0 for value in (memory_bytes, temporary_bytes)):
+            raise IntelligenceError("CONTRACT_INVALID", "Invalid parser reservation")
+        with self._lock:
+            if (self._workers >= self.max_workers or self._memory + memory_bytes > self.memory_bytes
+                    or self._temporary + temporary_bytes > self.temporary_bytes):
+                raise IntelligenceError("PARSER_CAPACITY_UNAVAILABLE", "Parser admission capacity exhausted")
+            self._workers += 1
+            self._memory += memory_bytes
+            self._temporary += temporary_bytes
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._workers -= 1
+                self._memory -= memory_bytes
+                self._temporary -= temporary_bytes
+
+
 FAILURE_CODES = frozenset({"PARSER_INPUT_TOO_LARGE", "PARSER_DEADLINE_EXCEEDED", "PARSER_MEMORY_EXCEEDED",
     "PARSER_RESOURCE_EXCEEDED", "PARSER_RESOURCE_UNAVAILABLE", "PARSER_PAGE_LIMIT", "PARSER_TEXT_LIMIT",
-    "PARSER_SELECTOR_UNVERIFIED", "PARSER_DEPENDENCY_UNAVAILABLE", "PARSER_FAILED"})
+    "PARSER_SELECTOR_UNVERIFIED", "PARSER_DEPENDENCY_UNAVAILABLE", "PARSER_FAILED", "PARSER_DISK_EXHAUSTED", "PARSER_STRUCTURE_LIMIT", "PARSER_CAPACITY_UNAVAILABLE"})
 _WORKER_PHASES = frozenset({"started", "policy_ready", "limits_ready", "input_read", "builtin_complete",
     "scrapling_started", "scrapling_complete", "output_ready"})
 _RUNTIME_SINK = ContextVar("tiger_parser_runtime", default=None)
@@ -129,13 +179,15 @@ def _partial(response, original_url, code, policy):
         "policy": ParsePolicy.from_value(policy).public(), "text_sha256": hashlib.sha256(b"").hexdigest(),
         "completeness": "partial", "evidence_scope": "resource_failure_no_extracted_content"}
     receipt["sha256"] = digest(receipt)
-    return FetchResult(original_url or response.url, response.url, "", "", response.body,
+    result = FetchResult(original_url or response.url, response.url, "", "", response.body,
         media, "attachment", "partial", source_time(None), source_time(None),
         {"http_status": response.status, "http_headers": response.headers,
          "transport_sha256": response.transport_sha256, "request_count": response.request_count,
          "retrieved_at": response.received_at, "extractor": "tiger-main-text/v1",
          "extraction_error": code, "parse_failure": receipt}, usage={"state": "public_unmetered",
         "requests": response.request_count, "bytes": len(response.body), "requires_reconciliation": False})
+    from .parse_manifest import attach_manifest
+    return attach_manifest(result, ParsePolicy.from_value(policy))
 
 
 def replay_partial(response, *, original_url=None, policy=None, receipt):
@@ -231,12 +283,15 @@ def _resident_bytes(pid, remaining):
     return None
 
 
-def isolated_extract(response, *, original_url=None, trusted_filing=False, policy=None, deadline=None):
+def isolated_extract(response, *, original_url=None, trusted_filing=False, policy=None, deadline=None, resource_pool=None):
     policy = ParsePolicy.from_value(policy)
     started = time.monotonic()
     cutoff = min(started + policy.timeout_seconds, deadline) if deadline is not None else started + policy.timeout_seconds
     child = None
     input_file = None
+    reservation = None
+    reserved = False
+    estimate = None
     samples, peak_resident, observer_reason, worker_phase = 0, None, None, None
     observer = "linux_proc_status" if sys.platform.startswith("linux") else "darwin_ps" if sys.platform == "darwin" else "unsupported"
     def runtime():
@@ -246,7 +301,8 @@ def isolated_extract(response, *, original_url=None, trusted_filing=False, polic
             "resident_samples": samples, "peak_resident_bytes": peak_resident,
             "memory_limit_bytes": policy.memory_bytes, "observer": observer,
             "observer_reason": observer_reason, "worker_phase": worker_phase,
-            "worker_returncode": child.poll() if child is not None else None}
+            "worker_returncode": child.poll() if child is not None else None,
+            "resource_estimate": estimate, "reservation_scope": "coordinator_process" if resource_pool is not None else "single_parser_only"}
     def partial(code):
         result = _partial(response, original_url, code, policy)
         return _measured(result, runtime())
@@ -261,6 +317,15 @@ def isolated_extract(response, *, original_url=None, trusted_filing=False, polic
     payload = canonical(header) + b"\n" + response.body
     worker = Path(__file__).with_name("parse_worker.py")
     try:
+        estimate = {"memory_bytes": policy.memory_bytes + len(payload) + policy.max_text_bytes * 8 + 4 * 1024 * 1024,
+                    "temporary_bytes": len(payload)}
+        if resource_pool is not None and not isinstance(resource_pool, ParserResourcePool):
+            raise IntelligenceError("CONTRACT_INVALID", "Trusted parser resource pool required")
+        reservation = (resource_pool.reserve(**estimate) if resource_pool is not None else nullcontext())
+        reservation.__enter__()
+        reserved = True
+        if policy.manifest_version is not None and shutil.disk_usage(tempfile.gettempdir()).free < len(payload):
+            return partial("PARSER_DISK_EXHAUSTED")
         # A regular private descriptor carries the already bounded input.
         # Repeated short communicate() observations must never abandon an
         # unfinished stdin pipe write when a cold worker starts after a slice.
@@ -326,7 +391,7 @@ def isolated_extract(response, *, original_url=None, trusted_filing=False, polic
         if not isinstance(value, dict) or value.get("error"):
             code = value.get("error", "PARSER_FAILED") if isinstance(value, dict) else "PARSER_FAILED"
             if code not in {"PARSER_PAGE_LIMIT", "PARSER_TEXT_LIMIT", "PARSER_MEMORY_EXCEEDED",
-                            "PARSER_RESOURCE_UNAVAILABLE", "PARSER_SELECTOR_UNVERIFIED", "PARSER_DEPENDENCY_UNAVAILABLE"}:
+                            "PARSER_RESOURCE_UNAVAILABLE", "PARSER_SELECTOR_UNVERIFIED", "PARSER_DEPENDENCY_UNAVAILABLE", "PARSER_STRUCTURE_LIMIT"}:
                 code = "PARSER_FAILED"
             return partial(code)
         if not isinstance(value.get("text"), str) or len(value["text"].encode()) > policy.max_text_bytes:
@@ -340,12 +405,19 @@ def isolated_extract(response, *, original_url=None, trusted_filing=False, polic
         if isinstance(exc, IntelligenceError):
             observer_reason = exc.details.get("observer_reason")
         code = ("PARSER_DEADLINE_EXCEEDED" if time.monotonic() >= cutoff else
-                exc.code if isinstance(exc, IntelligenceError) else "PARSER_FAILED")
+                exc.code if isinstance(exc, IntelligenceError) else
+                "PARSER_DISK_EXHAUSTED" if isinstance(exc, OSError) and exc.errno in {errno.ENOSPC, errno.EDQUOT} else "PARSER_FAILED")
         return partial(code)
     finally:
-        if child is not None:
-            if child.poll() is None:
-                child.kill()
-            child.communicate()
-        if input_file is not None:
-            input_file.close()
+        try:
+            if child is not None:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate()
+        finally:
+            try:
+                if input_file is not None:
+                    input_file.close()
+            finally:
+                if reserved:
+                    reservation.__exit__(None, None, None)

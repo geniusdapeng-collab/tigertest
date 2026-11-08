@@ -1,0 +1,3 @@
+TEST_FIXTURE Source A release on 2026-10-20: Alpha Robotics backlog USD 12 million.
+TEST_FIXTURE Syndicator B republishes Source A verbatim; this is not a second independent origin.
+TEST_FIXTURE Source C correction on 2026-10-21: Alpha Robotics backlog USD 9 million; the earlier USD 12 million figure is withdrawn.

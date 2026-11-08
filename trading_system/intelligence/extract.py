@@ -8,7 +8,7 @@ import json
 import re
 from urllib.parse import urljoin, urlsplit
 
-from .contracts import FetchResult, SourceError, digest, source_time
+from .contracts import FetchResult, SourceError, IntelligenceError, digest, source_time
 from .transport import HttpResponse
 
 _REDACTED_LINK_POLICY = "tiger.redacted-html-links/v1"
@@ -122,7 +122,7 @@ def _date_fields(value, found=None):
 
 def _extract_response_inner(response: HttpResponse, *, original_url: str | None = None,
                             trusted_filing: bool = False, max_pages: int | None = None,
-                            max_text_bytes: int | None = None) -> FetchResult:
+                            max_text_bytes: int | None = None, manifest_version=None) -> FetchResult:
     media = response.headers.get("content-type", "application/octet-stream").split(";", 1)[0].strip().lower()
     body, url = response.body, response.url
     metadata = {"http_status": response.status, "http_headers": response.headers,
@@ -173,15 +173,24 @@ def _extract_response_inner(response: HttpResponse, *, original_url: str | None 
         return finish(original_url or url, url, "", "", body, media, "attachment", "partial",
             metadata={**metadata, "extraction_error": "SOURCE_ENCODING_OR_FORMAT_UNSUPPORTED"})
     if media in {"text/html", "application/xhtml+xml"} or re.search(r"<(?:html|article|main)\b", text[:4000], re.I):
-        parser = _Page(url)
+        if manifest_version is not None:
+            from .parse_manifest import MappedPage
+            parser = MappedPage(url)
+        else:
+            parser = _Page(url)
         try:
             parser.feed(text)
             parser.close()
+        except IntelligenceError:
+            raise
         except Exception:
             raise SourceError("CONTRACT_INVALID", delivery="returned", bytes_received=len(body),
                               details={"reason": "HTML_PARSE_FAILED"}) from None
         main = _clean("".join(parser.main))
         content = main or _clean("".join(parser.all))
+        if manifest_version is not None:
+            content, structure = parser.projection(main_only=bool(main))
+            metadata["_parse_structure"] = structure
         dates = _date_fields(parser.jsonld)
         published = parser.meta.get("article:published_time") or dates.get("datePublished") or parser.meta.get("datepublished")
         updated = parser.meta.get("article:modified_time") or dates.get("dateModified") or parser.meta.get("datemodified")
@@ -207,7 +216,7 @@ def _extract_response_inner(response: HttpResponse, *, original_url: str | None 
 
 
 def extract_response(response: HttpResponse, *, original_url: str | None = None,
-                     trusted_filing: bool = False, policy=None, deadline=None) -> FetchResult:
+                     trusted_filing: bool = False, policy=None, deadline=None, resource_pool=None) -> FetchResult:
     """Preserve legacy normalization while isolating expensive/untrusted parsers.
 
     Successful default extraction keeps its existing deterministic recipe, so
@@ -220,7 +229,7 @@ def extract_response(response: HttpResponse, *, original_url: str | None = None,
         return replay_partial(response, original_url=original_url, policy=selected,
                               receipt=response.parse_failure_receipt)
     media = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if policy is not None or media == "application/pdf" or response.body.startswith(b"%PDF-"):
+    if resource_pool is not None or policy is not None or media == "application/pdf" or response.body.startswith(b"%PDF-"):
         return isolated_extract(response, original_url=original_url, trusted_filing=trusted_filing,
-                                policy=selected, deadline=deadline)
+                                policy=selected, deadline=deadline, resource_pool=resource_pool)
     return _extract_response_inner(response, original_url=original_url, trusted_filing=trusted_filing)

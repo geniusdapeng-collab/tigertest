@@ -13,7 +13,7 @@ import os
 import resource
 import sys
 
-from trading_system.intelligence.contracts import canonical
+from trading_system.intelligence.contracts import canonical, IntelligenceError
 from trading_system.intelligence.parse_limits import ParsePolicy
 from trading_system.intelligence.transport import HttpResponse
 
@@ -51,7 +51,7 @@ def _run(phase_descriptor):
         response = HttpResponse(header["url"], header["status"], header["headers"], body,
             header["received_at"], header["transport_sha256"], header["request_count"])
         result = _extract_response_inner(response, original_url=header["original_url"],
-            trusted_filing=header["trusted_filing"], max_pages=policy.max_pages, max_text_bytes=policy.max_text_bytes)
+            trusted_filing=header["trusted_filing"], max_pages=policy.max_pages, max_text_bytes=policy.max_text_bytes, manifest_version=policy.manifest_version)
         _phase("builtin_complete", phase_descriptor)
         if result.metadata.get("extraction_error") in {"PARSER_PAGE_LIMIT", "PARSER_TEXT_LIMIT"}:
             value = {"error": result.metadata["extraction_error"]}
@@ -61,9 +61,13 @@ def _run(phase_descriptor):
                 _phase("scrapling_started", phase_descriptor)
                 result = apply_scrapling(result, policy)
                 _phase("scrapling_complete", phase_descriptor)
+            from trading_system.intelligence.parse_manifest import attach_manifest
+            result = attach_manifest(result, policy)
             value = {k: v for k, v in asdict(result).items() if k != "raw_bytes"}
             if len(result.text.encode()) > policy.max_text_bytes:
                 value = {"error": "PARSER_TEXT_LIMIT"}
+    except IntelligenceError as error:
+        value = {"error": error.code}
     except MemoryError:
         value = {"error": "PARSER_MEMORY_EXCEEDED"}
     except ImportError:
