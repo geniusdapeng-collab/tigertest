@@ -143,7 +143,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     risk_evidence_contract: str = RISK_EVIDENCE_CONTRACT,
                     authoritative_paper: bool = True, intelligence_input: dict | None = None,
                     runtime_input: dict | None = None,
-                    response_observation_contract: str | None = None) -> dict:
+                    response_observation_contract: str | None = None,
+                    model_counter_id: str | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
@@ -190,6 +191,12 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
     if required:
         if authoritative_paper:
             value["paper_ledger_contract"] = PAPER_LEDGER_CONTRACT
+        from .llm.model_budget import (COUNTER_ID, LEGACY_COUNTER_ID, TokenBudgetError,
+                                       budget_contract)
+        try:
+            counter = budget_contract(counter_id=COUNTER_ID if model_counter_id is None else model_counter_id)
+        except TokenBudgetError as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Unknown model input counter contract") from exc
         from yaml import YAMLError
         from .llm.scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config, validate_coverage
         path = scene_policy_path or SOURCE_ROOT / SCENE_POLICY_RELATIVE
@@ -207,13 +214,19 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "thinking_policy": thinking_policy,
             "context_tokens": 1_048_576,
             "max_output_tokens": 393_216,
-            "tokenizer_sha256": "89085f12ef79460ac5f66d1119325ddfc694b4ab209d80bbd81d35f081dc9614",
+            "tokenizer_sha256": counter["tokenizer_sha256"],
             "search_mode": "provider_native_search",
             "release_binding": "official-current-alias-mapping",
             "model_mapping_url": "https://api-docs.deepseek.com/quick_start/pricing/",
             "search_documentation_url": "https://api-docs.deepseek.com/guides/search/",
             "model_mapping_observed_date": "2026-10-26",
         }
+        if counter["counter_id"] != LEGACY_COUNTER_ID:
+            from .llm.provider_prompt import ENCODER_SHA256, SOURCE_REVISION, SOURCE_URL
+            value["model_contract"].update(counter_id=counter["counter_id"],
+                registry_version=counter["registry_version"], budget_policy_version=counter["policy_version"],
+                prompt_formatter_sha256=ENCODER_SHA256,
+                prompt_formatter_source_revision=SOURCE_REVISION, prompt_formatter_source_url=SOURCE_URL)
         if source_content_contract == SOURCE_CONTENT_CONTRACT:
             value["model_contract"]["source_content_contract"] = source_content_contract
         elif source_content_contract != LEGACY_SOURCE_CONTENT_CONTRACT:
@@ -673,6 +686,14 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     if request["profile"] == INTELLIGENCE_PROFILE:
         from .intelligence_workflow import validate_input_packet
         intelligence_input = validate_input_packet(read_json(run, "intelligence-input.json"))
+    model_counter_id = None
+    if request["profile"] in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
+        from .llm.model_budget import TokenBudgetError, frozen_budget_contract
+        try:
+            model_counter_id = frozen_budget_contract(read_bytes(
+                run, "source/trading_system/llm/model_budget.py"))["counter_id"]
+        except TokenBudgetError as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Frozen model input counter is unknown") from exc
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
                                       event_contract=event_contract,
                                       risk_evidence_contract=RISK_EVIDENCE_CONTRACT
@@ -682,6 +703,7 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
                                       intelligence_input=intelligence_input,
                                       runtime_input=runtime_input,
+                                      model_counter_id=model_counter_id,
                                       response_observation_contract=source_observation_contract(
                                           source["files"], request["profile"]))
     if policy != strict_json(json_bytes(expected_policy)):

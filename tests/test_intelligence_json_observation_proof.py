@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,8 @@ from trading_system.redline.model_diagnostics import RequiredModelUnavailable
 
 
 def make_execution(tmp_path, *, contract=CONTRACT):
+    from trading_system.agent_runtime import policy_manifest, INTELLIGENCE_PROFILE
+    from trading_system.llm import model_budget
     root = tmp_path / "run-TEST_FIXTURE-native-observation"
     work = root / "work"
     work.mkdir(parents=True)
@@ -37,8 +40,10 @@ def make_execution(tmp_path, *, contract=CONTRACT):
             search_source_names=("deepseek_search",)), store=EvidenceStore(root, root.name),
         admitted_at=datetime(2026, 10, 20, 22, tzinfo=timezone.utc),
         response_observation_contract=contract)
-    policy = {"stages": daily_stage_contract(True, intelligence=True),
-        "model_contract": {"response_observation_contract": contract}}
+    policy = policy_manifest(INTELLIGENCE_PROFILE, authoritative_paper=False,
+        response_observation_contract=contract)
+    atomic_bytes(root, "source/trading_system/llm/model_budget.py",
+        Path(model_budget.__file__).read_bytes(), exclusive=True)
     atomic_json(root, "policy.json", policy)
     admission = {"clock": {"run_date": "2026-10-20", "market_timezone": "America/New_York",
         "admitted_at_utc": execution.admitted_at.isoformat()}}

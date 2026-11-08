@@ -146,6 +146,7 @@ def test_public_business_request_never_accepts_runtime_configuration(field):
 
 
 def test_default_policy_bytes_and_original_admission_shape_remain_historical(tmp_path, monkeypatch):
+    from trading_system.llm.model_budget import LEGACY_COUNTER_ID
     # Captured independently from the pre-extension frozen 1153593 source.
     legacy_hashes = {
         "us-public-active-paper-v1": "477a5c2c4e43560401198c4eb87927366a30ee80228f81f9327e8f9e1ae0d93e",
@@ -157,7 +158,8 @@ def test_default_policy_bytes_and_original_admission_shape_remain_historical(tmp
     for profile, expected in legacy_hashes.items():
         # This fixture pins the historical policy, before the separately
         # versioned native-JSON observation contract for new intelligence runs.
-        assert digest(json_bytes(runtime.policy_manifest(profile, response_observation_contract=""))) == expected
+        assert digest(json_bytes(runtime.policy_manifest(profile, response_observation_contract="",
+            model_counter_id=LEGACY_COUNTER_ID))) == expected
     source = fixture_source(tmp_path / "source")
     state = tmp_path / "state"
     accepted = runner.submit(state, REQUEST, source=source)

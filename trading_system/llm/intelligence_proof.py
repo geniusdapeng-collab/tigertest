@@ -49,8 +49,8 @@ from ..tech_chain.universe import TECH_SUBCHAINS, CHAIN_TOPICS, SECTOR_TOPICS
 from . import intelligence_required as semantic
 from .deepseek_required import (MODEL, RELEASE, SEARCH_MODE as NATIVE_SEARCH_MODE,
     DeepSeekRequiredClient, sanitize_model_text, sanitize_model_value, sanitize_url, validate_schema)
-from .model_budget import (CONTEXT_TOKENS, POLICY_VERSION, REGISTRY_VERSION,
-    TOKENIZER_SHA256, TokenBudgetError, chat_request_core, plan_request)
+from .model_budget import (CONTEXT_TOKENS, TokenBudgetError, budget_contract,
+    frozen_budget_contract, chat_request_core, plan_request)
 from .required_schemas import (sentiment_schema, risk_schema, narrative_schema,
                                decision_schema, validate_target_assessments)
 from .required_proof import (_hash, _plain, _same_watch_facts, _verify_search_request,
@@ -134,6 +134,8 @@ def _source_parameters(spec, operation, parameters):
 class _Replay:
     def __init__(self, run, admission, scene_policy_path, *, _partial=False):
         self.run, self.admission, self.scene_policy_path = Path(run), admission, scene_policy_path
+        self.budget_contract = frozen_budget_contract(read_bytes(
+            self.run, "source/trading_system/llm/model_budget.py"))
         clock = admission["clock"]
         self.cutoff = datetime.fromisoformat(clock["admitted_at_utc"])
         run_date = clock["run_date"]
@@ -143,6 +145,20 @@ class _Replay:
             _fail()
         self.assessment = {key: clock[key] for key in ("run_date", "market_timezone")}
         self.policy = read_json(self.run, "policy.json") if (self.run / "policy.json").exists() else None
+        if self.policy is not None:
+            counter = self.policy.get("model_contract", {})
+            expected_counter = self.budget_contract
+            if counter.get("tokenizer_sha256") != expected_counter["tokenizer_sha256"]:
+                _fail()
+            from .model_budget import LEGACY_COUNTER_ID
+            version_fields = {"counter_id": expected_counter["counter_id"],
+                "registry_version": expected_counter["registry_version"],
+                "budget_policy_version": expected_counter["policy_version"]}
+            if expected_counter["counter_id"] == LEGACY_COUNTER_ID:
+                if any(key in counter for key in version_fields):
+                    _fail()
+            elif any(counter.get(key) != value for key, value in version_fields.items()):
+                _fail()
         self.authoritative_paper = (self.policy is not None and
             self.policy.get("paper_ledger_contract") == "tiger.paper-execution.v1")
         if self.policy is not None and self.policy.get("paper_ledger_contract") not in {None, "tiger.paper-execution.v1"}:
@@ -202,7 +218,8 @@ class _Replay:
                 sort_keys=True, separators=(",", ":"), allow_nan=False)
             return plan_request(chat_request_core(system=system, user=user, schema=schema,
                 schema_hint={}, thinking_mode=mode, effort=effort, temperature=0.2,
-                **({"clean_protocol": args["clean_protocol"]} if "clean_protocol" in args else {})))
+                **({"clean_protocol": args["clean_protocol"]} if "clean_protocol" in args else {})),
+                counter_id=self.budget_contract["counter_id"])
         return plan
 
     def chat(self, stage, call, request, proof, payload, schema):
@@ -217,8 +234,8 @@ class _Replay:
         mode, effort = thinking["type"], thinking.get("effort")
         metadata = {"thinking_mode": mode, "reasoning_effort": effort,
             "input_token_estimate": estimate, "output_ceiling": ceiling,
-            "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
-            "tokenizer_sha256": TOKENIZER_SHA256}
+            **{key: self.budget_contract[key] for key in (
+                "policy_version", "registry_version", "tokenizer_sha256")}}
         body = request["request"]
         observed = bool(self.observation_contract)
         tool_protocol = "tools" in expected_body
@@ -1435,7 +1452,7 @@ def _partial_events(run, contract):
     return events
 
 
-def _partial_chat_request(request, stage, scene_policy_path):
+def _partial_chat_request(request, stage, scene_policy_path, *, counter_contract=None):
     """Check the journal's entire wire and legal window, without business acceptance."""
     from .json_observation import SUPPORTED_CONTRACTS, TOOL_CONTRACT, contract_schemas
 
@@ -1465,11 +1482,13 @@ def _partial_chat_request(request, stage, scene_policy_path):
             _fail(stage)
     elif observation_contract == TOOL_CONTRACT and any(key in body for key in ("tools", "tool_choice")):
         _fail(stage)
-    rebuilt, estimate, ceiling = plan_request({key: value for key, value in body.items() if key != "max_tokens"})
+    selected = budget_contract() if counter_contract is None else counter_contract
+    rebuilt, estimate, ceiling = plan_request(
+        {key: value for key, value in body.items() if key != "max_tokens"},
+        counter_id=selected["counter_id"])
     metadata = {"thinking_mode": thinking["type"], "reasoning_effort": thinking.get("effort"),
         "input_token_estimate": estimate, "output_ceiling": ceiling,
-        "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
-        "tokenizer_sha256": TOKENIZER_SHA256}
+        **{key: selected[key] for key in ("policy_version", "registry_version", "tokenizer_sha256")}}
     if (request["schema"] != schemas["request"]
             or type(request["call_id"]) is not str or re.fullmatch(r"[0-9a-f]{32}", request["call_id"]) is None
             or request["stage"] != stage or request["provider"] != "deepseek"
@@ -1509,7 +1528,8 @@ def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None)
                 if stage not in REQUIRED_MODEL_STAGES or request["call_id"] in replay.call_ids:
                     _fail(stage)
                 replay.call_ids.add(request["call_id"])
-                metadata = _partial_chat_request(request, stage, scene_policy_path)
+                metadata = _partial_chat_request(request, stage, scene_policy_path,
+                    counter_contract=replay.budget_contract)
                 if "error_ref" in call:
                     observation = proof.get("response_observation")
                     if observation is None:

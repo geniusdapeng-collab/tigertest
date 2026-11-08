@@ -152,7 +152,8 @@ def complete_tool_json(client, *, system, user, schema_hint, max_tokens,
     from .deepseek_required import (BASE_URL, MODEL, RELEASE, SEARCH_MODE, _fail, _hash)
     from .json_observation import (TOOL_CONTRACT, contract_schemas, staged_diagnostic,
                                    validate_reference_observation, validate_transport)
-    from .model_budget import (POLICY_VERSION, REGISTRY_VERSION, TOKENIZER_SHA256, TokenBudgetError)
+    from .model_budget import (POLICY_VERSION, REGISTRY_VERSION, TOKENIZER_SHA256,
+                               TokenBudgetError, verify_request_budget)
     from .scene_policy import KERNEL_SCENE_MAP
 
     if (client._response_observation_contract != TOOL_CONTRACT or client._stage() != "clean.llm_semantic"
@@ -168,6 +169,14 @@ def complete_tool_json(client, *, system, user, schema_hint, max_tokens,
         _fail(error.code)
     schemas = contract_schemas(TOOL_CONTRACT)
     stage, call_id = client._stage(), uuid.uuid4().hex
+    identity_hook = getattr(client.execution, "model_call_id", None)
+    if identity_hook is not None:
+        if not callable(identity_hook):
+            _fail("TRUSTED_CONFIGURATION_MISMATCH")
+        call_id = identity_hook(call_id)
+        if (not isinstance(call_id, str) or len(call_id) != 32
+                or any(character not in "0123456789abcdef" for character in call_id)):
+            _fail("TRUSTED_CONFIGURATION_MISMATCH")
     inputs = {"schema": schemas["request"], "response_observation_contract": TOOL_CONTRACT,
         "clean_protocol": deepcopy(clean_protocol), "call_id": call_id, "stage": stage,
         "provider": "deepseek", "method": "POST", "endpoint": BASE_URL + "/beta/chat/completions",
@@ -224,6 +233,12 @@ def complete_tool_json(client, *, system, user, schema_hint, max_tokens,
         for ordinal in (1, 2):
             client._last_chat_transport = None
             try:
+                try:
+                    verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
+                        input_tokens=input_tokens, output_ceiling=ceiling,
+                        registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
+                except TokenBudgetError as error:
+                    _fail(error.code)
                 native, body_hash = client._post_json("/beta/chat/completions", request)
                 if native.get("model") != MODEL:
                     _fail("RESPONSE_MODEL_MISMATCH")
