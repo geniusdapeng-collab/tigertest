@@ -128,9 +128,20 @@ class HostRequestPolicy:
                 (now + retry_after, self.tenant, token["host"], token["owner"]))
 
 
-def bind_host_policy(adapters, policy):
+def bind_host_policy(adapters, policy, *, preserve_existing=False):
+    if preserve_existing:
+        existing = [getattr(getattr(adapter, "transport", None), "request_policy", None)
+                    for adapter in adapters.values()]
+        existing = [value for value in existing if value is not None]
+        # A trusted custom policy may impose restrictions beyond this ledger.
+        # Never silently replace it to enable parallel dispatch.
+        if any(not isinstance(value, HostRequestPolicy) or value.path != policy.path
+                or value.tenant != policy.tenant for value in existing):
+            raise IntelligenceError("POLICY_DENIED", "Parallel sources require one compatible durable host ledger",
+                details={"reason": "SOURCE_HOST_POLICY_CONFLICT"})
     for adapter in adapters.values():
         transport = getattr(adapter, "transport", None)
         if transport is not None and hasattr(transport, "request_policy"):
-            transport.request_policy = policy
+            if not preserve_existing or transport.request_policy is None:
+                transport.request_policy = policy
     return adapters

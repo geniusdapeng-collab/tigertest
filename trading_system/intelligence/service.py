@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import hashlib
 import json
 import re
+import threading
 import time
 from urllib.parse import urlsplit
 
-from .adapters import DeepSeekBridge
+from .adapters import DeepSeekBridge, isolate_source_transports
 from .archive import Archive
 from .contracts import (DOCUMENT_SCHEMA, FetchResult, IntelligenceError, SearchRequest,
                         SearchResult, SourceError, aware, canonical, canonical_url,
@@ -38,27 +40,45 @@ def _blob_refs(value):
 
 class IntelligenceService:
     def __init__(self, archive_root, registry=None, adapters=None, *, tenant="public",
-                 clock=utc_now, observe_io=None, readonly=False, sleeper=time.sleep):
+                 clock=utc_now, observe_io=None, readonly=False, sleeper=time.sleep, source_workers=1,
+                 observer_factory=None):
+        if type(source_workers) is not int or not 1 <= source_workers <= 4:
+            raise IntelligenceError("CONTRACT_INVALID", "Source workers must be an integer from one to four")
+        if observer_factory is not None and not callable(observer_factory):
+            raise IntelligenceError("CONTRACT_INVALID", "Source observer factory must be callable")
+        if source_workers > 1 and observe_io is not None and observer_factory is None:
+            raise IntelligenceError("POLICY_DENIED", "Concurrent sources require independent evidence observers",
+                details={"reason": "SOURCE_OBSERVER_FACTORY_REQUIRED"})
         self.registry = registry or default_registry()
         self.adapters = adapters if adapters is not None else ({} if readonly else self.registry.build_adapters())
+        self.source_workers = source_workers
+        if source_workers > 1 and not readonly:
+            self.adapters = isolate_source_transports(self.adapters)
         self.archive = Archive(archive_root, tenant=tenant, clock=clock, readonly=readonly)
         self.clock, self.sleeper = clock, sleeper
         self.observe_io = observe_io or (lambda method, inputs, invoke: invoke())
+        self.observer_factory = observer_factory
+        self._observers = threading.local()
         self._next_source = {}
         self._deadlines = {}
         self.readonly = readonly
+        self._source_guard = threading.RLock()
+        self._source_locks = {}
+        self._source_runtime = {}
+        if source_workers > 1 and not readonly:
+            self.use_host_limits(archive_root, preserve_existing=True)
 
     def _write(self):
         if self.readonly:
             raise IntelligenceError("ACCESS_DENIED", "Acquisition service is read only")
 
-    def use_host_limits(self, root):
+    def use_host_limits(self, root, *, preserve_existing=False):
         self._write()
         from .host_limits import HostRequestPolicy, bind_host_policy
         exemptions = [spec.options["public_data_contract"] for spec in self.registry.sources.values()
                       if spec.enabled and "public_data_contract" in spec.options]
         bind_host_policy(self.adapters, HostRequestPolicy(root, tenant=self.archive.tenant,
-            respect_robots=True, public_api_exemptions=exemptions))
+            respect_robots=True, public_api_exemptions=exemptions), preserve_existing=preserve_existing)
         return self
 
     @staticmethod
@@ -239,6 +259,22 @@ class IntelligenceService:
             "normalization_kind": "deepseek_bridge" if isinstance(self.adapters[source_id], DeepSeekBridge) else "registered_adapter"}, secrets)
 
     def _call(self, job_id, source_id, operation, parameters, *, ordinal=0):
+        if self.source_workers == 1:
+            return self._call_serial(job_id, source_id, operation, parameters, ordinal=ordinal)
+        adapter = self.adapters.get(source_id)
+        transport = getattr(adapter, "transport", None)
+        resource = getattr(transport, "session", transport) if transport is not None else adapter
+        with self._source_guard:
+            lock = self._source_locks.setdefault(id(resource), threading.RLock())
+        remaining = self._deadline(job_id) - time.monotonic()
+        if not lock.acquire(timeout=max(0, remaining)):
+            raise IntelligenceError("BUDGET_EXHAUSTED", "Source admission deadline exhausted")
+        try:
+            return self._call_serial(job_id, source_id, operation, parameters, ordinal=ordinal)
+        finally:
+            lock.release()
+
+    def _call_serial(self, job_id, source_id, operation, parameters, *, ordinal=0):
         self._write()
         plan = self.archive.plan(job_id)
         if self._acquisition_mode(plan) == "snapshot_only":
@@ -291,13 +327,45 @@ class IntelligenceService:
         status = self.status(job_id)
         remaining = plan["limits"]["requests"] - status["usage"]["requests"]
         remaining_bytes = plan["limits"]["bytes"] - status["usage"]["bytes"]
+        if self.source_workers > 1 and not isinstance(adapter, DeepSeekBridge):
+            # Availability is decided atomically below. A pessimistic in-flight
+            # reservation is temporary contention, not exhaustion of the job.
+            remaining, remaining_bytes = plan["limits"]["requests"], plan["limits"]["bytes"]
         if remaining_bytes <= 0:
             raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition byte quota exhausted")
         reserved = 2 if isinstance(adapter, DeepSeekBridge) and operation == "search" else min(6, remaining)
         if reserved < 1 or isinstance(adapter, DeepSeekBridge) and remaining < reserved:
             raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition request quota exhausted")
+        observe_io = self.observe_io
+        if self.source_workers > 1 and self.observer_factory is not None:
+            if not hasattr(self._observers, "by_source"):
+                self._observers.by_source = {}
+            if source_id not in self._observers.by_source:
+                observer = self.observer_factory(source_id)
+                if not callable(observer):
+                    raise IntelligenceError("POLICY_DENIED", "Source observer factory did not return an observer",
+                        details={"reason": "SOURCE_OBSERVER_INVALID"})
+                self._observers.by_source[source_id] = observer
+            observe_io = self._observers.by_source[source_id]
         request = {"parameters": parameters, "reserved_requests": reserved}
-        attempt_id = self.archive.begin_attempt(job_id, source_id, operation, request, ordinal=ordinal)
+        if self.source_workers > 1:
+            transport = getattr(adapter, "transport", None)
+            requested_bytes = min(remaining_bytes, getattr(transport, "max_bytes", remaining_bytes))
+            while True:
+                if time.monotonic() >= deadline:
+                    raise IntelligenceError("BUDGET_EXHAUSTED", "Source reservation deadline exhausted")
+                try:
+                    attempt_id = self.archive.begin_attempt(job_id, source_id, operation, request,
+                        ordinal=ordinal, reserve_bytes=requested_bytes)
+                    break
+                except IntelligenceError as error:
+                    if error.code != "RESOURCE_BUSY":
+                        raise
+                    self.sleeper(min(.02, max(0, deadline - time.monotonic())))
+            admitted = next(row["request"] for row in self.archive.attempts(job_id) if row["attempt_id"] == attempt_id)
+            reserved, remaining_bytes = admitted["reserved_requests"], admitted["reserved_bytes"]
+        else:
+            attempt_id = self.archive.begin_attempt(job_id, source_id, operation, request, ordinal=ordinal)
         inputs = {"schema": "tiger.intelligence-source-request/v1", "job_id": job_id,
             "attempt_id": attempt_id, "source_id": source_id, "source_version": spec.version,
             "operation": operation, "parameters": parameters, "request_sha256": digest(parameters),
@@ -325,6 +393,14 @@ class IntelligenceService:
             transport.minimum_interval_seconds = spec.minimum_interval_seconds
             transport.robots_required = spec.kind not in {"search", "fred", "sec_directory", "sec_submissions"} or operation == "fetch"
         native_meter = None
+        entered = False
+        if self.source_workers > 1:
+            with self._source_guard:
+                runtime = self._source_runtime.get(job_id)
+                if runtime is not None:
+                    runtime["active_source_operations"] += 1
+                    runtime["peak_source_operations"] = max(runtime["peak_source_operations"], runtime["active_source_operations"])
+                    entered = True
         def invoke():
             nonlocal native_meter
             from .parse_limits import capture_parse_runtime
@@ -355,9 +431,9 @@ class IntelligenceService:
                 # call before appending this projection; nested handles would
                 # complete out of order in the existing execution journal.
                 observation = invoke()
-                observation = self.observe_io("intelligence.source.request", inputs, lambda: observation)
+                observation = observe_io("intelligence.source.request", inputs, lambda: observation)
             else:
-                observation = self.observe_io("intelligence.source.request", inputs, invoke)
+                observation = observe_io("intelligence.source.request", inputs, invoke)
         except SourceError as error:
             if native_meter and (native_meter.get("transport_observed") or native_meter.get("limit_reason")):
                 error.bytes_received = native_meter["bytes_received"]
@@ -393,6 +469,9 @@ class IntelligenceService:
                 "usage": {"state": "unknown", "requires_reconciliation": True}})
             raise
         finally:
+            if entered:
+                with self._source_guard:
+                    self._source_runtime[job_id]["active_source_operations"] -= 1
             self._next_source[source_id] = time.monotonic() + spec.minimum_interval_seconds
             if transport is not None and previous is not None:
                 (transport.max_bytes, transport.deadline, transport.max_hops,
@@ -517,11 +596,16 @@ class IntelligenceService:
         return request
 
     def _mark(self, job_id, cells, *, status, reason, attempt_refs=(), document_ids=()):
-        for cell_id in cells:
-            self.archive.gap(job_id, {"cell_id": cell_id, "status": status, "reason": reason,
-                "attempt_refs": list(attempt_refs), "document_ids": list(document_ids),
-                **({"diagnostic_kind": "source"} if reason not in {"SEMANTIC_ASSESSMENT_REQUIRED",
-                    "HOLDINGS_NOT_CONNECTED", "HOLDING_OUTSIDE_REVIEWED_ROSTER", "PENDING_OUTSIDE_REVIEWED_ROSTER"} else {})})
+        with self._source_guard if self.source_workers > 1 else nullcontext():
+            latest = {row["cell_id"]: row for row in self.status(job_id)["gaps"]} if (
+                self.source_workers > 1 and reason == "SEMANTIC_ASSESSMENT_REQUIRED") else {}
+            for cell_id in cells:
+                if latest.get(cell_id, {}).get("status") == "unverifiable":
+                    continue
+                self.archive.gap(job_id, {"cell_id": cell_id, "status": status, "reason": reason,
+                    "attempt_refs": list(attempt_refs), "document_ids": list(document_ids),
+                    **({"diagnostic_kind": "source"} if reason not in {"SEMANTIC_ASSESSMENT_REQUIRED",
+                        "HOLDINGS_NOT_CONNECTED", "HOLDING_OUTSIDE_REVIEWED_ROSTER", "PENDING_OUTSIDE_REVIEWED_ROSTER"} else {})})
 
     def _fetch(self, job_id, discovery_source, hit, discovery, index, search_attempt, request, cell_ids):
         plan = self.archive.plan(job_id)
@@ -665,24 +749,11 @@ class IntelligenceService:
         if self._acquisition_mode(plan) == "snapshot_only":
             return self._collect_snapshot(job_id, plan)
         self.archive.set_state(job_id, "running")
-        for entry in plan["query_plan"]:
-            request_hash = digest(entry["request"])
-            completed = [row for row in self.archive.events(job_id, kind="query_completed")
-                         if row["payload"].get("source_id") == entry["source_id"]
-                         and row["payload"].get("plan_request_hash") == request_hash]
-            if completed:
-                continue
-            request = _parameters(entry["request"])
-            request = replace(request, context={**request.context, "plan_request_hash": request_hash})
-            try:
-                self._query(job_id, entry["source_id"], request, entry["cell_ids"])
-                self.archive.append(job_id, "query_completed", {"source_id": entry["source_id"],
-                    "plan_request_hash": request_hash})
-            except IntelligenceError as error:
-                if error.code not in {"BUDGET_EXHAUSTED", "CONTRACT_INVALID", "SOURCE_AUTH_REQUIRED", "SOURCE_IDENTITY_REQUIRED"}:
-                    raise
-                self._mark(job_id, entry["cell_ids"], status="unverifiable", reason=error.code)
-                if error.code == "BUDGET_EXHAUSTED":
+        if self.source_workers > 1:
+            self._collect_concurrent(job_id, plan)
+        else:
+            for entry in plan["query_plan"]:
+                if not self._collect_entry(job_id, entry):
                     break
         for cell in plan["coverage_cells"]:
             if cell["material_type"] == "connection":
@@ -691,6 +762,77 @@ class IntelligenceService:
                     reason=cell.get("connection_reason", "HOLDINGS_NOT_CONNECTED"))
         self.archive.set_state(job_id, "partial")
         return self._acquired(job_id)
+
+    def _collect_entry(self, job_id, entry):
+        request_hash = digest(entry["request"])
+        completed = [row for row in self.archive.events(job_id, kind="query_completed")
+                     if row["payload"].get("source_id") == entry["source_id"]
+                     and row["payload"].get("plan_request_hash") == request_hash]
+        if completed:
+            return True
+        request = _parameters(entry["request"])
+        request = replace(request, context={**request.context, "plan_request_hash": request_hash})
+        try:
+            self._query(job_id, entry["source_id"], request, entry["cell_ids"])
+            self.archive.append(job_id, "query_completed", {"source_id": entry["source_id"],
+                "plan_request_hash": request_hash})
+        except IntelligenceError as error:
+            if error.code not in {"BUDGET_EXHAUSTED", "CONTRACT_INVALID", "SOURCE_AUTH_REQUIRED", "SOURCE_IDENTITY_REQUIRED"}:
+                raise
+            self._mark(job_id, entry["cell_ids"], status="unverifiable", reason=error.code)
+            if error.code == "BUDGET_EXHAUSTED":
+                return False
+        return True
+
+    def _collect_concurrent(self, job_id, plan):
+        """Parallel public sources, preserving source order and dependency barriers."""
+        workers = min(self.source_workers, plan["limits"]["concurrency"])
+        runtime = {"schema": "tiger.source-runtime/v1", "configured_workers": self.source_workers,
+            "admitted_workers": workers, "peak_source_operations": 0, "active_source_operations": 0,
+            "paid_source_policy": "serial_with_reconciliation_barrier", "host_policy": "durable_per_http_host"}
+        with self._source_guard:
+            if job_id in self._source_runtime:
+                raise IntelligenceError("RESOURCE_BUSY", "This service is already collecting the job")
+            self._source_runtime[job_id] = runtime
+        self.archive.append(job_id, "source_runtime_started", dict(runtime))
+        def group(entries):
+            for entry in entries:
+                if not self._collect_entry(job_id, entry):
+                    return False
+            return True
+        def wave(entries):
+            groups = {}
+            for entry in entries:
+                groups.setdefault(entry["source_id"], []).append(entry)
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tiger-source") as pool:
+                futures = [pool.submit(group, rows) for rows in groups.values()]
+                outcomes, errors = [], []
+                for future in futures:
+                    try:
+                        outcomes.append(future.result())
+                    except BaseException as error:
+                        errors.append(error)
+                if errors:
+                    raise errors[0]
+                return all(outcomes)
+        pending = []
+        try:
+            for entry in plan["query_plan"]:
+                spec = self.registry.get(entry["source_id"])
+                if spec.kind in {"search", "sec_directory"} or spec.credential_env:
+                    if pending and not wave(pending):
+                        return
+                    pending = []
+                    if not self._collect_entry(job_id, entry):
+                        return
+                else:
+                    pending.append(entry)
+            if pending:
+                wave(pending)
+        finally:
+            with self._source_guard:
+                receipt = dict(self._source_runtime.pop(job_id))
+            self.archive.append(job_id, "source_runtime_finished", receipt)
 
     def _snapshot_documents(self, job_id, plan):
         """Only completed, admitted raw imports may enter a no-dispatch job."""

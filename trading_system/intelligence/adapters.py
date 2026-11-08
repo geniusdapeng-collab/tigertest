@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import copy
 from datetime import date, timedelta
 from urllib.parse import urlsplit
 
@@ -10,6 +11,21 @@ from .contracts import (FetchResult, SearchRequest, SearchResult, SourceError,
                         canonical, credential_free_url, safe_value, source_time)
 from .extract import extract_response
 from .transport import HttpTransport
+
+
+def isolate_source_transports(adapters):
+    """Copy adapter handles while isolating supported mutable HTTP transports."""
+    result = {}
+    for source_id, original in adapters.items():
+        transport = getattr(original, "transport", None)
+        forked = transport.fork() if isinstance(transport, HttpTransport) else None
+        if forked is None:
+            result[source_id] = original
+        else:
+            adapter = copy(original)
+            adapter.transport = forked
+            result[source_id] = adapter
+    return result
 
 
 def _hit(row, *, url, title, snippet, text="", published=None, text_kind="snippet", metadata=None):

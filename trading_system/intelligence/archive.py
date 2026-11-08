@@ -242,11 +242,27 @@ class Archive:
         received = sum(row.get("result", {}).get("bytes_received", 0) for row in attempts)
         unknown = sum(row.get("result", {}).get("usage", {}).get("requires_reconciliation", False) for row in attempts)
         bundle = connection.execute("SELECT bundle_id,manifest_sha256 FROM bundles WHERE job_id=? AND tenant=?", (job_id, self.tenant)).fetchone()
+        reserved = [row for row in attempts if "reserved_bytes" in row["request"]]
+        reservation_usage = {}
+        if reserved:
+            held = [row for row in reserved if row["status"] in {"inflight", "unknown"}]
+            committed = [row for row in attempts if not ("reserved_bytes" in row["request"]
+                and row["status"] in {"inflight", "unknown"})]
+            reservation_usage = {"reserved_bytes": sum(row["request"]["reserved_bytes"] for row in held),
+                "committed_bytes": sum(row.get("result", {}).get("bytes_received", 0) for row in committed),
+                "reserved_requests": sum(row["request"]["reserved_requests"] for row in held),
+                "committed_requests": sum(row.get("result", {}).get("request_count",
+                    row["request"].get("reserved_requests", 1)) for row in committed)}
+        runtime = connection.execute("SELECT payload_json FROM events WHERE tenant=? AND job_id=? "
+            "AND kind='source_runtime_finished' ORDER BY sequence DESC LIMIT 1", (self.tenant, job_id)).fetchone()
+        runtime = json.loads(runtime[0]) if runtime else None
         return {"job_id": job_id, "run_id": job["run_id"], "state": job["state"], "revision": job["revision"], "created_at": job["created_at"],
                 "plan_hash": job["plan_hash"], "gaps": gaps, "attempts": attempts,
                 "inflight_attempts": [r["attempt_id"] for r in attempts if r["status"] == "inflight"],
                 "usage": {"requests": requests, "fetches": fetches, "bytes": received,
-                          "unreconciled_attempts": unknown}, "effective_concurrency": 1,
+                          "unreconciled_attempts": unknown, **reservation_usage},
+                "effective_concurrency": runtime["peak_source_operations"] if runtime else 1,
+                **({"source_runtime": runtime} if runtime else {}),
                 "bundle": dict(bundle) if bundle else None}
 
     def status(self, job_id):
@@ -261,13 +277,32 @@ class Archive:
             connection.execute("UPDATE jobs SET state=? WHERE job_id=? AND tenant=?", (state, job_id, self.tenant))
             self._event(connection, job_id, "job_state", {"state": state})
 
-    def begin_attempt(self, job_id, source_id, operation, request, *, ordinal=0):
+    def begin_attempt(self, job_id, source_id, operation, request, *, ordinal=0, reserve_bytes=None):
         if operation not in {"search", "fetch"}:
             raise IntelligenceError("CONTRACT_INVALID", "Unsupported acquisition operation")
+        if "reserved_bytes" in request:
+            raise IntelligenceError("CONTRACT_INVALID", "Byte reservations are allocated only by the archive")
         with self.transaction() as connection:
             job = self._ensure_open(connection, job_id)
             status = self._status(connection, job_id)
             limits = json.loads(job["plan_json"])["limits"]
+            if reserve_bytes is not None:
+                if (type(reserve_bytes) is not int or reserve_bytes <= 0
+                        or type(request.get("reserved_requests")) is not int or request["reserved_requests"] <= 0):
+                    raise IntelligenceError("CONTRACT_INVALID", "Invalid source resource reservation")
+                if any(row["status"] in {"inflight", "unknown"} and "reserved_bytes" not in row["request"]
+                        for row in status["attempts"]):
+                    raise IntelligenceError("RECONCILIATION_REQUIRED", "Legacy dispatch has no byte reservation")
+                available_requests = limits["requests"] - status["usage"].get("committed_requests", status["usage"]["requests"]) - status["usage"].get("reserved_requests", 0)
+                available_bytes = limits["bytes"] - status["usage"].get("committed_bytes", status["usage"]["bytes"]) - status["usage"].get("reserved_bytes", 0)
+                if available_requests <= 0 or available_bytes <= 0:
+                    if any(row["status"] == "unknown" and "reserved_bytes" in row["request"] for row in status["attempts"]):
+                        raise IntelligenceError("RECONCILIATION_REQUIRED", "Unknown source attempt retains its reservation")
+                    if status["inflight_attempts"]:
+                        raise IntelligenceError("RESOURCE_BUSY", "Concurrent source attempts retain the available quota")
+                    raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition tool quota exhausted")
+                request = {**request, "reserved_requests": min(request["reserved_requests"], available_requests),
+                    "reserved_bytes": min(reserve_bytes, available_bytes)}
             if (status["usage"]["requests"] + request.get("reserved_requests", 1) > limits["requests"] or operation == "fetch" and status["usage"]["fetches"] >= limits["fetches"]
                     or status["usage"]["bytes"] >= limits["bytes"]):
                 raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition tool quota exhausted")
@@ -294,6 +329,11 @@ class Archive:
                 self._event(connection, job_id, "late_attempt_receipt", {"attempt_id": attempt_id,
                     "status": status, "result": result, "excluded_from_frozen_bundle": True})
                 return {"settled": False, "duplicate": False, "late": True}
+            reservation = json.loads(attempt["request_json"])
+            if "reserved_bytes" in reservation and any(type(result.get(key)) is not int or result[key] < 0
+                    or result[key] > reservation[limit] for key, limit in
+                    (("bytes_received", "reserved_bytes"), ("request_count", "reserved_requests"))):
+                raise IntelligenceError("CONTRACT_INVALID", "Source receipt exceeds its admitted reservation")
             connection.execute("INSERT INTO attempt_results VALUES(?,?,?,?)", (attempt_id, status, timestamp(self.clock()), canonical(result).decode()))
             self._event(connection, job_id, "attempt_settled", {"attempt_id": attempt_id, "status": status, "result": result})
             return {"settled": True, "duplicate": False, "late": False}
@@ -321,20 +361,32 @@ class Archive:
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.parent.resolve().is_relative_to(self.root):
                 raise IntelligenceError("ACCESS_DENIED", "Blob directory escapes archive")
-            if path.exists():
+            if path.exists() or path.is_symlink():
                 if path.is_symlink() or path.read_bytes() != data:
                     raise IntelligenceError("HASH_MISMATCH", "Existing content-addressed blob differs")
             else:
+                pending = path.parent / ("." + uuid.uuid4().hex + ".pending")
                 try:
-                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                except FileExistsError:
-                    if path.read_bytes() != data:
-                        raise IntelligenceError("HASH_MISMATCH", "Concurrent blob write differs")
-                else:
+                    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     with os.fdopen(descriptor, "wb") as stream:
                         stream.write(data)
                         stream.flush()
                         os.fsync(stream.fileno())
+                    # Publish only complete bytes, atomically and without ever
+                    # replacing an existing immutable name. Racing writers can
+                    # read a complete winner while our private staging remains.
+                    try:
+                        os.link(pending, path)
+                    except FileExistsError:
+                        if path.is_symlink() or path.read_bytes() != data:
+                            raise IntelligenceError("HASH_MISMATCH", "Concurrent blob write differs")
+                    directory = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    pending.unlink(missing_ok=True)
         except OSError:
             raise IntelligenceError("ARCHIVE_UNAVAILABLE", "Cannot persist source bytes") from None
         return {"sha256": sha, "bytes": len(data), "path": relative, "media_type": media_type}

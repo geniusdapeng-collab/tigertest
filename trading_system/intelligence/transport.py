@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -194,6 +195,31 @@ class HttpTransport:
             self.session.mount("http://", adapter)
             self._probe_session.mount("https://", adapter)
             self._probe_session.mount("http://", adapter)
+
+    def fork(self):
+        """Make independent mutable HTTP state for one source worker.
+
+        Custom Session implementations, hooks and mounted adapters retain their
+        original transport and are serialized by the service. They may carry
+        state or mocks that cannot safely be reproduced by this contract.
+        """
+        if (type(self) is not HttpTransport or type(self.session) is not requests.Session
+                or any(self.session.hooks.values())
+                or any(type(adapter) not in {HTTPAdapter, _PinnedAdapter} for adapter in self.session.adapters.values())):
+            return None
+        session = requests.Session()
+        try:
+            for name in ("headers", "auth", "proxies", "params", "verify", "cert", "trust_env", "cookies", "max_redirects"):
+                setattr(session, name, deepcopy(getattr(self.session, name)))
+            forked = HttpTransport(session=session, allow_local=self.allow_local, timeout=self.timeout,
+                max_bytes=self.max_bytes, deadline=self.deadline, request_policy=self.request_policy)
+        except Exception:
+            session.close()
+            raise SourceError("CONTRACT_INVALID", delivery="not_sent",
+                details={"reason": "SOURCE_TRANSPORT_ISOLATION_FAILED"}) from None
+        forked.minimum_interval_seconds = self.minimum_interval_seconds
+        forked.robots_required, forked.max_hops = self.robots_required, self.max_hops
+        return forked
 
     @contextmanager
     def io_budget(self, *, request_limit, byte_limit):
