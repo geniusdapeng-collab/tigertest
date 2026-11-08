@@ -99,6 +99,7 @@ def research(tmp_path, monkeypatch):
     monkeypatch.setattr(requests, "post", post)
     registry = SourceRegistry([SourceSpec("web_page", "web_fetch", "", capabilities=("fetch",), options={"material_types": ["news_events"]})])
     service = FixtureResearch(tmp_path / "state", tmp_path / "archive", mode="research", registry=registry,
+        policy={**DEFAULT_POLICY, "semantic_review_contract": None},
         service_factory=lambda root, r: IntelligenceService(root, r, {}))
     topic = service.create({"question": "Research NVDA with evidence and counterevidence", "entity_ids": ["us:NVDA"],
         "material_policy": {"issuer_disclosure": "supplemental"}, "idempotency_key": "topic-scope"})

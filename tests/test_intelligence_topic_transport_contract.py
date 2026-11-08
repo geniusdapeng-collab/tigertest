@@ -49,7 +49,7 @@ def alarm_state():
 
 
 def policy_09aa():
-    value = {k: deepcopy(v) for k, v in module.DEFAULT_POLICY.items() if k != "model_transport_contract"}
+    value = {k: deepcopy(v) for k, v in module.DEFAULT_POLICY.items() if k not in {"model_transport_contract", "semantic_review_contract"}}
     value["version"] = "2026-11-07.3"
     return module.trusted_policy_value(value)
 

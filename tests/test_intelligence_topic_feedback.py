@@ -87,7 +87,7 @@ def test_feedback_is_bounded_and_never_copies_long_source_text_or_claims():
 
 def test_legacy_policy_and_prompt_bytes_do_not_gain_new_feedback():
     legacy = {key: value for key, value in module.DEFAULT_POLICY.items()
-        if key not in {"analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"}}
+        if key not in {"analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract", "semantic_review_contract"}}
     legacy["version"] = "2026-11-07.1"
     parsed = module.trusted_policy_value(legacy)
     assert "analysis_feedback_contract" not in parsed

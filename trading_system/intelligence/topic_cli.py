@@ -24,7 +24,7 @@ def validate_request(operation, value):
     if operation not in OPERATIONS or not isinstance(value, dict):
         raise IntelligenceError("INVALID_REQUEST")
     fields = {
-        "create": ({"question", "entity_ids", "horizon", "material_policy", "idempotency_key"}, {"question", "idempotency_key"}),
+        "create": ({"question", "entity_ids", "horizon", "material_policy", "max_conclusions", "idempotency_key"}, {"question", "idempotency_key"}),
         "research": ({"topic_id", "version", "idempotency_key"}, {"topic_id", "version", "idempotency_key"}),
         "watch": ({"topic_id", "version", "source_ids", "cadence_preset", "idempotency_key"}, {"topic_id", "version", "source_ids", "cadence_preset", "idempotency_key"}),
         "status": ({"job_id", "watch_id"}, set()), "report": ({"job_id"}, {"job_id"}),
@@ -42,6 +42,8 @@ def validate_request(operation, value):
     if "job_id" in value and (not isinstance(value["job_id"], str) or not JOB_ID.fullmatch(value["job_id"])):
         raise IntelligenceError("INVALID_REQUEST")
     if "version" in value and (type(value["version"]) is not int or value["version"] < 1):
+        raise IntelligenceError("INVALID_REQUEST")
+    if "max_conclusions" in value and (type(value["max_conclusions"]) is not int or not 1 <= value["max_conclusions"] <= 100):
         raise IntelligenceError("INVALID_REQUEST")
     return value
 

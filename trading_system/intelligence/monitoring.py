@@ -30,6 +30,7 @@ _PAUSED = {"SOURCE_DISABLED": "paused_disabled", "ENTITLEMENT_REQUIRED": "paused
     "SOURCE_AUTH_REQUIRED": "paused_credentials", "SOURCE_USE_DENIED": "paused_allowed_uses",
     "SOURCE_NOT_CONNECTED": "paused_connection", "POLICY_DENIED": "paused_policy"}
 _PAUSE_REASONS = {health: reason for reason, health in _PAUSED.items()}
+_CONCLUSION_LIMIT_UNSET = object()
 _DDL = """
 CREATE TABLE IF NOT EXISTS monitor_topics (
  tenant TEXT NOT NULL, id TEXT NOT NULL, version INTEGER NOT NULL, scope_hash TEXT NOT NULL,
@@ -184,7 +185,8 @@ class MonitoringStore:
     def _key(self, connection, kind, key, request, record):
         connection.execute("INSERT INTO monitor_keys VALUES(?,?,?,?,?)", (self.tenant, kind, key, digest(request), _json(record)))
 
-    def create_topic(self, question, entity_ids=(), material_policy=None, horizon="current", *, idempotency_key):
+    def create_topic(self, question, entity_ids=(), material_policy=None, horizon="current", *, idempotency_key,
+                     max_conclusions=_CONCLUSION_LIMIT_UNSET):
         if not isinstance(question, str) or not question.strip() or len(question) > 10000:
             raise IntelligenceError("CONTRACT_INVALID", "A bounded explicit research question is required")
         if not isinstance(horizon, str) or horizon not in {"current", "week", "month", "baseline"}:
@@ -196,6 +198,8 @@ class MonitoringStore:
                 ("institution", "institutional_commentary"), ("industry", "industry_data")) if kind in entity_types}
         policy = normalize_material_policy(material_policy, has_entities=any(self.catalog.entities[x]["type"] in {"security", "issuer"} for x in entities))
         scope = {"question": question.strip(), "entity_ids": entities, "horizon": horizon, "material_policy": policy}
+        if max_conclusions is not _CONCLUSION_LIMIT_UNSET:
+            scope["max_conclusions"] = _integer(max_conclusions, 1, 100, "conclusion limit")
         _json(scope)
         catalog_hash = self.catalog.manifest()["sha256"]
         identity = "topic_" + digest({"tenant": self.tenant, "scope": scope, "catalog_sha256": catalog_hash})[:32]
@@ -227,6 +231,8 @@ class MonitoringStore:
         value = json.loads(row[0])
         try:
             scope = {key: value[key] for key in ("question", "entity_ids", "horizon", "material_policy")}
+            if "max_conclusions" in value:
+                scope["max_conclusions"] = _integer(value["max_conclusions"], 1, 100, "conclusion limit")
             legacy_id = "topic_" + digest({"tenant": self.tenant, "scope": scope})[:32]
             expected_id = "topic_" + digest({"tenant": self.tenant, "scope": scope,
                 "catalog_sha256": value["catalog_sha256"]})[:32]

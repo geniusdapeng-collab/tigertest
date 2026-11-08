@@ -18,7 +18,7 @@ from trading_system.intelligence.contracts import IntelligenceError, digest, sou
 from trading_system.intelligence.registry import SourceRegistry, SourceSpec
 from trading_system.intelligence.replay import reconstruct_document
 from trading_system.intelligence.service import IntelligenceService
-from trading_system.intelligence.topic import TopicResearch
+from trading_system.intelligence.topic import DEFAULT_POLICY, TopicResearch
 from trading_system.intelligence.transport import HttpTransport
 
 
@@ -171,6 +171,7 @@ def identity_flow(tmp_path, monkeypatch):
                 transport=HttpTransport(allow_local=True), environment={}))
 
         service = TopicResearch(tmp_path / (case + "-state"), tmp_path / (case + "-archive"),
+            policy={**DEFAULT_POLICY, "semantic_review_contract": None},
             mode="research", registry=registry, service_factory=source_service)
         policy = {key: {"status": "required" if key in MATERIALS else "not_applicable",
             "reason": "TEST_FIXTURE five related materials for the same three-entity question" if key in MATERIALS

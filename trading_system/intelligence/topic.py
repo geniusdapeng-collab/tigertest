@@ -31,15 +31,18 @@ from .citation_resolution import CONTRACT as CITATION_RESOLUTION_CONTRACT, deriv
 from .model_snapshot_view import CONTRACT as MODEL_SNAPSHOT_VIEW_CONTRACT, model_snapshot_view
 from .registry import default_registry
 from .topic_transport import CONTRACT as MODEL_TRANSPORT_CONTRACT, TransportObservation, deadline_supported, validate_failure
+from .topic_semantics import (CONTRACT as SEMANTIC_REVIEW_CONTRACT, SYSTEM_SUFFIX as SEMANTIC_REVIEW_SYSTEM,
+    review_schema as semantic_review_schema, validate_review as validate_semantic_review)
 
 ANALYSIS_FEEDBACK_CONTRACT = "tiger.topic-analysis-feedback/v1"
 
 DEFAULT_POLICY = {
-    "schema": "tiger.topic-policy/v1", "version": "2026-11-07.4",
+    "schema": "tiger.topic-policy/v1", "version": "2026-11-08.1",
     "citation_resolution_contract": CITATION_RESOLUTION_CONTRACT,
     "analysis_feedback_contract": ANALYSIS_FEEDBACK_CONTRACT,
     "model_snapshot_view_contract": MODEL_SNAPSHOT_VIEW_CONTRACT,
     "model_transport_contract": MODEL_TRANSPORT_CONTRACT,
+    "semantic_review_contract": SEMANTIC_REVIEW_CONTRACT,
     "wall_seconds": 2400, "closeout_seconds": 30, "review_reserve_seconds": 510,
     "model_attempts": 12, "model_total_tokens": 12 * CONTEXT_TOKENS,
     "model_concurrency": 1, "max_jobs": 128,
@@ -100,11 +103,12 @@ def trusted_policy(path=None):
             raise IntelligenceError("INVALID_STARTUP")
         value.update(supplied)
     if (value["schema"] != DEFAULT_POLICY["schema"] or not isinstance(value["version"], str)
-            or any(type(v) is not int or v <= 0 for k, v in value.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"})
+            or any(type(v) is not int or v <= 0 for k, v in value.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract", "semantic_review_contract"})
             or value.get("citation_resolution_contract") not in (None, CITATION_RESOLUTION_CONTRACT)
             or value.get("analysis_feedback_contract") not in (None, ANALYSIS_FEEDBACK_CONTRACT)
             or value.get("model_snapshot_view_contract") not in (None, MODEL_SNAPSHOT_VIEW_CONTRACT)
             or value.get("model_transport_contract") not in (None, MODEL_TRANSPORT_CONTRACT)
+            or value.get("semantic_review_contract") not in (None, SEMANTIC_REVIEW_CONTRACT)
             or value["model_concurrency"] != 1 or value["rounds"] > 2
             or value["closeout_seconds"] + value["review_reserve_seconds"] >= value["wall_seconds"]):
         raise IntelligenceError("INVALID_STARTUP")
@@ -596,6 +600,8 @@ def analysis_schema(documents, topic):
     """Bind each analysis or synthesis to its exact admitted citation scope."""
     schema = deepcopy(ANALYSIS_SCHEMA)
     claims = schema["properties"]["conclusions"]
+    if "max_conclusions" in topic:
+        claims["maxItems"] = topic["max_conclusions"]
     properties = claims["items"]["properties"]
     document_ids = list(dict.fromkeys(document["id"] for document in documents))
     dimensions = [key for key, role in topic["material_policy"].items()
@@ -613,7 +619,11 @@ def analysis_schema(documents, topic):
     return schema
 
 
-def validate_analysis(analysis, documents, dimensions, entity_ids):
+def validate_analysis(analysis, documents, dimensions, entity_ids, *, max_conclusions=None):
+    if max_conclusions is not None and (type(max_conclusions) is not int or not 1 <= max_conclusions <= 100):
+        raise IntelligenceError("CONTRACT_INVALID", "Invalid admitted conclusion limit")
+    if max_conclusions is not None and len(analysis["conclusions"]) > max_conclusions:
+        raise IntelligenceError("CONCLUSION_LIMIT_EXCEEDED")
     by_id = {d["id"]: d for d in documents}
     seen = set()
     for claim in analysis["conclusions"]:
@@ -630,6 +640,11 @@ def validate_analysis(analysis, documents, dimensions, entity_ids):
             if claim["kind"] == "fact" and doc.get("completeness") != "complete":
                 raise IntelligenceError("INCOMPLETE_FACT_SOURCE")
     return analysis
+
+
+def validate_topic_analysis(analysis, documents, topic):
+    return validate_analysis(analysis, documents, topic["material_policy"], topic.get("entity_ids", []),
+        max_conclusions=topic.get("max_conclusions"))
 
 
 def analysis_validation_feedback(analysis, documents, dimensions, entity_ids, code, *, resolution_enabled=False):
@@ -905,7 +920,25 @@ class TopicResearch:
 
     @classmethod
     def _analysis_system(cls, job):
-        return ANALYSIS_SYSTEM if cls._feedback_enabled(job) else LEGACY_ANALYSIS_SYSTEM
+        system = ANALYSIS_SYSTEM if cls._feedback_enabled(job) else LEGACY_ANALYSIS_SYSTEM
+        if cls._semantic_review_enabled(job):
+            system += (" Preserve pre-event versus post-event wording: an IR calendar or future meeting announcement"
+                " does not establish that the meeting occurred. Distinguish actual post-event results from"
+                " forecasts and announcements; retain unknown event timing instead of inventing it."
+                " Respect the immutable topic.max_conclusions when supplied across all source batches and synthesis."
+                " Summary/changes/conditions must not hide extra conclusions or unsupported facts.")
+        return system
+
+    @staticmethod
+    def _semantic_review_enabled(job):
+        contract = job["policy"].get("semantic_review_contract")
+        if contract not in (None, SEMANTIC_REVIEW_CONTRACT):
+            raise IntelligenceError("HASH_MISMATCH", "Unknown admitted semantic review contract")
+        return contract == SEMANTIC_REVIEW_CONTRACT
+
+    @classmethod
+    def _review_system(cls, job):
+        return REVIEW_SYSTEM + (SEMANTIC_REVIEW_SYSTEM if cls._semantic_review_enabled(job) else "")
 
     @staticmethod
     def _model_snapshot(job, manifest):
@@ -987,9 +1020,9 @@ class TopicResearch:
 
     def _finish_analysis(self, client, job, manifest, documents, raw_analysis):
         if not self._resolution_enabled(job):
-            return validate_analysis(raw_analysis, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+            return validate_topic_analysis(raw_analysis, documents, job["topic"])
         analysis, mappings = derive_analysis(raw_analysis, documents)
-        validate_analysis(analysis, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+        validate_topic_analysis(analysis, documents, job["topic"])
         if not mappings:
             return raw_analysis
         # Bind to the exact just-completed/recovered provider call, never an
@@ -1038,7 +1071,7 @@ class TopicResearch:
             documents = self._proof_documents(inputs, job, manifest, document_sets[manifest["snapshot_id"]])
             try:
                 analysis, artifact = derivative_artifact(job, manifest, documents, proof["parsed"], proof)
-                validate_analysis(analysis, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+                validate_topic_analysis(analysis, documents, job["topic"])
             except IntelligenceError as error:
                 if error.code not in {"CITATION_INVALID", "CITATION_REQUIRED", "INCOMPLETE_FACT_SOURCE"}:
                     raise
@@ -1164,7 +1197,7 @@ class TopicResearch:
             analysis = proof["parsed"]
             try:
                 checked = derive_analysis(analysis, documents)[0] if self._resolution_enabled(job) else analysis
-                validate_analysis(checked, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+                validate_topic_analysis(checked, documents, job["topic"])
             except IntelligenceError as error:
                 if error.code not in {"CITATION_INVALID", "CITATION_REQUIRED", "INCOMPLETE_FACT_SOURCE"}:
                     raise
@@ -1205,7 +1238,7 @@ class TopicResearch:
         parts = [self._analyze(client, execution, job, manifest, group)
                  for group in (documents[:middle], documents[middle:])]
         for part in parts:
-            validate_analysis(part, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+            validate_topic_analysis(part, documents, job["topic"])
         payload = {"purpose": "source_bound_topic_synthesis", "topic": job["topic"],
             "snapshot": self._model_snapshot(job, manifest), "document_refs": [{"id": d["id"], "version": d["version"], "text_sha256": d["text_blob"]["sha256"]} for d in documents],
             "source_analyses": parts}
@@ -1214,16 +1247,73 @@ class TopicResearch:
             schema=analysis_schema(documents, job["topic"]), payload=payload)
         return self._validated_analysis(client, execution, job, manifest, documents, result, payload)
 
+    def _review_call(self, client, execution, job, documents, analysis, *, user, payload, source_batch=False):
+        enabled = self._semantic_review_enabled(job)
+        if enabled:
+            payload = {**payload, "review_contract": SEMANTIC_REVIEW_CONTRACT,
+                "review_scope": "source_batch" if source_batch else "global"}
+        result = self._semantic(client, execution, stage="decision.debate", system=self._review_system(job),
+            user=user, schema=semantic_review_schema(analysis, documents) if enabled else REVIEW_SCHEMA, payload=payload)
+        if enabled:
+            validate_semantic_review(result, analysis, documents, source_batch=source_batch)
+        return result
+
+    def _verified_semantic_reviews(self, job, manifests, proofs):
+        if not self._semantic_review_enabled(job):
+            return
+        archive = self._service(readonly=True).archive
+        by_snapshot = {manifest["snapshot_id"]: manifest for manifest in manifests}
+        reviewed = []
+        for inputs, proof in proofs:
+            if proof["stage"] != "decision.debate":
+                continue
+            payload = self._proof_payload(inputs)
+            manifest = by_snapshot.get(payload.get("snapshot", {}).get("snapshot_id"))
+            if (manifest is None or payload.get("review_contract") != SEMANTIC_REVIEW_CONTRACT
+                    or payload.get("review_scope") not in {"global", "source_batch"}
+                    or not isinstance(payload.get("report"), dict)
+                    or inputs["request"]["messages"][0]["content"] != self._review_system(job) + "\nReturn exactly one JSON object. JSON only."):
+                raise IntelligenceError("HASH_MISMATCH", "Semantic review lacks its admitted evidence contract")
+            documents = archive.snapshot_documents(manifest["snapshot_id"])
+            if "documents" in payload or "document_refs" in payload:
+                documents = self._proof_documents(inputs, job, manifest, documents)
+            else:
+                raise IntelligenceError("HASH_MISMATCH", "Semantic review has no original evidence scope")
+            validate_semantic_review(proof["parsed"], payload["report"], documents,
+                source_batch=payload["review_scope"] == "source_batch")
+            reviewed.append((payload, proof, documents))
+        for payload, proof, documents in reviewed:
+            if "documents" in payload:
+                if "source_reviews" in payload:
+                    raise IntelligenceError("HASH_MISMATCH", "An original review cannot invent synthesis dependencies")
+                continue
+            parts = payload.get("source_reviews")
+            quotations = [{"id": claim["id"], "supports": claim["supports"], "refutes": claim["refutes"]}
+                for claim in payload["report"]["conclusions"]]
+            if len(documents) < 2 or not isinstance(parts, list) or len(parts) != 2 or payload.get("verified_quotations") != quotations:
+                raise IntelligenceError("HASH_MISMATCH", "Review synthesis lacks its exact source dependencies")
+            middle = len(documents) // 2
+            for part, group in zip(parts, (documents[:middle], documents[middle:])):
+                local_ids = {document["id"] for document in group}
+                relevant = {**payload["report"], "conclusions": [claim for claim in payload["report"]["conclusions"]
+                    if any(ref["document_id"] in local_ids for ref in claim["supports"] + claim["refutes"])]}
+                matches = [native for child, native, scope in reviewed
+                    if child["snapshot"] == payload["snapshot"] and child["topic"] == payload["topic"]
+                    and child["review_scope"] == "source_batch" and scope == group
+                    and child["report"] == relevant and native["parsed"] == part]
+                if len(matches) != 1:
+                    raise IntelligenceError("MODEL_RECEIPT_REQUIRED", "Review synthesis source is not its actual local native review")
+
     def _review(self, client, execution, job, manifest, documents, analysis, *, source_batch=False):
         payload = {"topic": job["topic"], "snapshot": self._model_snapshot(job, manifest), "documents": documents, "report": analysis}
         records = self._current_resolution_records(job)
         if records:
             payload["citation_resolutions"] = records
         try:
-            return self._semantic(client, execution, stage="decision.debate", system=REVIEW_SYSTEM,
+            return self._review_call(client, execution, job, documents, analysis,
                 user=("Review only references to this full-original source batch; other references belong to separately checked batches. Identify unsupported local citations and attribution without treating the batch boundary as a missing source. Global consistency is independently checked after all batches."
                       if source_batch else "Review the entire report. accepted means cited conclusions are supported and gaps are honest, not that every dimension is complete."),
-                schema=REVIEW_SCHEMA, payload=payload)
+                payload=payload, source_batch=source_batch)
         except TokenBudgetError as error:
             if error.code != "INPUT_CONTEXT_EXCEEDED" or len(documents) < 2:
                 raise IntelligenceError(error.code) from None
@@ -1238,11 +1328,14 @@ class TopicResearch:
                 return checked
             parts.append(checked)
         quotations = [{"id": c["id"], "supports": c["supports"], "refutes": c["refutes"]} for c in analysis["conclusions"]]
-        return self._semantic(client, execution, stage="decision.debate", system=REVIEW_SYSTEM,
+        return self._review_call(client, execution, job, documents, analysis,
             user="Review cross-source consistency after every full-original batch was independently checked. All quotations were also deterministically located in originals. Check subject/period distinctions, unsupported synthesis, contradictory views and honest gaps; do not claim sources outside this manifest.",
-            schema=REVIEW_SCHEMA, payload={"topic": job["topic"], "snapshot": self._model_snapshot(job, manifest),
+            payload={"topic": job["topic"], "snapshot": self._model_snapshot(job, manifest),
                 "report": analysis, "source_reviews": parts, "verified_quotations": quotations,
-                **({"citation_resolutions": records} if records else {})})
+                **({"document_refs": [{"id": document["id"], "version": document["version"],
+                    "text_sha256": document["text_blob"]["sha256"]} for document in documents]}
+                    if self._semantic_review_enabled(job) else {}),
+                **({"citation_resolutions": records} if records else {})}, source_batch=source_batch)
 
     def run(self, job_id):
         self._mode("research")
@@ -1283,7 +1376,7 @@ class TopicResearch:
                     else:
                         analysis = self._analyze(client, execution, job, manifest, documents)
                         atomic_json(directory, filename, analysis, exclusive=True)
-                    validate_analysis(analysis, documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+                    validate_topic_analysis(analysis, documents, job["topic"])
                     final = (manifest, documents, analysis)
                     if not analysis["followup_questions"] or round_index + 1 == job["policy"]["rounds"]:
                         break
@@ -1300,6 +1393,8 @@ class TopicResearch:
                     atomic_json(directory, "review.json", review, exclusive=True)
                 if not review["accepted"]:
                     raise IntelligenceError("REVIEW_REJECTED")
+                if self._semantic_review_enabled(job):
+                    validate_semantic_review(review, analysis, documents)
                 coverage = topic_coverage(job["topic"], analysis, documents, _admitted_catalog(job), as_of=manifest["cutoff"])
                 gaps = list(manifest.get("gaps", [])) + [cell for cell in coverage if cell["required"] and cell["status"] != "covered"]
                 state = "partial" if gaps or not analysis["conclusions"] else "completed"
@@ -1374,13 +1469,16 @@ class TopicResearch:
         documents = archive.snapshot_documents(manifest["snapshot_id"])
         if any(doc["source_id"] not in self._eligible_sources() for doc in documents):
             raise IntelligenceError("POLICY_DENIED", "A report source no longer permits topic analysis")
-        validate_analysis(report["analysis"], documents, job["topic"]["material_policy"], job["topic"].get("entity_ids", []))
+        validate_topic_analysis(report["analysis"], documents, job["topic"])
         if report["model_attempts"] != self.store.attempts(job_id) or not report["review"]["accepted"]:
             raise IntelligenceError("HASH_MISMATCH")
+        if self._semantic_review_enabled(job):
+            validate_semantic_review(report["review"], report["analysis"], documents)
         proofs = self._verified_model_proofs(job)
         self._verified_analysis_feedback(job, manifests, proofs)
         derivatives, resolution_records = self._verified_derivatives(job, manifests, proofs)
         self._verified_model_views(job, manifests, proofs)
+        self._verified_semantic_reviews(job, manifests, proofs)
         if resolution_records:
             if report.get("citation_resolutions") != resolution_records:
                 raise IntelligenceError("HASH_MISMATCH", "Citation resolutions differ from original model evidence")
@@ -1546,7 +1644,7 @@ class TopicResearch:
 
 
 def trusted_policy_value(value):
-    optional = {"analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"}
+    optional = {"analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract", "semantic_review_contract"}
     if (not isinstance(value, dict) or set(value) - set(DEFAULT_POLICY)
             or not (set(DEFAULT_POLICY) - optional).issubset(value)):
         raise IntelligenceError("INVALID_STARTUP")
@@ -1555,11 +1653,12 @@ def trusted_policy_value(value):
         # Frozen jobs retain their exact original prompt and snapshot bytes.
         merged.pop(key, None)
     if (merged["schema"] != DEFAULT_POLICY["schema"] or not isinstance(merged["version"], str)
-            or any(type(v) is not int or v <= 0 for k, v in merged.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract"})
+            or any(type(v) is not int or v <= 0 for k, v in merged.items() if k not in {"schema", "version", "parser_policy", "citation_resolution_contract", "analysis_feedback_contract", "model_snapshot_view_contract", "model_transport_contract", "semantic_review_contract"})
             or merged.get("citation_resolution_contract") not in (None, CITATION_RESOLUTION_CONTRACT)
             or merged.get("analysis_feedback_contract") not in (None, ANALYSIS_FEEDBACK_CONTRACT)
             or merged.get("model_snapshot_view_contract") not in (None, MODEL_SNAPSHOT_VIEW_CONTRACT)
             or merged.get("model_transport_contract") not in (None, MODEL_TRANSPORT_CONTRACT)
+            or merged.get("semantic_review_contract") not in (None, SEMANTIC_REVIEW_CONTRACT)
             or merged["model_concurrency"] != 1 or merged["rounds"] > 2
             or merged["closeout_seconds"] + merged["review_reserve_seconds"] >= merged["wall_seconds"]):
         raise IntelligenceError("INVALID_STARTUP")
@@ -1635,13 +1734,18 @@ def topic_coverage(topic, analysis, documents, catalog=None, *, as_of=None):
 
 
 def render_report(report, documents):
+    if "max_conclusions" in report.get("topic", {}):
+        validate_topic_analysis(report["analysis"], documents, report["topic"])
     docs = {d["id"]: d for d in documents}
     text = ["研究到：" + report["cutoff"], "研究状态：" + report["state"],
             "主结论：" + report["analysis"]["summary"], "新增或修订："]
+    if "max_conclusions" in report.get("topic", {}):
+        text.insert(2, f"结论数量：{len(report['analysis']['conclusions'])} / 最多 {report['topic']['max_conclusions']} 条（按用户约束）。")
     if report.get("citation_resolutions"):
         text.insert(3, "引用校对：部分引文的排版空白已按对应原文校对；原始模型回复及逐处校对依据已保留。")
     text.extend(report["analysis"]["changes"] or ["本次报告未声明可核验的历史变化。"])
     text.append("各维度证据、支持与反证：")
+    checks = {check["claim_id"]: check for check in report.get("review", {}).get("claim_checks", [])}
     for claim in report["analysis"]["conclusions"]:
         text.append(f"[{claim['id']}] {claim['dimension_id']} / {claim['kind']} / {claim['entity_id']}: {claim['text']}")
         for relation, label in (("supports", "支持"), ("refutes", "反证")):
@@ -1650,6 +1754,11 @@ def render_report(report, documents):
                 text.append(label + "：" + ref["quote"] + " — " + doc.get("title", ref["document_id"]) + " " + doc.get("final_url", ""))
         if claim["conditions"]:
             text.append("适用条件：" + claim["conditions"])
+        if claim["id"] in checks:
+            check = checks[claim["id"]]
+            phases = {"before_event": "事件前公告或预期", "after_event": "事件已发生或事后结果",
+                "not_event": "不涉及事件先后", "unknown": "时序尚未核实"}
+            text.append("时序复核：" + phases[check["asserted_phase"]] + "；" + check["rationale"])
     text.append("仍不知道或尚未覆盖：")
     text.extend(report["analysis"]["unknowns"])
     text.extend(cell["entity_id"] + " / " + cell["dimension_id"] + "：" + cell["status"] +

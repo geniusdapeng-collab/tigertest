@@ -160,7 +160,7 @@ def local_topic(tmp_path, monkeypatch):
         }, ensure_ascii=False, indent=2) + "\n")
 
 
-def _service(harness, pages, *, formal_required=False):
+def _service(harness, pages, *, formal_required=False, strict_semantics=False, max_conclusions=None):
     specs = []
     now = timestamp(utc_now())
     for source_id, text, materials, uses in pages:
@@ -181,6 +181,9 @@ def _service(harness, pages, *, formal_required=False):
 
     service = TopicResearch(harness.root / "state", harness.root / "archive", mode="research",
         registry=registry, policy={**DEFAULT_POLICY, "rounds": 1,
+            # Historical fixtures exercise the original compact review. The
+            # new semantic contract has separate explicit loopback assertions.
+            "semantic_review_contract": DEFAULT_POLICY["semantic_review_contract"] if strict_semantics else None,
             "parser_policy": {"html_engine": "builtin"}}, service_factory=factory)
     policy = {key: {"status": "not_applicable", "reason": "TEST_FIXTURE scope excludes this dimension"}
         for key in DIMENSIONS}
@@ -188,7 +191,8 @@ def _service(harness, pages, *, formal_required=False):
     if formal_required:
         policy["formal_research"] = "required"
     topic = service.create({"question": "TEST_FIXTURE inspect NVDA evidence, contrary facts and viewpoints",
-        "entity_ids": ["us:NVDA"], "material_policy": policy, "idempotency_key": "fixture-topic"})
+        "entity_ids": ["us:NVDA"], "material_policy": policy, "idempotency_key": "fixture-topic",
+        **({"max_conclusions": max_conclusions} if max_conclusions is not None else {})})
     job = service.submit({"topic_id": topic["topic_id"], "version": topic["version"],
         "idempotency_key": "fixture-research"})
     harness.before = {"registry_sha256": registry.public_manifest()["sha256"],

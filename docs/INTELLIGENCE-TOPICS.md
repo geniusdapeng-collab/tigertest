@@ -47,6 +47,7 @@ node scripts/tiger-topic.mjs research --python /absolute/path/to/python \
   "question": "研究 NVDA 的需求、经营披露与关键反证",
   "entity_ids": ["us:NVDA"],
   "horizon": "current",
+  "max_conclusions": 3,
   "material_policy": {
     "issuer_disclosure": "required",
     "industry_data": "required",
@@ -58,6 +59,8 @@ node scripts/tiger-topic.mjs research --python /absolute/path/to/python \
 ```
 
 研究请求恰好包含 `topic_id`、整数 `version`、`idempotency_key`。前两项必须使用 create 的实际回值。提交返回真实 `job_id`；随后 status 和 report 都使用 `{"job_id":"实际回值"}`。`research --wait` 只轮询该身份，观察窗口可通过可信 CLI 的 `--wait-seconds` 设置；它不会重复提交或改变任务总期限。最终仍须调用 report 独立验真。
+
+用户说“最多三个结论”时，Agent 在 create 中传 `max_conclusions: 3`，保留用户问题、时间和反证要求，用户不必写 JSON。该字段可省略；显式提供时只能是 1–100 的整数，布尔值、字符串、小数和 null 均拒绝。它参与不可变 topic 身份与幂等摘要；同一键不能改为不同上限，research 只引用原 topic/version。每个完整来源批次、最终合成的输出 schema、恢复检查点及独立报告校验都执行该上限，不截掉第四条结论冒充通过；报告显示实际数量与上限，缺口、反证和原文不因数量要求被删除。省略字段的历史主题身份保持原样。
 
 watch 请求含 `topic_id/version/source_ids/cadence_preset/idempotency_key`，cadence 为 `core/normal/low/daily`。effective cadence 取可信来源与域名限制中更严格者，不承诺将不能高频的来源提高到请求频率。`tick` 输入 `{}`，只执行一个到期、有限额的采集单位：最多 48 次实际 HTTP 请求、24 次正文 fetch、240 秒，持有 300 秒租约；包含 robots 探测与重定向的请求和字节均计入共享 host 账本。默认 core 间隔为 300 秒；可信来源或域名要求更慢时取更严格值。常开宿主可调用 `MonitoringWorker.run(max_ticks,max_seconds,interval_seconds)` 做有界运行；主机休眠和断网期间只记录检查空窗，不回填首次观察。
 
@@ -110,6 +113,10 @@ admission 从可信入口读取和准备之前开始计时，构造、完整源�
 结构通过后，若引文仍不符合上述已接纳合同及确定性 exact 校验，整个 job 最多申请一个同模型重答身份，完整保留原快照、原文、旧回复、校验诊断及实际用量；可选择更短的完整连续片段。再次失败则终止，不无限修复。能按已接纳 NBSP 合同确定性定位的首次回复直接进入独立复核，不额外申请付费重答。既有全局有界 schema retry、12 次尝试、完整合法模型窗口和原墙钟仍生效；每次实际 outbound 独立计量。中断后复用同一原始响应和校对依据，不重发已收到的付费回复。
 
 新 admission 默认明确启用 `analysis_feedback_contract = tiger.topic-analysis-feedback/v1`。分析提示直接说明：事实的每个支持及反证原文都必须 `completeness=complete`，不能用 partial/snippet/unknown 原文或换成“观点”标签绕过；quote 必须来自同一个被引用文档。若失败，重答仅收到首个坏结论与引用的有界定位（数组位置、文档 ID、完整性及 quote 摘要），不自动跨文档找替代、不改变原文或模型答案。v2 重答检查点绑定原请求、原模型 response 和实际重答；report 从原回复与固定原文重新计算诊断。旧 policy 缺少该字段或为 null 时仍使用原提示和 code-only v1 检查点，不回填历史任务。诊断能帮助模型纠错，但不保证一次重答必定成功；未修正时按原门禁失败，资料不足可明确列为 unknown。
+
+新 admission 同时默认启用 `semantic_review_contract = tiger.topic-semantic-review/v1`。独立复核对每条结论给出原始断言类别、支持/矛盾/未知、事件前/事件后/非事件/未知时序及说明，并按原数组位置逐一绑定 supports/refutes 的原文 ID、精确引文和来源阶段。系统检查结论与引用双射；缺项、重复、换文档、换引文和事实来源不完整均不能通过。会后断言必须有关于同一事件的会后原文支持；仅有会前日历或预告时，即使 reviewer 的 accepted 为 true，也返回 `TEMPORAL_CONTRADICTION`。事实时序为未知时返回 `TEMPORAL_UNVERIFIED`，独立判断不支持、类别伪装、遗漏反证或摘要不受支持时返回 `REVIEW_REJECTED`。模型负责语义分类，程序不以关键词猜测事件是否发生，因此此合同不构成模型对任意自然语言都能正确分类的保证。
+
+来源分批复核只核对当前完整原文的引用，可暂留跨来源支持未知；多层拆批的中间合成仍是局部复核，保留精确原文引用范围及两个子批次的真实模型回复绑定，最外层全局复核才覆盖每条结论和全部引用。报告校验重新读取固定原文及真实模型 proof，复算每个复核的范围、引用、子批次依赖和判定，不接受仅修改 report 后重新计算摘要。报告展示每条结论的时序判断与说明，原始模型回复和 NBSP 派生证据均保留。缺少该字段或显式 null 的旧冻结 policy 保留原复核 schema/提示，不回填历史任务。新合同不增加新的模型阶段，不改变模型、推理档位、合法输出窗口或任务调用上限。
 
 模型回复的 choices 缺失、为空或形状错误时，若原 response identity/model 与 usage 可以核实，仍先封存去除 reasoning 的安全账务回执并结算已知用量，业务继续按原语义门禁失败；失败不是免费调用。缺 identity 或 usage 时保持 unknown 预占，重放阻断，不编造用量或另发替代请求。
 
