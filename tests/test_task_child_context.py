@@ -11,6 +11,7 @@ import requests
 
 from test_deepseek_json_observation import observed, native, invoke
 from test_deepseek_required import Response
+from test_deepseek_strict_clean import execution as strict_execution
 from test_task_work_units import BASE, USAGE, accept, create, manifest, observed as work_observed, unit
 from trading_system.agent_evidence import digest, json_bytes
 from trading_system.redline.execution import ExecutionContractError
@@ -186,3 +187,114 @@ def test_caller_planned_segments_preserve_whole_unicode_original_and_context():
     assert result["segments"][0]["context_end"] > result["segments"][0]["end"]
     with pytest.raises(WorkUnitError):
         make_document_segments("doc", text, [(0, 8)])
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_new_epoch_replays_settled_actual_native_without_another_send(observed, tmp_path, monkeypatch, retry):
+    clock = [BASE]
+    store, lease, child = child_fixture(tmp_path, observed, clock=lambda: clock[0])
+    replies = ([native('{"score":', "first-native")] if retry else []) + [native('{"score":7,"reason":"ok"}', "last-native")]
+    iterator = iter(replies)
+    calls = []
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: calls.append(kwargs["data"]) or Response(next(iterator)))
+    with pytest.raises(RuntimeError, match="after durable native"):
+        with child.step("clean.llm_semantic", {"TEST_FIXTURE": "whole original"}):
+            assert invoke(child) == {"score": 7, "reason": "ok"}
+            raise RuntimeError("TEST_FIXTURE process exit after durable native")
+    count = len(calls)
+    with store._tx() as connection:
+        before_observations = store._rows(connection, "observations")
+    clock[0] += 61
+    store.recover_expired()
+    newer = store.claim_ready("new-worker")
+    replay = UnitExecutionContext(observed, work_store=store, lease=newer, stage="clean.llm_semantic")
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("replay must never send"))
+    with replay.step("clean.llm_semantic", {"TEST_FIXTURE": "whole original"}) as scope:
+        scope.output(invoke(replay))
+    proof = verify_child_seal(store, replay.seal())
+    assert count == (2 if retry else 1) and proof["epoch"] == 2
+    assert store.status()["format_reanswers"] == (1 if retry else 0)
+    assert store.status()["known_usage"]["total_tokens"] == (100 if retry else 50)
+    with store._tx() as connection:
+        assert store._rows(connection, "observations") == before_observations
+    attempts = store.attempts_for_unit("extract")
+    assert replay.model_call_id("new-call-id") == store.read_attempt_request(attempts[0]["attempt_id"])["call_id"]
+
+
+def test_native_replay_rejects_changed_wire_before_any_new_effect(observed, tmp_path, monkeypatch):
+    from trading_system.llm.deepseek_required import DeepSeekRequiredClient
+    from test_deepseek_required import SCHEMA
+    clock = [BASE]
+    store, lease, child = child_fixture(tmp_path, observed, clock=lambda: clock[0])
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: Response(native('{"score":7,"reason":"ok"}', "actual-native")))
+    with pytest.raises(RuntimeError):
+        with child.step("clean.llm_semantic", {}):
+            invoke(child)
+            raise RuntimeError("TEST_FIXTURE crash")
+    clock[0] += 61
+    store.recover_expired()
+    replay = UnitExecutionContext(observed, work_store=store, lease=store.claim_ready("new"), stage="clean.llm_semantic")
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("changed request must never send"))
+    with pytest.raises(WorkUnitError) as caught:
+        with replay.step("clean.llm_semantic", {}):
+            DeepSeekRequiredClient(replay).complete_json(system="TEST_FIXTURE JSON", user="DIFFERENT ORIGINAL",
+                                                        schema_hint={}, schema=SCHEMA)
+    assert caught.value.code == "ATTEMPT_MISMATCH"
+
+
+def test_rejected_saved_native_stays_rejected_without_claiming_any_new_retry(observed, tmp_path, monkeypatch):
+    clock = [BASE]
+    store, lease, child = child_fixture(tmp_path, observed, clock=lambda: clock[0])
+    replies = iter([native('{"score":', "rejected-first"), native('{"score":', "rejected-second")])
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: Response(next(replies)))
+    with pytest.raises(RequiredModelUnavailable) as original:
+        with child.step("clean.llm_semantic", {}):
+            invoke(child)
+    assert original.value.diagnostic["code"] == "INVALID_RESPONSE_JSON"
+    clock[0] += 61
+    store.recover_expired()
+    replay = UnitExecutionContext(observed, work_store=store, lease=store.claim_ready("new"), stage="clean.llm_semantic")
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("rejected native must never resend"))
+    with pytest.raises(RequiredModelUnavailable) as restored:
+        with replay.step("clean.llm_semantic", {}):
+            invoke(replay)
+    assert restored.value.diagnostic == original.value.diagnostic
+    assert len(restored.value.observation["attempts"]) == 2
+    assert store.status()["format_reanswers"] == 1 and store.status()["known_usage"]["total_tokens"] == 100
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_original_tool_arguments_are_replayed_losslessly_with_local_http_only(strict_execution, tmp_path, monkeypatch, retry):
+    from test_deepseek_strict_clean import complete, native as tool_native, real_http
+    parent = strict_execution[0]
+    clock = [BASE]
+    store = WorkStore.create(tmp_path / "strict-units", manifest(run_id=parent.run_id), clock=lambda: clock[0])
+    store.plan([unit("tool")], originals=[])
+    child = UnitExecutionContext(parent, work_store=store, lease=store.claim_ready("worker"), stage="clean.llm_semantic")
+    arguments = []
+    def produce(path, body, number):
+        value = tool_native("{bad original arguments" if retry and number == 1 else None,
+                            identifier="TEST_FIXTURE_tool_" + str(number))
+        arguments.append(value["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"])
+        return value
+    with real_http(monkeypatch, produce) as http:
+        with pytest.raises(RuntimeError):
+            with child.step("clean.llm_semantic", {}):
+                expected = complete(child)
+                raise RuntimeError("TEST_FIXTURE crash before result commit")
+        assert len(http["wires"]) == (2 if retry else 1)
+    clock[0] += 61
+    store.recover_expired()
+    restored = UnitExecutionContext(parent, work_store=store, lease=store.claim_ready("new"), stage="clean.llm_semantic")
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("saved strict tool native must never resend"))
+    with restored.step("clean.llm_semantic", {}) as scope:
+        actual = complete(restored)
+        scope.output(actual)
+    assert actual == expected
+    verify_child_seal(store, restored.seal())
+    assert store.status()["known_usage"]["total_tokens"] == (400 if retry else 200)
+    from trading_system.agent_evidence import read_snapshot
+    call = restored.summary()[0]
+    stage_output = read_snapshot(restored.child_root, call["output_ref"], run_id=parent.run_id, stage="clean.llm_semantic", role="output")
+    proof = read_snapshot(restored.child_root, stage_output["io_calls"][0]["output_ref"], run_id=parent.run_id, stage="clean.llm_semantic", role="output")
+    assert proof["response"]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == arguments[-1]

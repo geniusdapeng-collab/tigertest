@@ -512,3 +512,31 @@ os._exit(73)
     assert later.status()["unknown_attempts"] == 1
     assert later.claim_ready("parent") is None
     assert later.status()["held_reservations"]
+
+
+def test_active_known_response_between_observe_and_settle_does_not_block_other_bounded_worker(tmp_path):
+    store = create(tmp_path, [unit("a"), unit("b")])
+    leases = [store.claim(name, "worker-" + name) for name in ("a", "b")]
+    first_observed, second_dispatched = Event(), Event()
+    def first():
+        attempt = store.begin_attempt(leases[0], {"fixture": "a"}, operation="model.deepseek.chat")
+        store.mark_dispatch(leases[0], attempt.attempt_id)
+        store.record_response(leases[0], attempt.attempt_id, {"id": "known-native-a"}, usage=USAGE)
+        first_observed.set()
+        assert second_dispatched.wait(2)
+        store.settle_attempt(attempt.attempt_id)
+    def second():
+        assert first_observed.wait(2)
+        try:
+            attempt = store.begin_attempt(leases[1], {"fixture": "b"}, operation="model.deepseek.chat")
+            store.mark_dispatch(leases[1], attempt.attempt_id)
+            store.record_response(leases[1], attempt.attempt_id, {"id": "known-native-b"}, usage=USAGE)
+            store.settle_attempt(attempt.attempt_id)
+        finally:
+            second_dispatched.set()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(first), pool.submit(second)]
+        for future in futures:
+            future.result(timeout=3)
+    assert store.status()["settled_attempts"] == 2
+    assert store.status()["known_usage"]["total_tokens"] == 20

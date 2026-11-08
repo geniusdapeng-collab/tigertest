@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import re
 from pathlib import Path
 from threading import get_ident
 
@@ -114,6 +115,19 @@ class UnitExecutionContext(ExecutionContext):
         if self._task_attempt is not None:
             raise WorkUnitError("CHILD_IO_OVERLAP", "Child model calls cannot overlap")
         self._task_request = detached(inputs)
+        saved = self.work_store.attempts_for_unit(self.lease.unit_id)
+        if saved:
+            original = self.work_store.read_attempt_request(saved[0]["attempt_id"])
+            if ({key: value for key, value in original.items() if key != "call_id"}
+                    != {key: value for key, value in self._task_request.items() if key != "call_id"}):
+                self._task_request = None
+                raise WorkUnitError("ATTEMPT_MISMATCH", "Recovered model request differs from its original wire or schema")
+            if saved[0]["state"] == "settled":
+                self._task_request = original
+                try:
+                    return super().call_io(method, original, lambda: self._replay_native_call(original, saved))
+                finally:
+                    self._task_request = None
         attempt = self.work_store.begin_attempt(self.lease, self._task_request,
             operation=method, ordinal=1, reservation={"output_tokens": inputs["output_ceiling"]})
         if attempt.reused:
@@ -125,6 +139,78 @@ class UnitExecutionContext(ExecutionContext):
             return super().call_io(method, inputs, fn)
         finally:
             self._task_attempt, self._task_request = None, None
+
+    def model_call_id(self, proposed):
+        """Give a reconstructed client the original local call identity.
+
+        The provider wire is still compared in full by call_io. This hook
+        permits a known-not-sent intent to resume its first actual dispatch
+        without rewriting either its intent or any native observation.
+        """
+        self._check_thread()
+        saved = self.work_store.attempts_for_unit(self.lease.unit_id)
+        result = (self.work_store.read_attempt_request(saved[0]["attempt_id"])["call_id"]
+                  if saved else proposed)
+        if type(result) is not str or re.fullmatch(r"[0-9a-f]{32}", result) is None:
+            raise WorkUnitError("CHILD_CONTRACT_INVALID", "Invalid recovered model call identity")
+        return result
+
+    def _replay_native_call(self, inputs, attempts):
+        """Derive the standard call proof from original settled native values.
+
+        A new epoch writes its own snapshots of the unchanged observations.
+        It neither invokes the supplied transport closure nor consumes retry
+        quota, including when the original complete reply remains rejected.
+        """
+        from ..llm.deepseek_required import MODEL, SEARCH_MODE, _canonical
+        from ..llm.json_observation import (contract_schemas, digest as model_digest,
+                                            replay_attempt, validate_reference_observation)
+        from ..redline.model_diagnostics import RequiredModelUnavailable
+        observations, last_native, last_verdict, previous_verdict = [], None, None, None
+        for ordinal, attempt in enumerate(attempts, 1):
+            if attempt["ordinal"] != ordinal or attempt["state"] != "settled":
+                raise WorkUnitError("ATTEMPT_UNKNOWN", "Native replay requires every original attempt to be settled")
+            if ordinal == 2 and (previous_verdict is None or not previous_verdict["retry_eligible"]):
+                raise WorkUnitError("NATIVE_REPLAY_INVALID", "Saved reanswer lacks original replay eligibility")
+            native = self.work_store.read_attempt_response(attempt["attempt_id"])
+            try:
+                verdict = replay_attempt(native, inputs)
+            except ValueError:
+                raise WorkUnitError("NATIVE_REPLAY_INVALID", "Saved native reply failed its original contract") from None
+            ref = self._snapshot(inputs["stage"], "output", native)
+            observations.append({"ordinal": ordinal, "observation_ref": ref, "diagnostic": verdict["diagnostic"]})
+            last_native, last_verdict, previous_verdict = native, verdict, verdict
+        if last_native is None or last_verdict is None:
+            raise WorkUnitError("NATIVE_REPLAY_INVALID", "Native replay has no original reply")
+        observation = validate_reference_observation({"schema": inputs["response_observation_contract"],
+            "call_id": inputs["call_id"], "request_sha256": inputs["request_sha256"],
+            "attempts": observations, "retry_used": len(observations) == 2})
+        diagnostic = last_verdict["diagnostic"]
+        if diagnostic is not None:
+            fields = {name: diagnostic[name] for name in (
+                "http_status", "schema_path", "schema_keyword", "json_stage", "transport") if name in diagnostic}
+            raise RequiredModelUnavailable(diagnostic["code"], **fields, observation=observation)
+        response = detached(last_native["response"])
+        tool = "clean_protocol" in inputs
+        if not tool:
+            response["choices"][0]["message"]["content"] = _canonical(last_verdict["parsed"]).decode("utf-8")
+        result = {"schema": contract_schemas(inputs["response_observation_contract"])["call"],
+            "response_observation_contract": inputs["response_observation_contract"],
+            "call_id": inputs["call_id"], "stage": inputs["stage"], "provider": "deepseek",
+            "requested_model": MODEL, "response_id": response["id"], "model": MODEL,
+            "release": inputs["release"], "usage": last_verdict["usage"], "scene": inputs["scene"],
+            "thinking_mode": inputs["thinking_mode"], "reasoning_effort": inputs["reasoning_effort"],
+            "input_token_estimate": inputs["input_token_estimate"], "output_ceiling": inputs["output_ceiling"],
+            "policy_version": inputs["policy_version"], "registry_version": inputs["registry_version"],
+            "tokenizer_sha256": inputs["tokenizer_sha256"], "finish_reason": "tool_calls" if tool else "stop",
+            "request_sha256": inputs["request_sha256"], "response_sha256": model_digest(response),
+            "transport_response_sha256": last_native["transport"]["body_sha256"],
+            "schema_sha256": inputs["schema_sha256"], "response": response,
+            "system_fingerprint": response["system_fingerprint"], "search_mode": SEARCH_MODE,
+            "parsed": last_verdict["parsed"], "response_observation": observation}
+        if tool:
+            result.update(clean_protocol=detached(inputs["clean_protocol"]), native_parsed=last_verdict["native_parsed"])
+        return result
 
     def model_attempt_snapshot(self, value):
         # A stale worker may append its actual native reply, while its fenced

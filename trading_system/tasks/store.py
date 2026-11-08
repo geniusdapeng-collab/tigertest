@@ -439,7 +439,8 @@ class WorkStore:
         units = {row["unit_id"]: row for row in self._rows(connection, "units")}
         return [row for row in self._rows(connection, "attempts") if row["attempt_id"] != except_id
                 and row["state"] in {"dispatched", "observed"}
-                and (row["state"] == "observed" or units[row["unit_id"]]["state"] != "running"
+                and (row["state"] == "observed" and row["usage"] is None
+                     or units[row["unit_id"]]["state"] != "running"
                      or units[row["unit_id"]]["epoch"] != row["epoch"]
                      or units[row["unit_id"]]["lease_until"] <= self._now())]
 
@@ -519,6 +520,12 @@ class WorkStore:
         if row is None:
             raise WorkUnitError("ATTEMPT_MISSING", "Attempt does not exist")
         return row
+
+    def attempts_for_unit(self, unit_id):
+        self.unit(unit_id)
+        with self._tx() as connection:
+            return sorted((row for row in self._rows(connection, "attempts") if row["unit_id"] == unit_id),
+                          key=lambda row: row["ordinal"])
 
     def record_response(self, lease, attempt_id, response, *, usage):
         if not isinstance(lease, UnitLease):

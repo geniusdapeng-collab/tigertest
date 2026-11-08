@@ -10,6 +10,7 @@ from trading_system.tasks import Coordinator, UnitResult, WorkUnitError
 def test_weighted_tokens_and_memory_allow_only_work_that_fits_then_release(tmp_path):
     store = create(tmp_path, [unit(name, inputs={"tokens": tokens, "memory_bytes": memory})
                               for name, tokens, memory in [("a", 6, 40), ("b", 5, 10), ("c", 4, 60)]])
+    store.busy_timeout_ms = 5000
     entered, release = Event(), Event()
     running, peak, lock = [], [{"tokens": 0, "memory_bytes": 0}], Lock()
     coordinator = Coordinator(store, max_workers=4,
@@ -33,7 +34,7 @@ def test_weighted_tokens_and_memory_allow_only_work_that_fits_then_release(tmp_p
         assert coordinator.wait(timeout=0)["resources"]["used"] == {"tokens": 10, "memory_bytes": 100}
         release.set()
         result = coordinator.run({"extract": handler}, validators={"extract": valid}, timeout=3)
-        assert result["graph_state"] == "completed", result
+        assert result["graph_state"] == "completed", [(row["unit_id"], row["state"], row["error_code"]) for row in result["units"]]
         assert result["resources"]["used"] == {"tokens": 0, "memory_bytes": 0}
         assert all(row["tokens"] <= 10 and row["memory_bytes"] <= 100 for row in peak)
     finally:
