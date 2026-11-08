@@ -124,18 +124,20 @@ class UnitExecutionContext(ExecutionContext):
                 raise WorkUnitError("ATTEMPT_MISMATCH", "Recovered model request differs from its original wire or schema")
             if saved[0]["state"] == "settled":
                 self._task_request = original
-                try:
-                    return super().call_io(method, original, lambda: self._replay_native_call(original, saved))
-                finally:
-                    self._task_request = None
+                from ..llm.json_observation import replay_attempt
+                first_verdict = replay_attempt(self.work_store.read_attempt_response(saved[0]["attempt_id"]), original)
+                resume_second = (self.lease.epoch > saved[0]["epoch"] and first_verdict["retry_eligible"]
+                                 and (len(saved) == 1 or len(saved) == 2 and saved[1]["state"] in {"prepared", "not_sent"}))
+                if not resume_second:
+                    try:
+                        return super().call_io(method, original, lambda: self._replay_native_call(original, saved))
+                    finally:
+                        self._task_request = None
         attempt = self.work_store.begin_attempt(self.lease, self._task_request,
             operation=method, ordinal=1, reservation={"output_tokens": inputs["output_ceiling"]})
-        if attempt.reused:
-            self._task_request = None
-            raise WorkUnitError("NATIVE_REPLAY_REQUIRED", "Settled native reply requires trusted reconstruction")
         self._task_attempt = attempt
         try:
-            return super().call_io(method, inputs, fn)
+            return super().call_io(method, self._task_request, fn)
         finally:
             self._task_attempt, self._task_request = None, None
 
@@ -165,6 +167,28 @@ class UnitExecutionContext(ExecutionContext):
                 if not handle.completed and handle.method == "model.deepseek.chat"]) != 1:
             raise WorkUnitError("CHILD_IO_FORBIDDEN", "Transport requires its active unfinished model IO")
         self.work_store.mark_dispatch(self.lease, self._task_attempt.attempt_id)
+
+    def model_replay_attempt(self, ordinal, inputs):
+        """Return the original settled native to the admitted client loop.
+
+        This is an observation cache, never a synthetic provider response.
+        A prepared second ordinal returns None and reaches the real transport
+        only after its original global retry authorization is recovered.
+        """
+        self._check_thread()
+        if (type(ordinal) is not int or ordinal not in {1, 2}
+                or self._task_attempt is None or ordinal != self._task_attempt.ordinal
+                or detached(inputs) != self._task_request):
+            raise WorkUnitError("ATTEMPT_MISMATCH", "Native cache request differs from its durable call")
+        row = self.work_store.attempt(self._task_attempt.attempt_id)
+        if row["state"] != "settled":
+            if row["state"] == "prepared":
+                return None
+            raise WorkUnitError("ATTEMPT_UNKNOWN", "Unsettled native cache requires reconciliation")
+        original = self.work_store.read_attempt_request(row["attempt_id"])
+        if original != self._task_request:
+            raise WorkUnitError("ATTEMPT_MISMATCH", "Cached native belongs to a different frozen request")
+        return self.work_store.read_attempt_response(row["attempt_id"])
 
     def _replay_native_call(self, inputs, attempts):
         """Derive the standard call proof from original settled native values.
@@ -234,6 +258,10 @@ class UnitExecutionContext(ExecutionContext):
         value = validate_attempt(value, self._task_request)
         native = value.get("response")
         state = self.work_store.attempt(self._task_attempt.attempt_id)["state"]
+        if self._task_attempt.reused:
+            if state != "settled" or value != self.work_store.read_attempt_response(self._task_attempt.attempt_id):
+                raise WorkUnitError("NATIVE_REPLAY_INVALID", "Cached native observation must remain byte-identical")
+            return super().model_attempt_snapshot(value)
         if state == "prepared":
             if native is not None:
                 raise WorkUnitError("DISPATCH_MISSING", "A native provider reply requires its actual dispatch boundary")
@@ -253,8 +281,13 @@ class UnitExecutionContext(ExecutionContext):
         if self._task_attempt is None or self._task_attempt.ordinal != 1:
             return False
         from ..llm.json_observation import replay_attempt
-        admitted = self.work_store.claim_format_retry(self.lease, self._task_attempt.attempt_id,
-            eligibility_verifier=lambda request, native: replay_attempt(native, request)["retry_eligible"])
+        claimed = self.work_store.format_retry_claim()
+        if claimed is not None and claimed["attempt_id"] == self._task_attempt.attempt_id and claimed["unit_id"] == self.lease.unit_id:
+            admitted = replay_attempt(self.work_store.read_attempt_response(self._task_attempt.attempt_id),
+                                      self._task_request)["retry_eligible"]
+        else:
+            admitted = self.work_store.claim_format_retry(self.lease, self._task_attempt.attempt_id,
+                eligibility_verifier=lambda request, native: replay_attempt(native, request)["retry_eligible"])
         if admitted:
             next_attempt = self.work_store.begin_attempt(self.lease, self._task_request,
                 operation="model.deepseek.chat", ordinal=2,

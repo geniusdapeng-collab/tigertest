@@ -484,6 +484,8 @@ class WorkStore:
                     raise WorkUnitError("ATTEMPT_MISMATCH", "Attempt cannot replace its exact request")
                 if existing["state"] == "settled":
                     return AttemptHandle(existing["attempt_id"], lease.unit_id, ordinal, value_hash(request), ref, True)
+                if existing["state"] == "prepared" and (existing["epoch"], existing["owner"]) == (lease.epoch, lease.owner):
+                    return AttemptHandle(existing["attempt_id"], lease.unit_id, ordinal, value_hash(request), ref)
                 if existing["state"] != "not_sent":
                     raise WorkUnitError("ATTEMPT_UNKNOWN", "Attempt requires reconciliation before another send")
                 existing.update(state="prepared", epoch=lease.epoch, owner=lease.owner)
@@ -536,6 +538,10 @@ class WorkStore:
         with self._tx() as connection:
             return sorted((row for row in self._rows(connection, "attempts") if row["unit_id"] == unit_id),
                           key=lambda row: row["ordinal"])
+
+    def format_retry_claim(self):
+        with self._tx() as connection:
+            return self._row(connection, "retry_claims", 1)
 
     def record_response(self, lease, attempt_id, response, *, usage):
         if not isinstance(lease, UnitLease):

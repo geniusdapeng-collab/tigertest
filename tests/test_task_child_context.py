@@ -369,3 +369,107 @@ def test_actual_transport_hook_requires_exact_wire_and_dispatches_once(observed,
             child.call_io("model.deepseek.chat", inputs, invoke_hook)
     store.fail(lease, "NETWORK_TIMEOUT", retryable=False)
     assert store.status()["unknown_attempts"] == 1 and store.status()["held_reservations"]
+
+
+@pytest.mark.parametrize("window", ["before_retry_cas", "after_retry_cas", "after_retry_prepare"])
+def test_recovered_original_format_reanswer_resumes_only_its_known_not_sent_second_attempt(observed, tmp_path, monkeypatch, window):
+    clock = [BASE]
+    store, lease, child = child_fixture(tmp_path, observed, clock=lambda: clock[0])
+    calls = []
+    def post(*args, **kwargs):
+        calls.append(kwargs["data"])
+        return Response(native('{"score":' if len(calls) == 1 else '{"score":7,"reason":"ok"}',
+                               "TEST_FIXTURE_resume_" + str(len(calls))))
+    monkeypatch.setattr(requests, "post", post)
+    original_claim = child.claim_model_format_retry
+    def crash():
+        if window == "after_retry_cas":
+            assert store.claim_format_retry(child.lease, child._task_attempt.attempt_id,
+                eligibility_verifier=lambda request, native: True)
+        elif window == "after_retry_prepare":
+            assert original_claim() is True
+        raise RuntimeError("TEST_FIXTURE crash in reanswer window")
+    monkeypatch.setattr(child, "claim_model_format_retry", crash)
+    with pytest.raises(RuntimeError, match="reanswer window"):
+        with child.step("clean.llm_semantic", {}):
+            invoke(child)
+    assert len(calls) == 1 and store.status()["settled_attempts"] == 1
+    clock[0] += 61
+    store.recover_expired()
+    restored = UnitExecutionContext(observed, work_store=store, lease=store.claim_ready("resumed"), stage="clean.llm_semantic")
+    with restored.step("clean.llm_semantic", {}) as scope:
+        result = invoke(restored)
+        scope.output(result)
+    assert result == {"score": 7, "reason": "ok"} and len(calls) == 2 and calls[0] == calls[1]
+    assert store.status()["format_reanswers"] == 1 and store.status()["settled_attempts"] == 2
+    assert store.status()["known_usage"]["total_tokens"] == 100
+    verify_child_seal(store, restored.seal())
+
+
+def test_crash_before_first_actual_dispatch_restores_original_call_id_and_sends_once(observed, tmp_path, monkeypatch):
+    clock = [BASE]
+    store, lease, child = child_fixture(tmp_path, observed, clock=lambda: clock[0])
+    sent = []
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: sent.append(kwargs["data"]) or Response(
+        native('{"score":7,"reason":"ok"}', "TEST_FIXTURE_first_actual_send")))
+    def crash_before_dispatch(request):
+        raise SystemExit(73)
+    monkeypatch.setattr(child, "model_transport_dispatch", crash_before_dispatch)
+    with pytest.raises(SystemExit) as stopped:
+        with child.step("clean.llm_semantic", {}):
+            invoke(child)
+    assert stopped.value.code == 73
+    assert sent == [] and store.attempts_for_unit("extract")[0]["state"] == "prepared"
+    original_call_id = store.read_attempt_request(store.attempts_for_unit("extract")[0]["attempt_id"])["call_id"]
+    clock[0] += 61
+    store.recover_expired()
+    restored = UnitExecutionContext(observed, work_store=store, lease=store.claim_ready("new"), stage="clean.llm_semantic")
+    with restored.step("clean.llm_semantic", {}) as scope:
+        scope.output(invoke(restored))
+    assert len(sent) == 1 and store.status()["format_reanswers"] == 0
+    assert restored.model_call_id("ignored-proposal") == original_call_id
+    assert store.status()["known_usage"]["total_tokens"] == 50
+    verify_child_seal(store, restored.seal())
+
+
+@pytest.mark.parametrize("window", ["before_retry_cas", "after_retry_cas", "after_retry_prepare"])
+def test_strict_tool_reanswer_resume_retains_original_arguments_and_only_sends_second(strict_execution, tmp_path, monkeypatch, window):
+    from test_deepseek_strict_clean import (complete, native as tool_native, real_http,
+                                           FINAL_SCHEMA, CLEAN_CONTRACT)
+    from trading_system.llm.deepseek_required import DeepSeekRequiredClient
+    parent = strict_execution[0]
+    clock = [BASE]
+    store = WorkStore.create(tmp_path / "strict-resume", manifest(run_id=parent.run_id), clock=lambda: clock[0])
+    store.plan([unit("tool")], originals=[])
+    child = UnitExecutionContext(parent, work_store=store, lease=store.claim_ready("first"), stage="clean.llm_semantic")
+    original_claim = child.claim_model_format_retry
+    def crash():
+        if window == "after_retry_cas":
+            assert store.claim_format_retry(child.lease, child._task_attempt.attempt_id,
+                eligibility_verifier=lambda request, native: True)
+        elif window == "after_retry_prepare":
+            assert original_claim()
+        raise RuntimeError("TEST_FIXTURE strict reanswer preparation crash")
+    monkeypatch.setattr(child, "claim_model_format_retry", crash)
+    with real_http(monkeypatch, lambda *args: tool_native("{bad original arguments", identifier="TEST_FIXTURE_original_first")) as first_http:
+        with pytest.raises(RuntimeError, match="preparation crash"):
+            with child.step("clean.llm_semantic", {}):
+                complete(child)
+        assert len(first_http["wires"]) == 1
+        original_wire = first_http["wires"][0]
+    original_native = store.read_attempt_response(store.attempts_for_unit("tool")[0]["attempt_id"])
+    assert original_native["response"]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == "{bad original arguments"
+    clock[0] += 61
+    store.recover_expired()
+    restored = UnitExecutionContext(parent, work_store=store, lease=store.claim_ready("new"), stage="clean.llm_semantic")
+    client = DeepSeekRequiredClient(restored)
+    with real_http(monkeypatch, lambda *args: tool_native(identifier="TEST_FIXTURE_original_second")) as second_http:
+        with restored.step("clean.llm_semantic", {}) as scope:
+            result = client.complete_json(system="TEST_FIXTURE strict data only", user="TEST_FIXTURE complete original sources",
+                schema_hint={}, schema=FINAL_SCHEMA, clean_protocol={"contract": CLEAN_CONTRACT})
+            scope.output(result)
+        assert second_http["wires"] == [original_wire]
+    assert client._remote_requests == 1
+    assert store.status()["format_reanswers"] == 1 and store.status()["known_usage"]["total_tokens"] == 400
+    assert store.read_attempt_response(store.attempts_for_unit("tool")[0]["attempt_id"]) == original_native
+    verify_child_seal(store, restored.seal())
