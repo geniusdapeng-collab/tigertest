@@ -135,8 +135,17 @@ def _channel_chain(execution=None) -> list:
             raise
         except Exception:
             continue
-    chain.sort(key=lambda p: _health_score(p.name), reverse=True)
     return chain
+
+
+def _ordered_batch_chain(execution=None) -> list:
+    """Return the declared capability order for independent OHLCV batches.
+
+    Aggregate health includes unrelated macro and quote probes. A provider
+    that does not own those capabilities can therefore look unhealthy while
+    remaining the correct and fastest source for a large symbol batch.
+    """
+    return _channel_chain(execution) if execution else _channel_chain()
 
 
 def _series_stale(out, max_lag_days: int = 5, *, as_of_date=None) -> bool:
@@ -425,7 +434,12 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
             _LINEAGE.append((f"{label}+补{len(got)}只", _provider_source(stooq)))
         if len(data) >= enough:
             return _finish()
-    for alt in (_channel_chain(execution) if execution else _channel_chain()):
+    # A source's aggregate health can be low because it does not implement a
+    # macro or quote operation, even when it is the fastest suitable OHLCV
+    # batch source. Batch fallback therefore keeps the declared capability
+    # order instead of allowing unrelated probe failures to put a slower
+    # source first.
+    for alt in _ordered_batch_chain(execution):
         missing = [t for t in tickers if t not in data]
         if not missing or len(data) >= len(tickers):
             break

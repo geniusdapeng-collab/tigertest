@@ -197,6 +197,7 @@ def test_inspection_is_readonly_and_exposes_effective_value_without_startup_path
 
 def test_frozen_contract_reads_without_current_configuration_or_new_directories(tmp_path, monkeypatch):
     _state, run, admission, policy, source = prepared(tmp_path, monkeypatch)
+    assert policy["universe"] == "focused"
     configured_path = Path(os.environ[runtime.RUNTIME_POLICY_ENV])
     configured_path.unlink()
     monkeypatch.setenv(runtime.RUNTIME_POLICY_ENV, str(tmp_path / "unavailable-current.json"))

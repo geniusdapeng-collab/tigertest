@@ -196,7 +196,8 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
             "account", "out", "demo", "use_tuned", "html")},
     }) as stage:
         if (args.mode != "daily" or args.market != "us" or args.demo
-                or args.use_tuned or not args.html or args.universe not in ("file", "extended")
+                or args.use_tuned or not args.html
+                or args.universe not in ("file", "extended", "focused")
                 or Path(args.out).resolve() != paths.reports_dir
                 or Path.cwd().resolve() != paths.work_dir):
             raise ExecutionContractError("Daily request differs from the trusted public paper profile")
@@ -218,7 +219,9 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
         stage.output({"provider": settle_provider.name, "synthetic": False,
                       "journal": before_journal, "sim": before_sim,
                       "calibration": before_calibration, "account_currency": "USD",
-                      "universe": (read_file(universe_path) if universe_path else {"source": "frozen_extended"}),
+                      "universe": (read_file(universe_path) if universe_path
+                                   else {"source": "frozen_focused" if args.universe == "focused"
+                                         else "frozen_extended"}),
                       "calendar": read_file(paths.calendar_override_path)})
 
     with execution.step("state.reset", {"work_dir": paths.work_dir}) as stage:
@@ -877,8 +880,8 @@ def main() -> None:
                                  "agentgw", "demo"],
                         default=None)
     parser.add_argument("--demo", action="store_true", help="离线演示模式（合成数据）")
-    parser.add_argument("--universe", choices=["core", "extended", "full", "file"],
-                        default="extended",
+    parser.add_argument("--universe", choices=["focused", "core", "extended", "full", "file"],
+                        default="focused",
                         help="full=请求所选市场股票列表，实际范围以输出中的来源和预筛记录为准")
     parser.add_argument("--universe-file", default=None)
     parser.add_argument("--top", type=int, default=config.SCAN_TOP_N, help="扫描精评候选数")

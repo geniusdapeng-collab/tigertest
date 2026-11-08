@@ -90,16 +90,13 @@ def test_sina_cn_kline(monkeypatch):
         f'"low":"99","close":"101","volume":"1000"}}' for i in range(60)) + "])")
 
     class R:
-        def read(self):
-            return payload.encode()
+        content = payload.encode()
 
-        def __enter__(self):
-            return self
+        def raise_for_status(self):
+            return None
 
-        def __exit__(self, *a):
-            return False
-
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: R())
+    monkeypatch.setattr("trading_system.providers.sina.curl_requests.get",
+                        lambda *a, **k: R())
     df = SinaProvider().ohlcv("600519.SS", days=60)
     assert len(df) == 60 and float(df["Close"].iloc[-1]) == 101.0
 

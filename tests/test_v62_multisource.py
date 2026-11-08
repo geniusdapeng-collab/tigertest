@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
+
 import pandas as pd
 import pytest
 
@@ -106,9 +109,31 @@ def test_tencent_suffix_placeholder_rejected():
                                  "Close": [1.0]*60, "Volume": [1.0]*60}, index=idx)
 
     p = _P()
+    p._exchange = {}
     df = p._fetch("CAT", 100)
     assert len(df) == 60
     assert calls[0].endswith(".OQ") and calls[1].endswith(".N")
+
+
+def test_tencent_official_directory_avoids_per_symbol_suffix_probing():
+    calls = []
+
+    class _P(TencentProvider):
+        def _load_exchange_map(self):
+            return {"AAPL": ".OQ", "CAT": ".N", "SPY": ".AM"}
+
+        def _fetch_kline(self, sym, days, native=None):
+            calls.append(sym)
+            idx = pd.bdate_range(end="2026-11-06", periods=60)
+            return pd.DataFrame({"Open": [1.0] * 60, "High": [1.0] * 60,
+                                 "Low": [1.0] * 60, "Close": [1.0] * 60,
+                                 "Volume": [1.0] * 60}, index=idx)
+
+    p = _P()
+    assert len(p._fetch("AAPL", 100)) == 60
+    assert len(p._fetch("CAT", 100)) == 60
+    assert len(p._fetch("SPY", 100)) == 60
+    assert calls == ["AAPL.OQ", "CAT.N", "SPY.AM"]
 
 
 def test_tencent_quote_parsing():
@@ -122,6 +147,43 @@ def test_tencent_tnx_vix_raise():
         _TencentFake().tnx_yield()
     with pytest.raises(RuntimeError):
         _TencentFake().vix()
+
+
+def test_provider_batches_are_bounded_and_preserve_requested_order():
+    entered, release = Event(), Event()
+    lock, active, peak = Lock(), [0], [0]
+
+    def frame(name):
+        return pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
+                             "Close": [1.0], "Volume": [1.0]},
+                            index=pd.DatetimeIndex([pd.Timestamp("2026-11-07")]))
+
+    class _Batch(TencentProvider):
+        def _load_exchange_map(self):
+            return {}
+
+        def ohlcv(self, ticker, days=400):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+                if active[0] == self.BATCH_WORKERS:
+                    entered.set()
+            try:
+                assert release.wait(3)
+                return frame(ticker)
+            finally:
+                with lock:
+                    active[0] -= 1
+
+    tickers = ["D", "B", "A", "C", "E"]
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(_Batch().ohlcv_batch, tickers, 30)
+    assert entered.wait(2), "the batch did not reach its admitted concurrency"
+    release.set()
+    result = future.result(timeout=5)
+    pool.shutdown(wait=True)
+    assert peak[0] == _Batch.BATCH_WORKERS
+    assert list(result) == tickers
 
 
 # ---------------------------------------------------------------- 新浪解析
@@ -214,3 +276,14 @@ def test_get_provider_new_names():
     assert get_provider("tencent").name == "tencent"
     assert get_provider("sina").name == "sina"
     assert get_provider("eastmoney").name == "eastmoney"
+
+
+def test_focused_universe_is_a_stable_subset_of_the_broad_scan():
+    from trading_system.universe import EXTENDED_UNIVERSE, FOCUSED_UNIVERSE, load_universe
+
+    assert FOCUSED_UNIVERSE == list(dict.fromkeys(FOCUSED_UNIVERSE))
+    assert 100 <= len(FOCUSED_UNIVERSE) < len(EXTENDED_UNIVERSE)
+    assert set(FOCUSED_UNIVERSE) <= set(EXTENDED_UNIVERSE)
+    assert {"XYZ", "MELI"} <= set(FOCUSED_UNIVERSE)
+    assert not {"SQ", "NOVA"} & set(FOCUSED_UNIVERSE)
+    assert load_universe("focused") == FOCUSED_UNIVERSE

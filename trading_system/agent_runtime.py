@@ -201,7 +201,9 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         "schema": "tiger.policy.v1", "profile": profile,
         "paper_account": ACCOUNT, "execution_mode": "paper",
         "initial_cash_usd": 100000.0, "market": "us",
-        "universe": "extended", "strategy": "evidence-complete-active-v1" if active else "reviewed_source_defaults",
+        "universe": ("focused" if research_work is not None and runtime_input is not None
+                     else "extended"),
+        "strategy": "evidence-complete-active-v1" if active else "reviewed_source_defaults",
         "use_tuned": False, "real_broker": False,
         "execution": asdict(execution),
         "market_timezone": "America/New_York",

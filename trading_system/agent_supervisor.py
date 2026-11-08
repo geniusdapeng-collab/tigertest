@@ -625,7 +625,7 @@ def engine(run: Path) -> int:
         spec.loader.exec_module(module)
         from trading_system import config
         args = argparse.Namespace(
-            mode="daily", market="us", universe="extended", universe_file=None,
+            mode="daily", market="us", universe=policy.get("universe", "extended"), universe_file=None,
             top=config.SCAN_TOP_N, picks=config.MAX_PICKS_DEFAULT,
             account=100000.0, use_tuned=False, html=True, quiet=True,
             demo=False, out=str(paths.reports_dir),
