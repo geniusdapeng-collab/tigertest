@@ -77,6 +77,58 @@ def test_handler_exception_releases_full_weight_for_next_unit(tmp_path):
         coordinator.close()
 
 
+def test_transient_store_busy_is_recorded_as_retryable_not_permanent(tmp_path):
+    store = create(tmp_path, [unit("busy")])
+    coordinator = Coordinator(store, max_workers=1)
+    try:
+        def handler(context):
+            raise WorkUnitError("STORE_BUSY", "TEST_FIXTURE transient SQLite contention")
+        result = coordinator.run({"extract": handler}, validators={"extract": valid}, timeout=3)
+        row = store.unit("busy")
+        assert result["graph_state"] == "failed"
+        assert row["error_code"] == "STORE_BUSY" and row["retryable"] == 1
+        store.retry_units(["busy"])
+        assert store.unit("busy")["state"] == "ready"
+    finally:
+        coordinator.close()
+
+
+def test_store_busy_while_planning_resource_cost_is_retryable(tmp_path):
+    store = create(tmp_path, [unit("busy-plan")])
+    def cost(_spec):
+        raise WorkUnitError("STORE_BUSY", "TEST_FIXTURE resource read contention")
+    coordinator = Coordinator(store, max_workers=1, resource_capacity={"tokens": 10},
+                              resource_cost=cost)
+    try:
+        coordinator.run({"extract": lambda context: pytest.fail("must not dispatch")},
+                        validators={"extract": valid}, timeout=3)
+        row = store.unit("busy-plan")
+        assert row["error_code"] == "STORE_BUSY" and row["retryable"] == 1
+    finally:
+        coordinator.close()
+
+
+def test_saved_infrastructure_failure_can_be_reclassified_only_without_unknown_attempts(tmp_path):
+    store = create(tmp_path, [unit("legacy-busy")])
+    lease = store.claim_ready("stopped-worker")
+    store.fail(lease, "STORE_BUSY", retryable=False)
+    assert store.requeue_transient(
+        ["legacy-busy"], allowed_codes={"STORE_BUSY"},
+        reason="TEST_FIXTURE pre-fix scheduler contention") == ["legacy-busy"]
+    assert store.unit("legacy-busy")["state"] == "ready"
+
+    second = create(tmp_path / "second", [unit("unknown")])
+    lease = second.claim_ready("stopped-worker")
+    attempt = second.begin_attempt(lease, {"TEST_FIXTURE": True}, operation="model.deepseek.chat")
+    second.mark_dispatch(lease, attempt.attempt_id)
+    second.fail(lease, "ATTEMPT_UNKNOWN", retryable=False)
+    with pytest.raises(WorkUnitError) as caught:
+        second.requeue_transient(
+            ["unknown"], allowed_codes={"ATTEMPT_UNKNOWN"},
+            reason="TEST_FIXTURE must reconcile first")
+    assert caught.value.code == "ATTEMPT_UNKNOWN"
+
+
 def test_terminal_unit_result_passes_dispositions_once_through_coordinator(tmp_path):
     store = create(tmp_path, [unit("review", documents=("doc",), terminal=("doc",))],
                    [{"id": "doc", "sha256": "1" * 64}])

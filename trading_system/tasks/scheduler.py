@@ -91,7 +91,9 @@ class Coordinator:
             except BaseException as error:
                 code = error.code if isinstance(error, WorkUnitError) else "UNIT_HANDLER_FAILED"
                 try:
-                    self.store.fail(lease, code, retryable=False)
+                    self.store.fail(lease, code, retryable=code in {
+                        "STORE_BUSY", "RESOURCE_COST_INVALID",
+                    })
                 except WorkUnitError as persistence:
                     if persistence.code not in {"LEASE_FENCED", "TASK_CANCELLED"}:
                         raise
@@ -118,8 +120,10 @@ class Coordinator:
                 cost = {name: cost.get(name, 0) for name in self.resource_capacity}
                 if any(amount > self.resource_capacity[name] for name, amount in cost.items()):
                     code = "RESOURCE_EXCEEDS_CAPACITY"
-            except Exception:
-                cost, code = {}, "RESOURCE_COST_INVALID"
+            except Exception as error:
+                cost = {}
+                code = ("STORE_BUSY" if isinstance(error, WorkUnitError)
+                        and error.code == "STORE_BUSY" else "RESOURCE_COST_INVALID")
             if code is None and not self._reserve_resources(cost):
                 continue
             lease = None
@@ -128,7 +132,7 @@ class Coordinator:
                 if lease is None:
                     continue
                 if code is not None:
-                    self.store.fail(lease, code, retryable=False)
+                    self.store.fail(lease, code, retryable=code == "STORE_BUSY")
                     continue
                 return lease, cost
             finally:

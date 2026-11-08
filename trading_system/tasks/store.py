@@ -38,7 +38,7 @@ JSON_COLUMNS = frozenset({"value", "spec", "result_ref", "request_ref", "reserva
 
 
 class WorkStore:
-    def __init__(self, root: Path, manifest: dict, *, clock=None, busy_timeout_ms=5000):
+    def __init__(self, root: Path, manifest: dict, *, clock=None, busy_timeout_ms=15000):
         self.root = Path(root)
         self.database = self.root / "work-units.sqlite3"
         self.manifest = validate_manifest(manifest)
@@ -867,6 +867,43 @@ class WorkStore:
                 row.update(state="ready", error_code=None, retryable=0)
                 rows.append(row)
             self._change(connection, "units_retried", {"units": rows})
+
+    def requeue_transient(self, unit_ids, *, allowed_codes, reason):
+        """Reclassify only explicitly trusted transient failures.
+
+        Used when an older checkpoint stored infrastructure contention as a
+        permanent business failure. Unknown external attempts must already be
+        reconciled; this method cannot revive dispatched/observed work.
+        """
+        if not isinstance(unit_ids, (list, tuple)) or not unit_ids or len(set(unit_ids)) != len(unit_ids):
+            raise WorkUnitError("CONTRACT_INVALID", "Distinct transient unit identities are required")
+        if not isinstance(allowed_codes, (list, tuple, set, frozenset)) or not allowed_codes:
+            raise WorkUnitError("CONTRACT_INVALID", "Explicit transient error codes are required")
+        plain_label(reason, "transient retry reason")
+        allowed = {identifier(code, "transient error code") for code in allowed_codes}
+        for name in unit_ids:
+            identifier(name, "unit")
+        with self._tx(write=True) as connection:
+            self._admission(connection)
+            if self._unresolved(connection):
+                raise WorkUnitError("ATTEMPT_UNKNOWN", "Transient retry requires native reconciliation first")
+            rows, attempts = [], list(self._rows(connection, "attempts"))
+            for name in unit_ids:
+                row = self._row(connection, "units", name)
+                unit_attempts = [attempt for attempt in attempts if attempt["unit_id"] == name]
+                # ATTEMPT_UNKNOWN/UNIT_HANDLER_FAILED with no dispatched work is
+                # a scheduler-side failure, not a permanent semantic failure.
+                no_unsettled = all(attempt["state"] in {"settled", "not_sent"} for attempt in unit_attempts)
+                if (row is None or row["state"] != "failed" or row["error_code"] not in allowed
+                        or not no_unsettled):
+                    raise WorkUnitError("RETRY_NOT_ADMITTED", "Failure is outside the transient retry contract")
+                row.update(state="ready", owner=None, lease_until=None, error_code=None, retryable=0)
+                rows.append(row)
+            self._change(connection, "transient_units_retried", {
+                "meta": [{"key": "transient_retry_reason", "value": reason}],
+                "units": rows,
+            })
+        return [row["unit_id"] for row in rows]
 
     def cancel(self, *, reason):
         plain_label(reason, "cancellation reason")

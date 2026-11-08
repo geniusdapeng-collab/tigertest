@@ -271,9 +271,9 @@ def _recover_work_store(run, admission, policy, verifier):
     from .llm.json_observation import replay_attempt
     store = WorkStore.create(run / "tasks", work_manifest(admission))
     status = store.status()
-    if status["unknown_attempts"] or source_unknown_attempts(run):
-        raise EvidenceInvalid("RECONCILIATION_REQUIRED", "An original external attempt remains unknown; retain its reservation")
     if not status["units"] and status["plan_sha256"] is None:
+        if source_unknown_attempts(run):
+            raise EvidenceInvalid("RECONCILIATION_REQUIRED", "An original external attempt remains unknown; retain its reservation")
         return store
     if status["cancel_requested"]:
         raise EvidenceInvalid("RESUME_NOT_RETRYABLE", "An explicitly cancelled research task cannot be resumed")
@@ -286,7 +286,31 @@ def _recover_work_store(run, admission, policy, verifier):
             if usage is None or {name: usage[name] for name in row["usage"]} != row["usage"]:
                 raise EvidenceInvalid("RECONCILIATION_REQUIRED", "Observed model usage did not pass native replay")
             store.settle_attempt(row["attempt_id"])
-    if any(row["state"] == "failed" and not row["retryable"] for row in store.status()["units"]):
+    current_attempts = store.attempts()
+    if (any(row["state"] in {"dispatched", "observed"} for row in current_attempts)
+            or source_unknown_attempts(run)):
+        raise EvidenceInvalid("RECONCILIATION_REQUIRED", "An original external attempt remains unknown; retain its reservation")
+    attempts_by_unit = {}
+    for attempt in current_attempts:
+        attempts_by_unit.setdefault(attempt["unit_id"], []).append(attempt)
+    transient = []
+    for row in status["units"]:
+        if row["state"] != "failed":
+            continue
+        unit_attempts = attempts_by_unit.get(row["unit_id"], [])
+        settled_only = all(attempt["state"] in {"settled", "not_sent"} for attempt in unit_attempts)
+        if (row["error_code"] == "STORE_BUSY"
+                or row["error_code"] in {"ATTEMPT_UNKNOWN", "UNIT_HANDLER_FAILED"}
+                and settled_only):
+            transient.append(row["unit_id"])
+    if transient:
+        store.requeue_transient(
+            transient,
+            allowed_codes={"STORE_BUSY", "ATTEMPT_UNKNOWN", "UNIT_HANDLER_FAILED"},
+            reason="resume_reclassified_pre_fix_scheduler_contention",
+        )
+        status = store.status()
+    if any(row["state"] == "failed" and not row["retryable"] for row in status["units"]):
         raise EvidenceInvalid("RESUME_NOT_RETRYABLE", "A complete non-retryable business failure remains a failure")
     store.recover_stopped_workers(verifier=verifier)
     store.verify()
