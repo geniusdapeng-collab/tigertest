@@ -322,8 +322,15 @@ class HttpTransport:
                 if status != 200:
                     code = "RATE_LIMITED" if status == 429 else "SOURCE_AUTH_REQUIRED" if status == 401 else "FETCH_DENIED" if status in {402, 403} else "SOURCE_UNAVAILABLE"
                     host_retry_after = retry_after_seconds(response.headers.get("Retry-After")) or 0.0
+                    from ..llm.http_observation import observe_http_error
+                    error_body = observe_http_error(response, status=status,
+                        deadline=cutoff if cutoff is not None else time.monotonic() + self.timeout,
+                        max_bytes=limit)
+                    self.total_bytes_received += error_body["body_bytes"]
+                    if self._io_budget is not None:
+                        self._io_budget["bytes"] -= error_body["body_bytes"]
                     raise SourceError(code, http_status=status, delivery="returned",
-                        retry_after=host_retry_after or None)
+                        retry_after=host_retry_after or None, details={"http_error": error_body})
                 declared_header = response.headers.get("Content-Length")
                 declared = None
                 if declared_header is not None:

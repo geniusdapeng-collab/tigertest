@@ -607,6 +607,18 @@ class DeepSeekRequiredClient:
             if observed_chat and type(status) is int and 100 <= status <= 599:
                 self._last_chat_transport["http_status"] = status
             if type(status) is not int or status != 200:
+                if type(status) is int and 100 <= status <= 599:
+                    from .http_observation import MAX_ERROR_BYTES, observe_http_error
+                    error_body = observe_http_error(response, status=status, deadline=deadline,
+                        max_bytes=min(MAX_ERROR_BYTES, remaining_bytes) if tool_limits is not None else MAX_ERROR_BYTES)
+                    if observed_chat:
+                        self._last_chat_transport.update({name: error_body[name] for name in
+                            ("body_sha256", "body_bytes", "body_whitespace_only", "body_complete")})
+                        self._last_chat_transport["http_error"] = error_body
+                    if tool_limits is not None:
+                        meter["bytes_received"] += error_body["body_bytes"]
+                    if _transport_observation is not None:
+                        _transport_observation["phase"] = "http_envelope"
                 _fail(f"HTTP_{status}" if type(status) is int and 100 <= status <= 599 else "HTTP_INVALID")
             encoding = response.headers.get("Content-Encoding", "identity").lower()
             if encoding not in ("", "identity"):

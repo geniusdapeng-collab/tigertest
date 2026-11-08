@@ -44,7 +44,8 @@ def digest(value):
 def validate_transport(value):
     fields = {"http_status", "body_sha256", "body_bytes", "body_whitespace_only", "body_complete"}
     routed = {"final_response_url", "redirected"}
-    if not isinstance(value, dict) or set(value) not in (fields, fields | routed):
+    if not isinstance(value, dict) or set(value) not in (
+            fields, fields | routed, fields | {"http_error"}, fields | routed | {"http_error"}):
         raise ValueError("Invalid native transport observation")
     if (value["http_status"] is not None and (type(value["http_status"]) is not int
             or not 100 <= value["http_status"] <= 599)
@@ -61,6 +62,11 @@ def validate_transport(value):
                 "https://api.deepseek.com/beta/chat/completions"})
             or value["redirected"] is not None and type(value["redirected"]) is not bool):
         raise ValueError("Invalid native response route")
+    if "http_error" in value:
+        from .http_observation import validate_http_error
+        error = validate_http_error(value["http_error"])
+        if any(error[name] != value[name] for name in fields):
+            raise ValueError("HTTP error summary differs from observed transport")
     return deepcopy(value)
 
 
