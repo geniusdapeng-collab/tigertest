@@ -36,6 +36,7 @@ from .model_budget import (
     chat_request_core,
     plan_request,
     tokenizer_receipt,
+    verify_request_budget,
 )
 from .scene_policy import (
     KERNEL_SCENE_MAP,
@@ -586,6 +587,11 @@ class DeepSeekRequiredClient:
             remaining = max(0.001, deadline - time.monotonic()) if tool_limits is not None else None
             if tool_limits is not None:
                 meter["request_count"] += 1
+            dispatch = getattr(self.execution, "model_transport_dispatch", None) if chat else None
+            if dispatch is not None:
+                if not callable(dispatch):
+                    _fail("TRUSTED_CONFIGURATION_MISMATCH")
+                dispatch(request)
             response = requests.post(
                 BASE_URL + path, data=wire,
                 headers={"Content-Type": "application/json", "Accept": "application/json",
@@ -813,6 +819,12 @@ class DeepSeekRequiredClient:
         def invoke_once():
             nonlocal observed_attempt
             observed_attempt = None
+            try:
+                verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
+                    input_tokens=inputs["input_token_estimate"], output_ceiling=inputs["output_ceiling"],
+                    registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
+            except TokenBudgetError as error:
+                _fail(error.code)
             response, body_hash = self._post_json("/chat/completions", request)
             if response.get("model") != MODEL:
                 _fail("RESPONSE_MODEL_MISMATCH")
@@ -937,6 +949,11 @@ class DeepSeekRequiredClient:
             _fail(error.code)
         call_id = uuid.uuid4().hex
         mode, effort = request["thinking"]["type"], request.get("reasoning_effort")
+        identity = getattr(self.execution, "model_call_id", None)
+        if identity is not None:
+            if not callable(identity):
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
+            call_id = self._identifier(identity(call_id))
         inputs = {"schema": schemas["request"], "response_observation_contract": contract,
             "call_id": call_id, "stage": stage, "provider": "deepseek", "method": "POST",
             "endpoint": BASE_URL + "/chat/completions", "request": request, "request_sha256": _hash(request),
@@ -998,6 +1015,12 @@ class DeepSeekRequiredClient:
             for ordinal in (1, 2):
                 self._last_chat_transport = None
                 try:
+                    try:
+                        verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
+                            input_tokens=inputs["input_token_estimate"], output_ceiling=inputs["output_ceiling"],
+                            registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
+                    except TokenBudgetError as error:
+                        _fail(error.code)
                     native, body_hash = self._post_json("/chat/completions", request)
                     if native.get("model") != MODEL:
                         _fail("RESPONSE_MODEL_MISMATCH")
