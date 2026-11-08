@@ -129,16 +129,26 @@ class WorkStore:
         busy = isinstance(exc, sqlite3.OperationalError) and getattr(exc, "sqlite_errorcode", None) in {
             sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
         return WorkUnitError("STORE_BUSY" if busy else "STORE_INVALID",
-                             "Work-unit store is busy" if busy else "Work-unit persistence is invalid")
+                             "Work-unit store is busy" if busy else "Work-unit persistence is invalid",
+                             cause_type=type(exc).__name__)
 
     def _safe_database(self):
         checked_root(self.root)
         for name in ("work-units.sqlite3", "work-units.sqlite3-wal", "work-units.sqlite3-shm", "work-units.sqlite3-journal"):
             target = self.root / name
-            if target.exists() or target.is_symlink():
+            try:
                 info = target.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                    raise WorkUnitError("STORE_INVALID", "Unsafe work-unit database")
+            except FileNotFoundError:
+                # SQLite removes WAL/SHM when its last connection closes. A
+                # missing sidecar is normal; the main DB is checked by _tx.
+                continue
+            if stat.S_ISREG(info.st_mode) and info.st_nlink == 0 and name != "work-units.sqlite3":
+                # A concurrent unlink can be observed as a zero-link regular
+                # sidecar. It has no path to follow or overwrite. Symlinks,
+                # other file types and hardlinks remain rejected below.
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise WorkUnitError("STORE_INVALID", "Unsafe work-unit database", cause_type="UnsafeFileType")
 
     @contextmanager
     def _tx(self, write=False):
@@ -721,7 +731,12 @@ class WorkStore:
         with self._tx(write=True) as connection:
             row = self._lease(connection, lease)
             row.update(state="failed", error_code=error_code, retryable=int(retryable), owner=None, lease_until=None)
-            self._change(connection, "unit_failed", {"units": [row]})
+            not_sent = []
+            for attempt in self._rows(connection, "attempts"):
+                if attempt["unit_id"] == lease.unit_id and attempt["state"] == "prepared":
+                    attempt["state"] = "not_sent"
+                    not_sent.append(attempt)
+            self._change(connection, "unit_failed", {"units": [row], "attempts": not_sent})
 
     def recover_expired(self):
         ready, unknown = [], []

@@ -134,7 +134,6 @@ class UnitExecutionContext(ExecutionContext):
             self._task_request = None
             raise WorkUnitError("NATIVE_REPLAY_REQUIRED", "Settled native reply requires trusted reconstruction")
         self._task_attempt = attempt
-        self.work_store.mark_dispatch(self.lease, attempt.attempt_id)
         try:
             return super().call_io(method, inputs, fn)
         finally:
@@ -154,6 +153,18 @@ class UnitExecutionContext(ExecutionContext):
         if type(result) is not str or re.fullmatch(r"[0-9a-f]{32}", result) is None:
             raise WorkUnitError("CHILD_CONTRACT_INVALID", "Invalid recovered model call identity")
         return result
+
+    def model_transport_dispatch(self, request):
+        """Mark the actual provider boundary after local budget validation."""
+        self._check_thread()
+        if (self._task_attempt is None or self._task_request is None
+                or detached(request) != self._task_request.get("request")):
+            raise WorkUnitError("ATTEMPT_MISMATCH", "Transport wire differs from its durable model intent")
+        scope = self._active
+        if scope is None or len([handle for handle in scope._handles
+                if not handle.completed and handle.method == "model.deepseek.chat"]) != 1:
+            raise WorkUnitError("CHILD_IO_FORBIDDEN", "Transport requires its active unfinished model IO")
+        self.work_store.mark_dispatch(self.lease, self._task_attempt.attempt_id)
 
     def _replay_native_call(self, inputs, attempts):
         """Derive the standard call proof from original settled native values.
@@ -222,6 +233,13 @@ class UnitExecutionContext(ExecutionContext):
         from ..llm.json_observation import validate_attempt
         value = validate_attempt(value, self._task_request)
         native = value.get("response")
+        state = self.work_store.attempt(self._task_attempt.attempt_id)["state"]
+        if state == "prepared":
+            if native is not None:
+                raise WorkUnitError("DISPATCH_MISSING", "A native provider reply requires its actual dispatch boundary")
+            # A local budget/configuration rejection may have a closed native
+            # failure diagnostic, but no provider send or billable response.
+            return super().model_attempt_snapshot(value)
         amount = None if native is None else {key: native["usage"][key]
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
         self.work_store.record_response(self.lease, self._task_attempt.attempt_id, value, usage=amount)
@@ -241,7 +259,6 @@ class UnitExecutionContext(ExecutionContext):
             next_attempt = self.work_store.begin_attempt(self.lease, self._task_request,
                 operation="model.deepseek.chat", ordinal=2,
                 reservation={"output_tokens": self._task_request["output_ceiling"]})
-            self.work_store.mark_dispatch(self.lease, next_attempt.attempt_id)
             self._task_attempt = next_attempt
         return admitted
 

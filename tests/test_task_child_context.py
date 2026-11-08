@@ -3,6 +3,8 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import sqlite3
+import stat
+from types import SimpleNamespace
 from threading import get_ident
 from concurrent.futures import ThreadPoolExecutor
 
@@ -298,3 +300,72 @@ def test_original_tool_arguments_are_replayed_losslessly_with_local_http_only(st
     stage_output = read_snapshot(restored.child_root, call["output_ref"], run_id=parent.run_id, stage="clean.llm_semantic", role="output")
     proof = read_snapshot(restored.child_root, stage_output["io_calls"][0]["output_ref"], run_id=parent.run_id, stage="clean.llm_semantic", role="output")
     assert proof["response"]["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] == arguments[-1]
+
+
+@pytest.mark.parametrize("zero_links", [False, True])
+def test_sqlite_sidecar_removed_by_last_connection_close_is_not_an_unsafe_file(tmp_path, monkeypatch, zero_links):
+    store = create(tmp_path)
+    sidecar = store.root / "work-units.sqlite3-wal"
+    sidecar.write_bytes(b"")
+    original = Path.lstat
+    removed = []
+    def disappeared(path, *args, **kwargs):
+        if path == sidecar and not removed:
+            removed.append(path)
+            path.unlink()
+            if zero_links:
+                return SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_nlink=0)
+            raise FileNotFoundError("TEST_FIXTURE SQLite removed its own WAL")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "lstat", disappeared)
+    assert store.status()["graph_state"] == "ready"
+    assert removed == [sidecar]
+
+
+def test_local_budget_rejection_keeps_native_diagnostic_but_never_creates_provider_unknown(observed, tmp_path):
+    from trading_system.llm.json_observation import CONTRACT as OBSERVATION_CONTRACT, ATTEMPT_SCHEMA, staged_diagnostic
+    store, lease, child = child_fixture(tmp_path, observed)
+    inputs = {"request": {"TEST_FIXTURE": "wire"}, "output_ceiling": 20, "call_id": "c" * 32,
+              "request_sha256": "1" * 64, "response_observation_contract": OBSERVATION_CONTRACT}
+    transport = {"http_status": None, "body_sha256": None, "body_bytes": None,
+                 "body_whitespace_only": None, "body_complete": False}
+    error = RequiredModelUnavailable("TRUSTED_CONFIGURATION_MISMATCH")
+    native = {"schema": ATTEMPT_SCHEMA, "call_id": inputs["call_id"], "ordinal": 1,
+              "request_sha256": inputs["request_sha256"], "transport": transport, "response": None,
+              "response_sha256": None, "content_redacted": None, "reasoning_state": None,
+              "fingerprint_valid": None, "transport_diagnostic": staged_diagnostic(error, "http_envelope", transport)}
+    native_refs = []
+    def local_guard():
+        native_refs.append(child.model_attempt_snapshot(native))
+        raise error
+    with pytest.raises(RequiredModelUnavailable):
+        with child.step("clean.llm_semantic", {}):
+            child.call_io("model.deepseek.chat", inputs, local_guard)
+    assert store.status()["unknown_attempts"] == 0
+    with store._tx() as connection:
+        assert store._rows(connection, "observations") == []
+    store.fail(lease, "LOCAL_BUDGET_REJECTED", retryable=False)
+    attempt = store.attempts_for_unit("extract")[0]
+    assert attempt["state"] == "not_sent" and store.status()["held_reservations"] == []
+    from trading_system.agent_evidence import read_snapshot
+    assert read_snapshot(child.child_root, native_refs[0], run_id=child.run_id,
+                         stage="clean.llm_semantic", role="output") == native
+
+
+def test_actual_transport_hook_requires_exact_wire_and_dispatches_once(observed, tmp_path):
+    store, lease, child = child_fixture(tmp_path, observed)
+    inputs = {"request": {"TEST_FIXTURE": "original"}, "output_ceiling": 20}
+    def invoke_hook():
+        with pytest.raises(WorkUnitError) as changed:
+            child.model_transport_dispatch({"TEST_FIXTURE": "changed"})
+        assert changed.value.code == "ATTEMPT_MISMATCH" and store.status()["unknown_attempts"] == 0
+        child.model_transport_dispatch(inputs["request"])
+        assert store.status()["unknown_attempts"] == 1
+        with pytest.raises(WorkUnitError):
+            child.model_transport_dispatch(inputs["request"])
+        raise RequiredModelUnavailable("NETWORK_TIMEOUT")
+    with pytest.raises(RequiredModelUnavailable):
+        with child.step("clean.llm_semantic", {}):
+            child.call_io("model.deepseek.chat", inputs, invoke_hook)
+    store.fail(lease, "NETWORK_TIMEOUT", retryable=False)
+    assert store.status()["unknown_attempts"] == 1 and store.status()["held_reservations"]
