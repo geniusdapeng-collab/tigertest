@@ -251,15 +251,26 @@ def validate_annotation(document, cutoff, *, security_ids=None, entity_registry=
             "eligibility": deepcopy(document.eligibility), "status": row["status"]}
 
 
-def validate_document_review(document, review) -> dict:
+def inspect_document_review(document, review) -> dict:
+    """Validate the review shape and preserve a negative semantic outcome."""
     validate_schema(review, review_schema())
-    if (review["complete"] is not True or not all(review["checks"].values())
-            or review["omissions"] or review["contradictions"]):
-        raise ValueError("DOCUMENT_REVIEW_FAILED")
     return {"schema": "tiger.document-review/v1", "contract": WORK_CLEAN_CONTRACT,
             "document_id": document.raw.doc_id, "source_sha256": text_digest(document.raw.content),
             "annotation_sha256": digest(annotation_payload(document)),
-            "review_sha256": digest(review), "complete": True}
+            "review_sha256": digest(review), "complete": review["complete"],
+            "checks": deepcopy(review["checks"]), "omissions": deepcopy(review["omissions"]),
+            "contradictions": deepcopy(review["contradictions"]),
+            "notes": review["notes"],
+            "review_accepted": (
+                review["complete"] is True and all(review["checks"].values())
+                and not review["omissions"] and not review["contradictions"])}
+
+
+def validate_document_review(document, review) -> dict:
+    result = inspect_document_review(document, review)
+    if result["review_accepted"] is not True:
+        raise ValueError("DOCUMENT_REVIEW_FAILED")
+    return result
 
 
 def _selected_ranges(document):

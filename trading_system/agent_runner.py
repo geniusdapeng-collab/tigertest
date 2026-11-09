@@ -37,10 +37,10 @@ from .agent_runtime import (
 from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
                                PreparationExpired, thread_submission)
 
-OPERATIONS = frozenset({"doctor", "describe", "run", "resume", "supplement", "status", "receipt", "verify"})
+OPERATIONS = frozenset({"doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"})
 MAX_INPUT_BYTES = 65536
 MAX_SUPPLEMENT_SYMBOLS = 32
-TERMINAL_FAILURES = frozenset({"failed", "blocked", "interrupted"})
+TERMINAL_FAILURES = frozenset({"failed", "blocked", "interrupted", "cancelled"})
 EXIT_CODES = {
     "INVALID_REQUEST": 2, "INPUT_TOO_LARGE": 2,
     "READ_ONLY": 3, "LIVE_FORBIDDEN": 3, "UNAUTHORIZED": 3,
@@ -52,8 +52,9 @@ EXIT_CODES = {
     "RECONCILIATION_REQUIRED": 5, "PARENT_ATTEMPT_FENCED": 5,
     "RESUME_UNSUPPORTED": 8, "RESUME_NOT_RETRYABLE": 8,
     "SUPPLEMENT_UNAVAILABLE": 6, "SUPPLEMENT_SCOPE_INVALID": 2,
+    "CANCEL_UNSUPPORTED": 8,
     "RESEARCH_UNITS_INCOMPLETE": 8, "CONTRACT_INVALID": 2, "SEGMENTS_INVALID": 2,
-    "TIMEOUT": 9, "TASK_DEADLINE": 9, "INTERRUPTED": 9, "CANCELLED": 130,
+    "TIMEOUT": 9, "TASK_DEADLINE": 9, "TASK_CANCELLED": 9, "INTERRUPTED": 9, "CANCELLED": 130,
 }
 
 
@@ -89,6 +90,7 @@ def validate_request(operation: str, request: object) -> dict:
         "run": {"schema_version", "profile", "paper_account", "idempotency_key"},
         "resume": {"run_id"},
         "supplement": {"schema_version", "parent_run_id", "symbols", "idempotency_key"},
+        "cancel": {"run_id"},
         "status": {"run_id"}, "receipt": {"run_id"}, "verify": {"run_id"},
     }[operation]
     if set(request) != fields:
@@ -115,7 +117,7 @@ def validate_request(operation: str, request: object) -> dict:
                     for symbol in symbols)
                 or len(symbols) != len(set(symbols))):
             raise EvidenceInvalid("INVALID_REQUEST", "Invalid explicit supplement research request")
-    if operation in {"status", "receipt", "verify", "resume"}:
+    if operation in {"status", "receipt", "verify", "resume", "cancel"}:
         if not isinstance(request["run_id"], str) or not RUN_RE.fullmatch(request["run_id"]):
             raise EvidenceInvalid("INVALID_REQUEST", "Invalid run identity")
     return request
@@ -494,6 +496,49 @@ def _lock_identity_is_owned(descriptors: tuple[tuple[int, Path], ...]) -> None:
     return None
 
 
+def submit_cancel(state: Path, request: dict) -> dict:
+    """Request scheduler cancellation without cancelling an active observer."""
+    run_id = request.get("run_id") if isinstance(request, dict) else None
+    try:
+        validate_request("cancel", request)
+        checked_root(state)
+        run = state / "runs" / run_id
+        if not run.exists() and not run.is_symlink():
+            raise EvidenceInvalid("RUN_NOT_FOUND", "Run identity is not present")
+        checked_root(run)
+        observation = observe_run(state, run_id)
+        if observation["status"] in {"completed", "completed_degraded"}:
+            return envelope("cancel", run_id=run_id, status=observation["status"],
+                            data={"already_terminal": True, "cancel_requested": False})
+        if observation["status"] in TERMINAL_FAILURES:
+            return envelope("cancel", run_id=run_id, status=observation["status"],
+                            data={"already_terminal": True, "cancel_requested": False})
+        admission = read_json(run, "admission.json")
+        policy = read_json(run, "policy.json")
+        if not isinstance(policy.get("research_work"), dict):
+            raise EvidenceInvalid("CANCEL_UNSUPPORTED",
+                                  "This run has no resumable work-scheduler contract")
+        from .research_work import work_manifest
+        from .tasks.store import WorkStore
+        store = WorkStore.create(run / "tasks", work_manifest(admission))
+        status = store.cancel(reason="operator_cancel_request")
+        state_label = "cancelling" if observation["active"] else "cancelled"
+        return envelope("cancel", run_id=run_id, status=state_label,
+                        data={"cancel_requested": True,
+                              "scheduling": {
+                                  "graph_state": status["graph_state"],
+                                  "unknown_attempts": status["unknown_attempts"],
+                                  "cancelling_observation_stops_scheduler": False,
+                              }})
+    except EvidenceInvalid as exc:
+        return failure("cancel", exc.code, str(exc), run_id=run_id,
+                       status="not_found" if exc.code == "RUN_NOT_FOUND" else "invalid")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return failure("cancel", "RESULT_INVALID",
+                       "Stored workflow evidence or runtime configuration is invalid.",
+                       run_id=run_id)
+
+
 def submit_resume(state: Path, request: dict, *,
                   _preparation_seconds: float = PREPARATION_SECONDS) -> dict:
     """Resume the exact stopped run under its original admission and locks."""
@@ -651,7 +696,7 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
         run_id = request.get("run_id")
         if mode not in {"readonly", "paper"}:
             raise EvidenceInvalid("INVALID_REQUEST", "Invalid startup access mode")
-        if operation in {"run", "resume", "supplement"} and mode != "paper":
+        if operation in {"run", "resume", "supplement", "cancel"} and mode != "paper":
             raise EvidenceInvalid("READ_ONLY", "Paper submission requires explicit paper startup mode")
         _platform()
         if operation == "run":
@@ -661,6 +706,8 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
             return submit_resume(state, request)
         if operation == "supplement":
             return submit_supplement(state, request)
+        if operation == "cancel":
+            return submit_cancel(state, request)
         checked_root(state)
         if operation == "doctor":
             return doctor(state, mode)

@@ -8,7 +8,7 @@ export const ENGINE_ROOT = resolve(import.meta.dirname, "../../..");
 export const PROFILE = "us-public-paper-v1";
 export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
 export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
-export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "status", "receipt", "verify"]);
+export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
   frameBytes: 131072, requestMs: 60000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
   terminateMs: 250, cleanupMs: 2000 });
@@ -30,7 +30,7 @@ const EXIT_CODES = new Map([
   ...["RUNNER_FAILED", "RESULT_INVALID", "EVIDENCE_MISSING", "EVIDENCE_HASH_MISMATCH", "ARTIFACT_WRITE_FAILED", "RUN_NOT_FOUND"].map((s) => [s, 7]),
   ...["STEP_ORDER_VIOLATION", "STEP_FAILED", "RUN_INCOMPLETE", "MODEL_REQUIRED_FAILED"].map((s) => [s, 8]),
   ...["RECONCILIATION_REQUIRED", "PARENT_ATTEMPT_FENCED"].map((s) => [s, 5]),
-  ...["RESUME_UNSUPPORTED", "RESUME_NOT_RETRYABLE", "RESEARCH_UNITS_INCOMPLETE"].map((s) => [s, 8]),
+  ...["RESUME_UNSUPPORTED", "RESUME_NOT_RETRYABLE", "RESEARCH_UNITS_INCOMPLETE", "CANCEL_UNSUPPORTED"].map((s) => [s, 8]),
   ...["SUPPLEMENT_UNAVAILABLE"].map((s) => [s, 6]),
   ...["SUPPLEMENT_SCOPE_INVALID", "CONTRACT_INVALID", "SEGMENTS_INVALID"].map((s) => [s, 2]),
   ["TIMEOUT", 9], ["INTERRUPTED", 9], ["CANCELLED", 130],
@@ -264,7 +264,7 @@ export function validateEnvelope(envelope, operation, input = {}) {
     if (envelope.error && envelope.error.run_id !== envelope.run_id) throw invalid();
     if (envelope.error?.details_ref !== null && envelope.error?.details_ref !== undefined && !safeEvidencePath(envelope.error.details_ref)) throw invalid();
     for (const ref of envelope.evidence_refs) if (!safeEvidencePath(ref.path)) throw invalid();
-    if (["run", "resume", "supplement", "status", "doctor", "describe"].includes(operation)
+    if (["run", "resume", "supplement", "cancel", "status", "doctor", "describe"].includes(operation)
       && (envelope.summary !== null || envelope.verification !== null)) throw invalid();
     if (["run", "supplement"].includes(operation) && envelope.operation_ok
       && (!["accepted", "running"].includes(envelope.status) || !envelope.run_id || envelope.execution_mode !== "paper")) throw invalid();
@@ -367,7 +367,7 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
   try {
     config = startupOptions(options);
     validateRequest(operation, input);
-    if (["run", "resume", "supplement"].includes(operation) && config.mode !== "paper") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
+    if (["run", "resume", "supplement", "cancel"].includes(operation) && config.mode !== "paper") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
     if (signal?.aborted) throw new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id });
   } catch (error) { return failureEnvelope(operation, error, input?.run_id); }
   const args = ["-B", "-m", "trading_system.agent_runner", "--mode", config.mode, "--state-root", config.stateRoot, operation];

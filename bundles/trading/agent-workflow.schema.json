@@ -7,10 +7,10 @@
   "required": ["schema_version", "operation", "operation_ok", "run_id", "status", "execution_mode", "data", "summary", "verification", "limitations", "evidence_refs", "error"],
   "properties": {
     "schema_version": {"type": "string", "const": "tiger.agent-result/v1"},
-    "operation": {"type": ["string", "null"], "enum": ["doctor", "describe", "run", "resume", "supplement", "status", "receipt", "verify", null]},
+    "operation": {"type": ["string", "null"], "enum": ["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify", null]},
     "operation_ok": {"type": "boolean"},
     "run_id": {"type": ["string", "null"], "pattern": "^run-[0-9a-f]{32}$"},
-    "status": {"type": "string", "enum": ["ready", "not_ready", "accepted", "running", "completed", "completed_degraded", "failed", "blocked", "interrupted", "not_found", "invalid"]},
+    "status": {"type": "string", "enum": ["ready", "not_ready", "accepted", "running", "cancelling", "cancelled", "completed", "completed_degraded", "failed", "blocked", "interrupted", "not_found", "invalid"]},
     "execution_mode": {"type": ["string", "null"], "enum": ["paper", null]},
     "data": {"type": "object"},
     "summary": {
@@ -168,6 +168,10 @@
       }
     },
     "resume_request": {
+      "type": "object", "additionalProperties": false, "required": ["run_id"],
+      "properties": {"run_id": {"type": "string", "pattern": "^run-[0-9a-f]{32}$"}}
+    },
+    "cancel_request": {
       "type": "object", "additionalProperties": false, "required": ["run_id"],
       "properties": {"run_id": {"type": "string", "pattern": "^run-[0-9a-f]{32}$"}}
     },

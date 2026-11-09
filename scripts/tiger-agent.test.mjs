@@ -28,7 +28,7 @@ test("CLI doctor/describe use fixed defaults and emit exactly one JSON envelope"
 
 test("CLI P01: readonly rejects every paper mutation before opening input or spawning Python", async (t) => {
   const fixture = await runnerFixture(t);
-  for (const operation of ["run", "resume", "supplement"]) {
+  for (const operation of ["run", "resume", "supplement", "cancel"]) {
     const proc = collectProcess("scripts/tiger-agent.mjs", [operation, "--python", fixture.python,
       "--state-root", fixture.stateRoot, "--input-file", join(fixture.dir, "absent.json")]);
     proc.child.stdin.end();
@@ -55,6 +55,18 @@ test("CLI resume observes the original run and supplement waits on its new ident
   assert.equal(completed.operation, "receipt"); assert.equal(completed.verification.ok, true);
   assert.deepEqual((await fixture.calls()).map((call) => call.operation),
     ["resume", "supplement", "status", "receipt"]);
+});
+
+test("CLI cancel forwards only the original run identity", async (t) => {
+  const fixture = await runnerFixture(t);
+  const proc = launch(fixture, "cancel", ["--input-file", "-"]);
+  proc.child.stdin.end(JSON.stringify({ run_id: RUN_ID }));
+  const value = envelope(await proc.closed, 0);
+  assert.equal(value.operation, "cancel");
+  assert.equal(value.status, "cancelled");
+  assert.equal(value.run_id, RUN_ID);
+  assert.deepEqual((await fixture.calls()).map((call) => [call.operation, call.input]),
+    [["cancel", { run_id: RUN_ID }]]);
 });
 
 test("CLI N06: run --wait submits once, polls original identity, then returns verified receipt", async (t) => {

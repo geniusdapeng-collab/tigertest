@@ -121,7 +121,7 @@ def wait_terminal(state: Path, run_id: str, seconds=20):
     latest = None
     while time.monotonic() < deadline:
         latest = observe_run(state, run_id)
-        if (latest["status"] in {"completed", "completed_degraded", "failed", "blocked", "interrupted"}
+        if (latest["status"] in {"completed", "completed_degraded", "failed", "blocked", "interrupted", "cancelled"}
                 and not latest["active"]):
             return latest
         time.sleep(0.05)

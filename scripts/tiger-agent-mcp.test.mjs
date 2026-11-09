@@ -30,10 +30,13 @@ test("MCP N05/P01: initialize/probe/list are side-effect free; readonly hides an
     proc.send({ jsonrpc: "2.0", id: "list", method: "tools/list", params: {} });
     const listed = (await proc.response("list")).result.tools;
     assert.equal(listed.length, 5);
-    assert.equal(listed.some((tool) => ["tiger_workflow_run", "tiger_workflow_resume", "tiger_research_supplement"].includes(tool.name)), false);
+    assert.equal(listed.some((tool) => ["tiger_workflow_run", "tiger_workflow_resume", "tiger_research_supplement",
+      "tiger_workflow_cancel"].includes(tool.name)), false);
     assert.ok(listed.every((tool) => tool.outputSchema.required.length === 12));
     const denied = toolEnvelope(await call(proc, "run", "tiger_workflow_run", REQUEST), true);
     assert.equal(denied.error.code, "READ_ONLY");
+    const deniedCancel = toolEnvelope(await call(proc, "cancel", "tiger_workflow_cancel", { run_id: RUN_ID }), true);
+    assert.equal(deniedCancel.error.code, "READ_ONLY");
     assert.equal((await proc.stop()).code, 0);
   }
   assert.deepEqual(await fixture.calls(), []); assert.equal(existsSync(fixture.stateRoot), false);
@@ -42,7 +45,7 @@ test("MCP N05/P01: initialize/probe/list are side-effect free; readonly hides an
 test("MCP discovery: short instructions and tool metadata explain new research without changing execution contracts", async (t) => {
   const expectedOutput = structuredClone(RESULT_SCHEMA); delete expectedOutput.$defs;
   const expectedNames = ["tiger_doctor", "tiger_workflow_describe", "tiger_workflow_run",
-    "tiger_workflow_resume", "tiger_research_supplement",
+    "tiger_workflow_resume", "tiger_research_supplement", "tiger_workflow_cancel",
     "tiger_workflow_status", "tiger_workflow_receipt", "tiger_workflow_verify"];
   assert.equal(PROFILE, "us-public-paper-v1", "The legacy CLI default remains a compatibility contract");
   for (const mode of ["readonly", "paper"]) await t.test(mode, async (scenario) => {
@@ -56,11 +59,11 @@ test("MCP discovery: short instructions and tool metadata explain new research w
     assert.match(prefix, /accepted\/running (?:status )?is not completion/u);
     assert.match(prefix, /receipt.*verify/u); assert.match(prefix, /completed.*verified receipt/u);
     assert.match(prefix, /Cancellation.*observation, not.*worker/u);
-    assert.match(initialized.result.instructions, /Run, resume and supplement are hidden and rejected in readonly deployment/u);
+    assert.match(initialized.result.instructions, /Run, resume, supplement and scheduler cancel are hidden and rejected in readonly deployment/u);
     proc.send({ jsonrpc: "2.0", id: "metadata", method: "tools/list" });
     const tools = (await proc.response("metadata")).result.tools;
     assert.deepEqual(tools.map((tool) => tool.name), expectedNames.filter((name) => mode === "paper"
-      || !["tiger_workflow_run", "tiger_workflow_resume", "tiger_research_supplement"].includes(name)));
+      || !["tiger_workflow_run", "tiger_workflow_resume", "tiger_research_supplement", "tiger_workflow_cancel"].includes(name)));
     assert.equal(new Set(tools.map((tool) => tool.title)).size, tools.length);
     for (const tool of tools) {
       assert.equal(typeof tool.title, "string"); assert.ok(tool.title.trim().length > 0 && tool.title.length <= 64);
@@ -68,9 +71,10 @@ test("MCP discovery: short instructions and tool metadata explain new research w
         : tool.name === "tiger_research_supplement" ? "supplement" : tool.name.slice("tiger_workflow_".length);
       assert.deepEqual(tool.inputSchema, REQUEST_SCHEMAS[operation], "Discovery metadata cannot change accepted arguments");
       assert.deepEqual(tool.outputSchema, expectedOutput, "The result envelope remains unchanged");
-      const mutation = ["run", "resume", "supplement"].includes(operation);
+      const mutation = ["run", "resume", "supplement", "cancel"].includes(operation);
+      const openWorld = ["run", "resume", "supplement"].includes(operation);
       assert.deepEqual(tool.annotations, { readOnlyHint: !mutation, destructiveHint: false,
-        idempotentHint: true, openWorldHint: mutation });
+        idempotentHint: true, openWorldHint: openWorld });
     }
     assert.match(tools.find((tool) => tool.name === "tiger_workflow_describe").description,
       /\{"profile":"us-public-intelligence-paper-v2"\}/u);
@@ -128,7 +132,7 @@ test("MCP B04: chunked UTF-8, several frames per chunk and blank lines preserve 
   await proc.response("init");
   proc.child.stdin.write('\n \r\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n');
   assert.deepEqual((await proc.response(1)).result, {});
-  assert.equal((await proc.response(2)).result.tools.length, 8);
+  assert.equal((await proc.response(2)).result.tools.length, 9);
   await proc.stop(); assert.deepEqual(await fixture.calls(), []);
 });
 
@@ -142,7 +146,7 @@ test("MCP B03/B04: oversized unterminated frame closes with bounded protocol out
 });
 
 test("MCP B06: duplicate tools and unsupported schemas cannot silently overwrite definitions", () => {
-  const tools = toolDefinitions("paper"); assert.equal(new Set(tools.map((tool) => tool.name)).size, 8);
+  const tools = toolDefinitions("paper"); assert.equal(new Set(tools.map((tool) => tool.name)).size, 9);
   assert.throws(() => validateToolDefinitions([...tools, tools[0]]), { code: "INVALID_REQUEST" });
   assert.throws(() => validateToolDefinitions([{ ...tools[0], inputSchema: { oneOf: [] } }]), { code: "INVALID_REQUEST" });
 });
@@ -185,6 +189,17 @@ test("MCP N06: accepted, failed status query, verified receipt and unknown argum
   await proc.stop(); assert.equal((await fixture.calls()).length, 3);
 });
 
+test("MCP cancel forwards only the existing run identity", async (t) => {
+  const fixture = await runnerFixture(t);
+  const proc = launch(t, fixture); await proc.initialize();
+  const value = toolEnvelope(await call(proc, 1, "tiger_workflow_cancel", { run_id: RUN_ID }));
+  assert.equal(value.operation, "cancel");
+  assert.equal(value.status, "cancelled");
+  assert.deepEqual((await fixture.calls()).map((entry) => [entry.operation, entry.input]),
+    [["cancel", { run_id: RUN_ID }]]);
+  await proc.stop();
+});
+
 test("MCP E06: stdin EOF and SIGTERM abort and reap only in-flight query processes", async (t) => {
   for (const cause of ["eof", "signal"]) {
     const fixture = await runnerFixture(t, "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);");
@@ -215,7 +230,7 @@ test("NP003/E01: standard metadata on initialize and initialized reaches ready w
   assert.ok((await proc.response("init-meta")).result);
   proc.send({ jsonrpc: "2.0", method: "notifications/initialized", params: { _meta: { "example.com/trace": "fixture" } } });
   proc.send({ jsonrpc: "2.0", id: "list", method: "tools/list" });
-  assert.equal((await proc.response("list")).result?.tools.length, 8);
+  assert.equal((await proc.response("list")).result?.tools.length, 9);
   await proc.stop(); assert.deepEqual(await fixture.calls(), []);
 });
 
@@ -224,7 +239,7 @@ test("NP003/B04: ping and tools/list accept standard request metadata", async (t
     const fixture = await runnerFixture(scenario); const proc = launch(scenario, fixture); await proc.initialize();
     proc.send({ jsonrpc: "2.0", id: "meta", method, params: { _meta: { progressToken: 7, "example.com/trace": "fixture" } } });
     const response = await proc.response("meta"); assert.equal(response.error, undefined);
-    if (method === "ping") assert.deepEqual(response.result, {}); else assert.equal(response.result.tools.length, 8);
+    if (method === "ping") assert.deepEqual(response.result, {}); else assert.equal(response.result.tools.length, 9);
     await proc.stop(); assert.deepEqual(await fixture.calls(), []);
   });
 });

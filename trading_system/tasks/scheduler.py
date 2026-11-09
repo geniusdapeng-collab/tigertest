@@ -9,6 +9,31 @@ from .contracts import UnitResult, UnitSpec, WorkUnitError, detached, timestamp_
 from .context import UnitContext
 
 
+_SAFE_HANDLER_ERROR_CODES = (
+    "DOCUMENT_GLOBAL_REVIEW_MISMATCH",
+    "DOCUMENT_REVIEW_FAILED",
+    "WORK_ANNOTATION_INVALID",
+    "WORK_DECISION_INPUT_CHANGED",
+    "WORK_OUTPUT_SCHEMA_MISMATCH",
+    "WORK_SEGMENT_ANNOTATION_INVALID",
+    "WORK_SEGMENT_OFFSET_INVALID",
+    "WORK_SEGMENTS_REQUIRED",
+    "WORK_SPAN_BINDING_INVALID",
+)
+
+
+def _handler_error_code(error):
+    """Keep only a closed, value-free validation code from handler failures."""
+    if isinstance(error, WorkUnitError):
+        return error.code
+    if isinstance(error, ValueError):
+        message = str(error)
+        for code in _SAFE_HANDLER_ERROR_CODES:
+            if message == code or message.startswith(code + ":"):
+                return code
+    return "UNIT_HANDLER_FAILED"
+
+
 class Coordinator:
     def __init__(self, store, *, max_workers=1, client_factory=None, lease_seconds=60,
                  resource_capacity=None, resource_cost=None, unit_ids=None):
@@ -89,7 +114,7 @@ class Coordinator:
                 else:
                     context.publish_result(value, validator=validator)
             except BaseException as error:
-                code = error.code if isinstance(error, WorkUnitError) else "UNIT_HANDLER_FAILED"
+                code = _handler_error_code(error)
                 try:
                     self.store.fail(lease, code, retryable=code in {
                         "STORE_BUSY", "RESOURCE_COST_INVALID",

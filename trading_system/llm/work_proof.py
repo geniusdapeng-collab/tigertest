@@ -31,7 +31,7 @@ from .model_budget import (COUNTER_ID, TokenBudgetError, chat_request_core,
 from .scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config
 from .work_semantics import (annotation_payload, digest as semantic_hash, normalize_annotation,
     merge_segment_annotations, namespace_segment_annotation, task_evidence_view,
-    text_digest, validate_annotation, validate_document_review, validate_raw_documents)
+    inspect_document_review, text_digest, validate_annotation, validate_raw_documents)
 
 JOIN_SCHEMA = "tiger.work-child-join/v1"
 SUMMARY_SCHEMA = "tiger.research-work-proof/v1"
@@ -255,14 +255,16 @@ class ResearchWorkProof:
             value, native, result = self.verify_join(stage, calls[1], review_spec, args,
                 stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "document_review",
                              "unit_id": review_spec.unit_id, "arguments": args})
-            review = validate_document_review(document, native)
+            review = inspect_document_review(document, native)
             _same(value, {"phase": "document_review", "document_id": raw.doc_id,
                 "segment_id": None, "native": native,
                 "annotation": annotation_payload(document), "validation": validation,
                 "review": review}, stage)
+            review_accepted = review["review_accepted"]
         else:
             manifest, segments = plan
             annotations, review_receipts, index = [], [], 0
+            review_accepted = True
             for number, segment in enumerate(segments, 1):
                 extract_spec = by_id[units["extracts"][number - 1]]
                 args = document_arguments("extract", segment, legacy.TARGET_IDS,
@@ -285,12 +287,13 @@ class ResearchWorkProof:
                     stage_input={"contract": WORK_CLEAN_CONTRACT,
                                  "phase": "document_review",
                                  "unit_id": review_spec.unit_id, "arguments": args})
-                review = validate_document_review(local, native)
+                review = inspect_document_review(local, native)
                 _same(value, {"phase": "document_review", "document_id": raw.doc_id,
                     "segment_id": segment_id, "native": native,
                     "annotation": annotation_payload(local), "validation": validation,
                     "review": review}, stage)
                 _same(result["dispositions"], {}, stage)
+                review_accepted = review_accepted and review["review_accepted"]
                 review_receipts.append(review)
                 annotations.append(namespace_segment_annotation(
                     annotation_payload(local), number,
@@ -311,9 +314,11 @@ class ResearchWorkProof:
                 "source_sha256": text_digest(raw.content),
                 "manifest_sha256": semantic_hash(manifest),
                 "segment_review_sha256": [row["review_sha256"] for row in review_receipts],
-                "summary_sha256": semantic_hash(native["summary_zh"]), "complete": True,
-                "checks": {key: True for key in (
-                    "whole_original_coverage", "segment_reviews", "metadata_synthesis")}}
+                "summary_sha256": semantic_hash(native["summary_zh"]),
+                "complete": review_accepted,
+                "checks": {**{key: True for key in (
+                    "whole_original_coverage", "metadata_synthesis")},
+                    "segment_reviews": review_accepted}}
             _same(value, {"phase": "metadata_synthesis", "document_id": raw.doc_id,
                 "native": native, "summary_zh": native["summary_zh"],
                 "global_review": global_review}, stage)
@@ -321,13 +326,17 @@ class ResearchWorkProof:
                 raw, annotations, summary_zh=native["summary_zh"],
                 limits=merged_annotation_limits(len(segments)), target_ids=legacy.TARGET_IDS)
             validate_annotation(document, self.replay.cutoff, **validation_context)
-        disposition = "eligible" if raw.meta.get("completeness") == "complete" else "unverifiable"
+        source_complete = raw.meta.get("completeness") == "complete"
+        disposition = ("eligible" if review_accepted and source_complete else "unverifiable")
         _same(result["dispositions"], {raw.doc_id: {"state": disposition,
-            "reason": ("all_segments_reviewed_source_qualification_separate"
-                       if plan is not None else
-                       "semantic_review_complete_source_qualification_separate")}}, stage)
+            "reason": (("all_segments_reviewed_source_qualification_separate"
+                        if plan is not None else
+                        "semantic_review_complete_source_qualification_separate")
+                       if disposition == "eligible" else
+                       "independent_review_or_source_qualification_incomplete")}}, stage)
         self.document_hashes[raw.doc_id] = text_digest(raw.content)
-        return (document, len(specs)) if return_count else document
+        eligible = document if disposition == "eligible" else None
+        return (eligible, len(specs)) if return_count else eligible
 
     @_boundary
     def verify_empty(self, call):
@@ -362,8 +371,10 @@ class ResearchWorkProof:
                 "conflict_ids": sorted({identity for row in doc.eligibility.get("claims", [])
                                          for identity in row.get("conflict_ids", [])})} for doc in docs],
             "coverage": deepcopy(bundle["gaps"])}
-        if (len({doc.raw.doc_id for doc in docs}) != len(docs)
-                or {doc.raw.doc_id: text_digest(doc.raw.content) for doc in docs} != self.document_hashes
+        doc_hashes = {doc.raw.doc_id: text_digest(doc.raw.content) for doc in docs}
+        if (len(doc_hashes) != len(docs)
+                or any(doc_id not in self.document_hashes or sha256 != self.document_hashes[doc_id]
+                       for doc_id, sha256 in doc_hashes.items())
                 or not isinstance(reference, dict) or set(reference) != {"schema", "manifest_sha256", "ref"}
                 or reference["schema"] != SNAPSHOT_CONTRACT
                 or reference["manifest_sha256"] != value_hash(expected)):
@@ -806,7 +817,8 @@ def verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, p
             for raw in fresh:
                 document, consumed = verifier.verify_document(
                     raw, calls[index:], validation_context=context, return_count=True)
-                cleaned.append(document)
+                if document is not None:
+                    cleaned.append(document)
                 index += consumed
         else:
             verifier.verify_empty(calls[index])

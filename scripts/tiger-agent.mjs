@@ -8,7 +8,7 @@ import {
 
 export function parseArgs(argv) {
   const operation = argv[0];
-  if (!OPERATIONS.includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Use doctor, describe, run, resume, supplement, status, receipt or verify.");
+  if (!OPERATIONS.includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Use doctor, describe, run, resume, supplement, cancel, status, receipt or verify.");
   const flags = new Map();
   const allowed = new Set(["--python", "--state-root", "--mode", "--input-file", "--wait", "--wait-timeout-seconds"]);
   for (let index = 1; index < argv.length; index += 1) {
@@ -52,7 +52,7 @@ export async function main(argv = process.argv.slice(2)) {
     const parsed = parseArgs(argv);
     operation = parsed.operation;
     // Readonly rejects run before even opening an operator-supplied request file.
-    if (["run", "resume", "supplement"].includes(operation)
+    if (["run", "resume", "supplement", "cancel"].includes(operation)
       && parsed.options.mode === "readonly") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
     const input = parsed.file ? await readRequestInput(parsed.file, process.stdin, { signal: controller.signal })
       : operation === "doctor" ? {} : operation === "describe" ? { profile: PROFILE } : {};

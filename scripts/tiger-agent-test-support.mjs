@@ -11,10 +11,11 @@ export const REQUEST = Object.freeze({ schema_version: "tiger.agent-request/v1",
   paper_account: "public-usd", idempotency_key: "test-only-key-0001" });
 
 export function result(operation, changes = {}) {
-  const business = ["run", "resume", "supplement", "status", "receipt", "verify"].includes(operation);
+  const business = ["run", "resume", "supplement", "cancel", "status", "receipt", "verify"].includes(operation);
   return { schema_version: "tiger.agent-result/v1", operation, operation_ok: true,
     run_id: business ? RUN_ID : null,
-    status: ["run", "supplement"].includes(operation) ? "accepted" : operation === "resume" ? "running" : business ? "completed" : "ready",
+    status: ["run", "supplement"].includes(operation) ? "accepted"
+      : operation === "resume" ? "running" : operation === "cancel" ? "cancelled" : business ? "completed" : "ready",
     execution_mode: business ? "paper" : null, data: {},
     summary: operation === "receipt" ? { picks: [], positions: [], pending: [], cash_usd: 100000, equity_usd: 100000,
       market_value_usd: 0, as_of: { market_date: "2026-10-20", market_timezone: "America/New_York",

@@ -18,6 +18,7 @@ from trading_system.agent_runtime import INTELLIGENCE_PROFILE, frozen_clock
 def test_public_request_contracts_are_exact_and_bounded():
     run_id = "run-" + "a" * 32
     assert runner.validate_request("resume", {"run_id": run_id}) == {"run_id": run_id}
+    assert runner.validate_request("cancel", {"run_id": run_id}) == {"run_id": run_id}
     supplement = {
         "schema_version": "tiger.research-supplement-request/v1",
         "parent_run_id": run_id,
@@ -35,6 +36,40 @@ def test_public_request_contracts_are_exact_and_bounded():
         with pytest.raises(EvidenceInvalid) as caught:
             runner.validate_request("supplement", value)
         assert caught.value.code == "INVALID_REQUEST"
+
+
+def test_public_cancel_records_scheduler_cancellation_without_stopping_observer(tmp_path):
+    from trading_system.research_work import research_work_policy, work_manifest
+    from trading_system.tasks.store import WorkStore
+
+    state = checked_root(tmp_path / "state", create=True)
+    run_id = "run-" + "d" * 32
+    run = checked_root(state / "runs" / run_id, create=True)
+    clock = frozen_clock(datetime(2026, 11, 8, 1, tzinfo=timezone.utc))
+    admission = {
+        "run_id": run_id, "request_sha256": "1" * 64,
+        "source_sha256": "2" * 64, "policy_sha256": "3" * 64,
+        "parent": None, "clock": clock,
+    }
+    atomic_json(run, "admission.json", admission)
+    atomic_json(run, "policy.json", {"research_work": research_work_policy()})
+    atomic_json(run, "status.json", {
+        "schema": "tiger.status.v1", "run_id": run_id,
+        "status": "running", "error": None,
+    })
+    descriptor = runner._lock_fd(run, "run.lock", create=True, nonblocking=True)
+    try:
+        value = runner.submit_cancel(state, {"run_id": run_id})
+    finally:
+        os.close(descriptor)
+    assert value["operation_ok"] is True
+    assert value["operation"] == "cancel"
+    assert value["status"] == "cancelling"
+    assert value["data"]["cancel_requested"] is True
+    assert value["data"]["scheduling"]["cancelling_observation_stops_scheduler"] is False
+    store = WorkStore.open(run / "tasks", work_manifest(admission))
+    assert store.status()["cancel_requested"] is True
+    assert store.status()["graph_state"] == "cancelled"
 
 
 def test_verified_pending_symbols_create_a_new_scope_not_an_old_approval(tmp_path, monkeypatch):

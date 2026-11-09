@@ -21,27 +21,31 @@ test("B01/B02: exact operation schemas reject missing, unknown and wrongly typed
   assert.equal(Object.keys(RESULT_SCHEMA.properties).length, 12);
 });
 
-test("public resume and supplement schemas are exact and readonly-safe", async (t) => {
+test("public resume, supplement and cancel schemas are exact and readonly-safe", async (t) => {
   const resume = { run_id: RUN_ID };
+  const cancel = { run_id: RUN_ID };
   const supplement = { schema_version: "tiger.research-supplement-request/v1",
     parent_run_id: RUN_ID, symbols: ["NVDA", "BRK.B"], idempotency_key: "supplement-key-0001" };
   assert.deepEqual(validateRequest("resume", resume), resume);
   assert.deepEqual(validateRequest("supplement", supplement), supplement);
+  assert.deepEqual(validateRequest("cancel", cancel), cancel);
   for (const value of [
     { ...resume, profile: "us-public-intelligence-paper-v2" },
+    { ...cancel, reason: "operator text is not part of the fixed wire" },
     { ...supplement, symbols: [] },
     { ...supplement, symbols: ["NVDA", "NVDA"] },
     { ...supplement, symbols: ["nvda"] },
     { ...supplement, profile: "us-public-intelligence-paper-v2" },
   ]) assert.throws(() => validateRequest(value.symbols ? "supplement" : "resume", value), { code: "INVALID_REQUEST" });
   const fixture = await runnerFixture(t);
-  for (const [operation, input] of [["resume", resume], ["supplement", supplement]]) {
+  for (const [operation, input] of [["resume", resume], ["supplement", supplement], ["cancel", cancel]]) {
     const denied = await invokeWorkflow(operation, input, { ...fixture.options, mode: "readonly" });
     assert.equal(denied.error.code, "READ_ONLY");
   }
   assert.deepEqual(await fixture.calls(), []);
   assert.equal(validateEnvelope(result("resume"), "resume").status, "running");
   assert.equal(validateEnvelope(result("supplement"), "supplement").status, "accepted");
+  assert.equal(validateEnvelope(result("cancel"), "cancel").status, "cancelled");
 });
 
 test("B02: duplicate decoded keys, malformed JSON, depth, nonfinite numbers and invalid UTF-8 are rejected", () => {
