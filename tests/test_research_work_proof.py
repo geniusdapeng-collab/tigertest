@@ -680,6 +680,14 @@ def test_all_five_model_stages_and_source_children_pass_independent_full_replay(
 
 
 def failed_work_fixture(context, monkeypatch, *, second_unknown=False):
+    from trading_system.llm import work_required as work_required_module
+    closed_failure_code = work_required_module.semantic_failure_code
+    def preserve_parent_failure(error):
+        diagnostic = getattr(error, "diagnostic", None)
+        if isinstance(diagnostic, dict) and diagnostic.get("code") == "INVALID_RESPONSE_JSON":
+            return None
+        return closed_failure_code(error)
+    monkeypatch.setattr(work_required_module, "semantic_failure_code", preserve_parent_failure)
     admission, policy, acquisition, client = prepare_proof_context(context)
     calls = []
     def post(url, **kwargs):

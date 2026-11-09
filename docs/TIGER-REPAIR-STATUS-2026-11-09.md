@@ -42,9 +42,9 @@
    metadata synthesis 单元绑定全部失败段，形成唯一原件终态。
 3. 分段合并后的最终语义校验失败同样进入 `unverifiable`。传输、schema
    format 在共享格式重答已使用或额度已占用且 usage 已知时，也进入逐原件
-   终态；重复 JSON key、空/非对象输出同样使用稳定格式码，失败模型 I/O
-   保留在 child seal。不可安全解析的 JSON、传输、未知 usage、身份/协议、
-   存储和内部图不变量错误仍是 run-level failure。
+   终态；重复 JSON key、非法 JSON、空/非对象输出同样使用稳定格式码，
+   失败模型 I/O 保留在 child seal。传输、未知 usage、身份/协议、存储和
+   内部图不变量错误仍是 run-level failure。
 4. `ResearchWorkProof` 逐个重放真实 child；依赖终态必须与上游 result hash、
    source hash 和稳定错误码一致；schema failure 的 error_ref 及其原生
    response observation 必须重放，不允许以成功的 validated 行冒充模型复核。

@@ -12,10 +12,9 @@ closed schema or semantic validation. Only the closed schema rejection,
 annotation, span and segment binding errors become a per-original
 `unverifiable` terminal. A schema rejection qualifies only after the shared
 format reanswer was used or its single parent-run slot was already consumed.
-Closed known-usage format diagnostics for duplicate JSON keys, empty/non-object
-output and schema mismatch also qualify; the failed model I/O is sealed in the
-child evidence. Unparsable JSON remains a run-level failure rather than being
-reinterpreted as a document conclusion. The model child keeps its original response
+Closed known-usage format diagnostics for duplicate keys, invalid JSON,
+empty/non-object output and schema mismatch also qualify; the failed model I/O
+is sealed in the child evidence. The model child keeps its original response
 observation; its saved output and dependency-only terminal contain hashes and
 stable error codes, never arbitrary exception text or model values. A small
 original binds its terminal to the failed extract or review; a segmented
