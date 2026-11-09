@@ -48,6 +48,9 @@
 4. `ResearchWorkProof` 逐个重放真实 child；依赖终态必须与上游 result hash、
    source hash 和稳定错误码一致；schema failure 的 error_ref 及其原生
    response observation 必须重放，不允许以成功的 validated 行冒充模型复核。
+5. 研究审计通过已验证的 `parent-attempt.json -> start_ref` 解析当前 attempt
+   事件流；根 `events.jsonl` 已归档时不再在 `governance.verify` 之后误报
+   `EVIDENCE_MISSING`。
 
 定向证据（B）：
 

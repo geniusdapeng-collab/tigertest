@@ -1,8 +1,10 @@
 """Reconstruct the strict research funnel and health from frozen stage evidence."""
 from collections import Counter
 from pathlib import Path
+import re
 
-from .agent_evidence import EvidenceInvalid, read_bytes, read_snapshot, strict_json
+from .agent_evidence import (EvidenceInvalid, read_bytes, read_snapshot,
+                             strict_json, verify_ref)
 
 SOURCE_PATH = "trading_system/research_audit.py"
 CONTRACT = "tiger.research-audit.v1"
@@ -11,6 +13,8 @@ _REQUIRED = {"pipeline.prepare", "layer0.scan", "layer3.tss", "layer4.risk",
              "decision.debate", "review.daily"}
 _PORTFOLIO_LIMITS = {"position_slots_exhausted", "group_risk_budget_exhausted", "gross_budget_exhausted"}
 _MISSING_RISK = {"sector_evidence_missing", "sector_chase_evidence_missing", "existing_budget_unverifiable"}
+_ATTEMPT_EVENTS = re.compile(
+    r"parent-attempts/[1-9][0-9]*/events\.jsonl\Z")
 
 
 def _gate(status, *reasons):
@@ -144,8 +148,30 @@ def _stage_record(event, output, bound_input=None):
             "elapsed_ms": value["scan_elapsed_ms"] if event["stage"] == "layer0.scan" else None}
 
 
-def _audit_events(run: Path, *, through_reports: bool):
-    events = [strict_json(line) for line in read_bytes(run, "events.jsonl").splitlines()]
+def _current_event_relative(run: Path):
+    if (run / "events.jsonl").is_file():
+        return "events.jsonl"
+    current = strict_json(read_bytes(run, "parent-attempt.json"))
+    if (not isinstance(current, dict)
+            or current.get("schema") != "tiger.parent-attempt-current/v1"
+            or type(current.get("start_ref")) is not dict):
+        raise EvidenceInvalid("EVIDENCE_MISSING",
+                              "Current parent attempt evidence is invalid")
+    ref = current["start_ref"]
+    verify_ref(run, ref, schema="tiger.parent-attempt/v1")
+    start = strict_json(read_bytes(run, ref["path"]))
+    relative = start.get("events_path") if isinstance(start, dict) else None
+    if (type(relative) is not str or _ATTEMPT_EVENTS.fullmatch(relative) is None
+            or not (run / relative).is_file()):
+        raise EvidenceInvalid("EVIDENCE_MISSING",
+                              "Current parent attempt event stream is missing")
+    return relative
+
+
+def _audit_events(run: Path, *, through_reports: bool,
+                  event_relative: str | None = None):
+    event_relative = event_relative or _current_event_relative(run)
+    events = [strict_json(line) for line in read_bytes(run, event_relative).splitlines()]
     stage_rows, values, refs = [], {}, {}
     for event in events:
         name = event["stage"]
@@ -168,7 +194,9 @@ def _audit_events(run: Path, *, through_reports: bool):
 
 
 def report_audit(run: Path):
-    stages, values, refs = _audit_events(run, through_reports=False)
+    event_relative = _current_event_relative(run)
+    stages, values, refs = _audit_events(
+        run, through_reports=False, event_relative=event_relative)
     funnel = candidate_funnel(values["universe"], values["layer0.scan"]["scan_decisions"],
                               values["layer3.tss"]["watchlist"], values["layer4.risk"]["rejections"],
                               values["decision.debate"], values["pipeline.prepare"].get("security_roster"),
@@ -181,10 +209,12 @@ def report_audit(run: Path):
 
 def verify_audit(run: Path, actual):
     try:
+        event_relative = _current_event_relative(run)
         expected = report_audit(run)
         if actual != expected:
             raise ValueError("Published research audit differs from stage evidence")
-        stages, _, _ = _audit_events(run, through_reports=True)
+        stages, _, _ = _audit_events(
+            run, through_reports=True, event_relative=event_relative)
         return {"contract": expected["contract"], "stages": stages,
                 "funnel": expected["funnel"]["gates"], "rule_coverage": expected["rule_coverage"],
                 "evidence_refs": expected["evidence_refs"]}
