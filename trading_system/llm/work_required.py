@@ -38,8 +38,16 @@ market_snapshots = legacy.market_snapshots
 
 SEMANTIC_FAILURE_SCHEMA = "tiger.document-semantic-failure/v1"
 TERMINAL_RESULT_SCHEMA = "tiger.document-terminal-result/v1"
+DOCUMENT_FORMAT_FAILURES = {
+    "DUPLICATE_RESPONSE_JSON_KEY": "WORK_OUTPUT_JSON_INVALID",
+    "EMPTY_MODEL_OUTPUT": "WORK_OUTPUT_JSON_INVALID",
+    "EMPTY_OR_NONOBJECT_MODEL_OUTPUT": "WORK_OUTPUT_JSON_INVALID",
+    "OUTPUT_SCHEMA_MISMATCH": "WORK_OUTPUT_SCHEMA_MISMATCH",
+}
+DOCUMENT_FORMAT_RESULT_CODES = frozenset(DOCUMENT_FORMAT_FAILURES.values())
 SEMANTIC_FAILURE_CODES = frozenset({
     "WORK_ANNOTATION_INVALID",
+    "WORK_OUTPUT_JSON_INVALID",
     "WORK_OUTPUT_SCHEMA_MISMATCH",
     "WORK_SEGMENT_ANNOTATION_INVALID",
     "WORK_SEGMENT_OFFSET_INVALID",
@@ -97,8 +105,7 @@ def semantic_failure_code(error):
             diagnostic = error.diagnostic
         except (AttributeError, TypeError, ValueError):
             return None
-        return ("WORK_OUTPUT_SCHEMA_MISMATCH"
-                if diagnostic.get("code") == "OUTPUT_SCHEMA_MISMATCH" else None)
+        return DOCUMENT_FORMAT_FAILURES.get(diagnostic.get("code"))
     if isinstance(error, WorkUnitError):
         return error.code if error.code in SEMANTIC_FAILURE_CODES else None
     if isinstance(error, ValueError):

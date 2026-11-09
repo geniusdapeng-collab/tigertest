@@ -88,6 +88,21 @@ def review_schema_transport(monkeypatch):
     return calls
 
 
+def duplicate_json_transport(monkeypatch):
+    calls = []
+    def post(_url, **kwargs):
+        wire = json.loads(kwargs["data"])
+        prompt = wire["messages"][-1]["content"]
+        phase = "extract" if '"phase":"extract"' in prompt else "document_review"
+        content = ('{"annotation":{"tickers":[],"tickers":[]}}'
+                   if phase == "extract"
+                   else json.dumps(review(), ensure_ascii=False))
+        calls.append(phase)
+        return Response(native(content, "duplicate-json-" + str(len(calls))))
+    monkeypatch.setattr(requests, "post", post)
+    return calls
+
+
 @pytest.mark.parametrize("count", [1, 2])
 def test_originals_have_isolated_extract_review_and_verified_parent_joins(observed, monkeypatch, count):
     store, acquisition, client = prepare(observed)
@@ -165,6 +180,24 @@ def test_review_schema_failure_uses_the_original_child_as_an_unverifiable_termin
     assert review["error_code"] == "WORK_OUTPUT_SCHEMA_MISMATCH"
     assert store.status()["graph_state"] == "completed"
     assert store.status()["settled_attempts"] == 3
+
+
+def test_duplicate_response_key_is_a_closed_known_usage_terminal(observed, monkeypatch):
+    store, acquisition, client = prepare(observed)
+    calls = duplicate_json_transport(monkeypatch)
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "duplicate key"}) as scope:
+        result = clean_round(client, [raw()], acquisition=acquisition)
+        scope.output({"documents": len(result)})
+    assert result == [] and calls == ["extract"]
+    assert [call["method"] for call in scope.io_calls] == ["tasks.child.join"]
+    extract = store.read_result(
+        next(row["unit_id"] for row in store.status()["units"]
+             if row["spec"]["kind"] == "document.extract"))["value"]["output"]
+    assert extract["error_code"] == "WORK_OUTPUT_JSON_INVALID"
+    disposition = store.document_dispositions()["documents"]["source-1"]
+    assert disposition["state"] == "unverifiable"
+    assert store.status()["graph_state"] == "completed"
+    assert store.status()["settled_attempts"] == 1
 
 
 def test_semantic_review_failure_is_an_unverifiable_terminal_without_format_retry(observed, monkeypatch):

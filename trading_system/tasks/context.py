@@ -12,6 +12,12 @@ from ..redline.execution import (ExecutionContext, REQUIRED_MODEL_STAGES, Runtim
 from .contracts import WorkUnitError, detached, value_hash
 
 CHILD_SEAL_SCHEMA = "tiger.work-unit-child-seal/v1"
+_DOCUMENT_FORMAT_FAILURES = {
+    "DUPLICATE_RESPONSE_JSON_KEY": "WORK_OUTPUT_JSON_INVALID",
+    "EMPTY_MODEL_OUTPUT": "WORK_OUTPUT_JSON_INVALID",
+    "EMPTY_OR_NONOBJECT_MODEL_OUTPUT": "WORK_OUTPUT_JSON_INVALID",
+    "OUTPUT_SCHEMA_MISMATCH": "WORK_OUTPUT_SCHEMA_MISMATCH",
+}
 
 
 class UnitContext:
@@ -367,6 +373,9 @@ def verify_child_seal(work_store, ref):
             root, call["error_ref"], run_id=value["run_id"],
             stage=value["stage"]["name"], role="output")
         output_value = output.get("value")
+        diagnostic = (failure.get("diagnostic", {})
+                      if type(failure) is dict else {})
+        expected_code = _DOCUMENT_FORMAT_FAILURES.get(diagnostic.get("code"))
         if (type(failure) is not dict
                 or set(failure) != {
                     "error_type", "message", "outcome_observed",
@@ -374,13 +383,11 @@ def verify_child_seal(work_store, ref):
                 or failure["error_type"] != "RequiredModelUnavailable"
                 or failure["message"] != "External call failed"
                 or failure["outcome_observed"] is not True
-                or type(failure["diagnostic"]) is not dict
-                or failure["diagnostic"].get("code") != "OUTPUT_SCHEMA_MISMATCH"
+                or expected_code is None
                 or type(output_value) is not dict
                 or output_value.get("schema")
                     != "tiger.document-semantic-failure/v1"
-                or output_value.get("error_code")
-                    != "WORK_OUTPUT_SCHEMA_MISMATCH"):
+                or output_value.get("error_code") != expected_code):
             raise WorkUnitError(
                 "CHILD_SEAL_INVALID",
                 "Failed child model call requires a bound schema failure")

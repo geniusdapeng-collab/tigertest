@@ -34,7 +34,8 @@ from .scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config
 from .work_semantics import (annotation_payload, digest as semantic_hash, normalize_annotation,
     merge_segment_annotations, namespace_segment_annotation, task_evidence_view,
     inspect_document_review, text_digest, validate_annotation, validate_raw_documents)
-from .work_required import (SEMANTIC_FAILURE_SCHEMA, TERMINAL_REASON,
+from .work_required import (DOCUMENT_FORMAT_FAILURES,
+    DOCUMENT_FORMAT_RESULT_CODES, SEMANTIC_FAILURE_SCHEMA, TERMINAL_REASON,
     TERMINAL_RESULT_SCHEMA, semantic_failure_code, semantic_failure_value,
     validate_terminal_result)
 
@@ -163,7 +164,8 @@ class ResearchWorkProof:
             diagnostic = validate_model_diagnostic(failure["diagnostic"])
             observation = validate_reference_observation(failure["response_observation"])
             attempts = replay._observed_attempts(stage, request, observation)
-            if (diagnostic.get("code") != "OUTPUT_SCHEMA_MISMATCH"
+            failure_code = DOCUMENT_FORMAT_FAILURES.get(diagnostic.get("code"))
+            if (failure_code is None
                     or diagnostic.get("json_stage") != "assistant_content"
                     or attempts[-1][2]["diagnostic"] != diagnostic):
                 _fail(stage)
@@ -177,7 +179,7 @@ class ResearchWorkProof:
             replay.call_ids.add(call_id)
             replay.counts[stage] += 1
             self.work_call_ids.add(call_id)
-            return {"schema_failure_code": "WORK_OUTPUT_SCHEMA_MISMATCH"}
+            return {"schema_failure_code": failure_code}
         fields = {"schema", "response_observation_contract", "call_id", "stage", "provider",
             "requested_model", "response_id", "model", "release", "usage", "scene", "thinking_mode",
             "reasoning_effort", "input_token_estimate", "output_ceiling", "policy_version",
@@ -304,14 +306,14 @@ class ResearchWorkProof:
         def expect_semantic_failure(saved, native, source, phase, segment_id):
             if type(saved) is not dict or saved.get("schema") != SEMANTIC_FAILURE_SCHEMA:
                 _fail(stage)
-            if saved.get("error_code") == "WORK_OUTPUT_SCHEMA_MISMATCH":
+            if saved.get("error_code") in DOCUMENT_FORMAT_RESULT_CODES:
                 _same(native, {
-                    "schema_failure_code": "WORK_OUTPUT_SCHEMA_MISMATCH"}, stage)
+                    "schema_failure_code": saved.get("error_code")}, stage)
                 expected = semantic_failure_value(
                     phase, source, segment_id,
-                    "WORK_OUTPUT_SCHEMA_MISMATCH", document_id=raw.doc_id)
+                    saved.get("error_code"), document_id=raw.doc_id)
                 _same(saved, expected, stage)
-                return "WORK_OUTPUT_SCHEMA_MISMATCH"
+                return saved.get("error_code")
             try:
                 if phase == "extract":
                     document = normalize_annotation(

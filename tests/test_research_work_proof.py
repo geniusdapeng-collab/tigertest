@@ -75,7 +75,7 @@ def prepare_proof_context(context):
 
 
 def synthetic_transport(monkeypatch, *, review_value=None, extract_mutation=None,
-                        schema_retry=False):
+                        schema_retry=False, duplicate_json=False):
     wires, counts, lock = [], {}, Lock()
     def post(url, **kwargs):
         wire = json.loads(kwargs["data"])
@@ -99,7 +99,10 @@ def synthetic_transport(monkeypatch, *, review_value=None, extract_mutation=None
         with lock:
             wires.append(wire)
             identifier = "proof-fixture-" + str(len(wires))
-        response = Response(native(json.dumps(value, ensure_ascii=False), identifier))
+        content = ('{"annotation":{"tickers":[],"tickers":[]}}'
+                   if duplicate_json and payload["phase"] == "extract"
+                   else json.dumps(value, ensure_ascii=False))
+        response = Response(native(content, identifier))
         response.url, response.history = url, []
         return response
     monkeypatch.setattr(requests, "post", post)
@@ -271,6 +274,22 @@ def review_schema_failed(observed, monkeypatch):
         originals=[original], joins=joins, replay=replay, wires=wires)
 
 
+@pytest.fixture
+def duplicate_json_failed(observed, monkeypatch):
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    wires = synthetic_transport(monkeypatch, duplicate_json=True)
+    original = raw()
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "duplicate key proof"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output({"documents": len(documents)})
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=[original], joins=joins, replay=replay, wires=wires)
+
+
 def validation_context(fixture):
     return {"security_ids": fixture.acquisition.frontier["security_ids"],
         "entity_registry": fixture.acquisition.entities,
@@ -394,6 +413,24 @@ def test_review_schema_failure_replays_its_failed_child_without_inventing_a_revi
     summary = verifier.assert_complete()
     assert summary["verified_units"] == 2
     assert summary["document_count"] == 1 and summary["native_count"] == 3
+
+
+def test_duplicate_response_key_proof_binds_the_failed_native_child(duplicate_json_failed):
+    fixture = duplicate_json_failed
+    assert fixture.documents == []
+    assert len(fixture.joins) == len(fixture.wires) == 1
+    verifier = ResearchWorkProof(fixture.replay)
+    document, consumed = verifier.verify_document(
+        fixture.originals[0], fixture.joins,
+        validation_context=validation_context(fixture), return_count=True)
+    assert document is None and consumed == 1
+    extract_result = verifier.store.read_result(
+        next(row["unit_id"] for row in verifier.store.status()["units"]
+             if row["spec"]["kind"] == "document.extract"))["value"]["output"]
+    assert extract_result["error_code"] == "WORK_OUTPUT_JSON_INVALID"
+    summary = verifier.assert_complete()
+    assert summary["verified_units"] == 2
+    assert summary["document_count"] == 1 and summary["native_count"] == 1
 
 
 def test_segment_failure_terminalizes_once_after_every_segment_is_accounted(segmented_semantic_failed):
