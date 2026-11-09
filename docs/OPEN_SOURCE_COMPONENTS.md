@@ -6,7 +6,7 @@
 > 仓库：workloom-ai/workroom-tiger ｜ 最近一次成功扫描：尚未记录已核实成功（运行 `pnpm oss:watch`） ｜ 最近尝试：未记录
 > 历史全量扫描/尝试（未核实）：2026-09-18T16:05:51.000Z
 > 每项上游版本按成功时间、查询状态和 TTL 单独判定；历史缓存与失败查询不作本次最新版本结论。
-> 统计：登记组件 97 个 ｜ npm 直接依赖 156 个 ｜ Python 依赖 13 个 ｜ 容器镜像 2 个
+> 统计：登记组件 97 个 ｜ npm 直接依赖 156 个 ｜ Python 依赖 14 个 ｜ 容器镜像 2 个
 
 ## 0. 维护机制（四件事）
 
@@ -284,17 +284,18 @@
 | `yaml-governance → npm:yaml` | 2.9.0 | npm:yaml@2.9.0 | 开发 | governance/package.json | 2.9.1（历史记录；未核实或已过期） |
 | `zod` | 4.6.5 | 4.6.5 / ^4.6.5 | 生产 | governance/.workloom-runtime-deps/package.json、governance/apps/server/package.json、governance/packages/base/package.json 等 6 处 | 4.6.5（历史记录；未核实或已过期） |
 
-### 2.2 Python 依赖（13 个）
+### 2.2 Python 依赖（14 个）
 
 | 包 | 当前版本 | 声明 | 出现位置 | 上游最新 |
 |---|---|---|---|---|
 | `av` | 18.1.0 | ==18.1.0 | governance/scripts/whiteboard/engine/requirements.txt、scripts/whiteboard/engine/requirements.txt | —（未扫描） |
+| `curl_cffi` | >=0.17.0（下限声明） | >=0.17.0 | requirements.txt | —（未扫描） |
 | `numpy` | 2.5.3 / 1.24 | ==2.5.3 | governance/scripts/whiteboard/engine/requirements.txt、requirements.txt、scripts/whiteboard/engine/requirements.txt | 2.0.1（历史记录；未核实或已过期） |
 | `opencv-python` | 5.0.0.93 | ==5.0.0.93 | governance/scripts/whiteboard/engine/requirements.txt、scripts/whiteboard/engine/requirements.txt | —（未扫描） |
 | `pandas` | >=2.0（下限声明） | >=2.0 | requirements.txt | 2.2.2（历史记录；未核实或已过期） |
 | `Pillow` | 12.3.0 | ==12.3.0 | governance/scripts/whiteboard/engine/requirements.txt、scripts/whiteboard/engine/requirements.txt | —（未扫描） |
 | `playwright` | >=1.40.0（下限声明） | >=1.40.0 | governance/packages/base/computer-use/toolkit/requirements.txt | 1.46.0（历史记录；未核实或已过期） |
-| `pypdf` | >=6.21.4（下限声明） | >=6.21.4 | requirements.txt | —（未扫描） |
+| `pypdf` | 6.21.4 | ==6.21.4 | requirements.txt | —（未扫描） |
 | `pytest` | >=8.0（下限声明） | >=8.0 | requirements.txt | 8.3.2（历史记录；未核实或已过期） |
 | `PyYAML` | >=6.0（下限声明） | >=6.0 | requirements.txt | 6.0.3（历史记录；未核实或已过期） |
 | `requests` | >=2.31（下限声明） | >=2.31 | requirements.txt | 2.32.3（历史记录；未核实或已过期） |
