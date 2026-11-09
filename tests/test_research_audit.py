@@ -1,4 +1,5 @@
-from trading_system.research_audit import candidate_funnel
+from trading_system.agent_evidence import atomic_bytes, atomic_json, file_ref
+from trading_system.research_audit import _current_event_relative, candidate_funnel
 from trading_system.review.attribution import attribute_journal
 
 
@@ -66,3 +67,18 @@ def test_authoritative_review_compares_actual_open_and_applied_earnings_reductio
     assert coverage["V3"]["violations"] == coverage["V4"]["violations"] == 1
     row["accounting_basis"] = "legacy_hypothesis"
     assert attribute_journal([row])["violation_coverage"]["V3"]["status"] == "not_applicable"
+
+
+def test_research_audit_resolves_the_verified_current_parent_attempt(tmp_path):
+    relative = "parent-attempts/1/events.jsonl"
+    atomic_bytes(tmp_path, relative, b"\n")
+    start_path = "parent-attempts/1/start.json"
+    atomic_json(tmp_path, start_path, {
+        "schema": "tiger.parent-attempt/v1",
+        "events_path": relative,
+    })
+    atomic_json(tmp_path, "parent-attempt.json", {
+        "schema": "tiger.parent-attempt-current/v1",
+        "start_ref": file_ref(tmp_path, start_path, "tiger.parent-attempt/v1"),
+    })
+    assert _current_event_relative(tmp_path) == relative
