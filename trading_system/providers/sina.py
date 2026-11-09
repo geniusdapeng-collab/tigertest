@@ -17,12 +17,13 @@ agentgw → ifind_gw → tiingo）。TNX/VIX 不承接，显式抛错走降级�
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import re
-import urllib.request
 
 import pandas as pd
+from curl_cffi import requests as curl_requests
 
 from .base import DataProvider
 from .cn_native import cn_native
@@ -38,6 +39,7 @@ _UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
 
 class SinaProvider(DataProvider):
     name = "sina"
+    BATCH_WORKERS = 4
 
     def __init__(self, timeout: int = 20):
         self.timeout = timeout
@@ -47,9 +49,10 @@ class SinaProvider(DataProvider):
         return True            # 无需 key；调用失败由降级链处理
 
     def _get(self, url: str, encoding: str = "utf-8") -> str:
-        req = urllib.request.Request(url, headers=_UA)
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return resp.read().decode(encoding, errors="replace")
+        response = curl_requests.get(url, headers=_UA, timeout=self.timeout,
+                                     impersonate="chrome")
+        response.raise_for_status()
+        return response.content.decode(encoding, errors="replace")
 
     # ---------------------------------------------------------------- 接口
     def ohlcv(self, ticker: str, days: int = 400) -> pd.DataFrame:
@@ -82,6 +85,25 @@ class SinaProvider(DataProvider):
             raise RuntimeError(f"新浪 {ticker} 历史不足: {len(df)} 行")
         return df
 
+    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+        """Fill the capability fallback with a bounded, deterministic batch."""
+        requested = list(dict.fromkeys(tickers))
+        if not requested:
+            return {}
+        result: dict[str, pd.DataFrame] = {}
+        with ThreadPoolExecutor(max_workers=min(self.BATCH_WORKERS, len(requested)),
+                                thread_name_prefix="sina-batch") as pool:
+            futures = {pool.submit(self.ohlcv, ticker, days): ticker for ticker in requested}
+            for future in as_completed(futures):
+                ticker = futures[future]
+                try:
+                    frame = future.result()
+                except Exception:
+                    continue
+                if frame is not None and not frame.empty:
+                    result[ticker] = frame
+        return {ticker: result[ticker] for ticker in requested if ticker in result}
+
     _CN_KLINE = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/x/"
                  "CN_MarketDataService.getKLineData"
                  "?symbol={native}&scale=240&ma=no&datalen={n}")
@@ -89,10 +111,11 @@ class SinaProvider(DataProvider):
 
     def _ohlcv_cn(self, native: str, days: int) -> pd.DataFrame:
         url = self._CN_KLINE.format(native=native, n=min(days + 20, 1023))
-        req = urllib.request.Request(
-            url, headers={**_UA, "Referer": "https://finance.sina.com.cn"})
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
+        response = curl_requests.get(
+            url, headers={**_UA, "Referer": "https://finance.sina.com.cn"},
+            timeout=self.timeout, impersonate="chrome")
+        response.raise_for_status()
+        text = response.content.decode("utf-8", errors="replace")
         m = re.search(r"\((\[.*\])\)", text, re.S)
         if not m:
             raise RuntimeError(f"新浪 A股 K 线解析失败: {native}（返回非 JSONP）")
@@ -120,11 +143,12 @@ class SinaProvider(DataProvider):
         native = cn_native(ticker)
         if native:
             try:
-                req = urllib.request.Request(
+                response = curl_requests.get(
                     self._CN_QUOTE.format(native=native),
-                    headers={**_UA, "Referer": "https://finance.sina.com.cn"})
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    text = resp.read().decode("gbk", errors="replace")
+                    headers={**_UA, "Referer": "https://finance.sina.com.cn"},
+                    timeout=self.timeout, impersonate="chrome")
+                response.raise_for_status()
+                text = response.content.decode("gbk", errors="replace")
                 m = re.search(r'="(.*)"', text)
                 if not m or not m.group(1).strip():
                     raise ValueError(f"新浪 A股无报价: {ticker}")

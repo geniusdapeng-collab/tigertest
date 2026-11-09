@@ -5,6 +5,7 @@ import copy
 from dataclasses import asdict
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -71,6 +72,10 @@ def _answer(stage, schema):
 def required_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt_answer=None,
                      article_text=None, captured_requests=None):
     original, root, args, fixture, denied = daily_fixture(tmp_path, monkeypatch)
+    # The verifier selects counting semantics from frozen source, rather than
+    # trusting self-reported request registry metadata.
+    atomic_bytes(root, "source/trading_system/llm/model_budget.py",
+        Path(model_budget.__file__).read_bytes(), exclusive=True)
     execution = ExecutionContext(run_id=root.name, run_date=original.run_date,
         paths=original.paths, policy=ExecutionPolicy(REQUIRED_POLICY_ID, model_mode="enabled",
             provider_names=("yahoo",), search_source_names=("deepseek_search",)),

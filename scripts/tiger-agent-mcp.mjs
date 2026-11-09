@@ -10,13 +10,15 @@ const VERSIONS = new Set(["2025-03-26", "2025-06-18", "2025-11-25"]);
 const SERVER_VERSION = "1.0.0";
 // Keep the first paragraph self-contained for clients that limit initialization instructions.
 export const INSTRUCTIONS = [
-  "New AI research uses us-public-intelligence-paper-v2 with public-usd. Call doctor, then describe that profile. Reuse the original request, idempotency_key and run_id; never replace a key after losing a response. accepted/running status is not completion: poll status, then receipt and verify. Report success only for completed with a verified receipt. Cancellation stops observation, not an accepted worker. Paper only; no real broker orders. Run requires trusted paper mode and real DeepSeek API configuration.",
-  "Tiger runs only the fixed public US paper workflow. Run is hidden and rejected in readonly deployment. Access mode, Python executable and state-root are trusted startup settings, never tool arguments. Keep the trusted state root for the selected profile and recovery; use a separate state root when changing profiles. A new logical task gets a fresh idempotency key; retries retain the identical four-field request. The intelligence profile requires real deepseek-flash responses for all five semantic stages, a trusted source registry, original fetches, per-target coverage and a frozen evidence bundle. Disabled, passthrough, rules replacement or missing evidence is failure, never completion. Legacy profiles retain historical semantics. No live, skip, tuning, score or approval controls exist.",
+  "New AI research uses us-public-intelligence-paper-v2 with public-usd. Call doctor, then describe that profile. Reuse the original request, idempotency_key and run_id; never replace a key after losing a response. accepted/running status is not completion: poll status, then receipt and verify. Report success only for completed with a verified receipt. Cancellation stops observation, not an accepted worker. Paper only; no real broker orders.",
+  "Tiger runs only the fixed public US paper workflow. Run, resume and supplement are hidden and rejected in readonly deployment. Resume uses only a stopped existing run_id and never refreshes its admission or deadline. Supplement creates a new full run for verified pending symbols. Access mode, Python executable and state-root are trusted startup settings, never tool arguments. Keep the trusted state root for the selected profile and recovery; use a separate state root when changing profiles. A new logical task gets a fresh idempotency key; retries retain the identical request. The intelligence profile requires real deepseek-flash responses for all five semantic stages, a trusted source registry, original fetches, per-target coverage and a frozen evidence bundle. Disabled, passthrough, rules replacement or missing evidence is failure, never completion. Legacy profiles retain historical semantics. No live, skip, tuning, score or approval controls exist.",
 ].join("\n\n");
 const TITLES = {
   doctor: "老虎环境自检",
   describe: "查看研究流程与约束",
   run: "启动公开美股纸面研究",
+  resume: "继续原研究身份",
+  supplement: "补研已审定候选",
   status: "查询既有研究进度",
   receipt: "读取已核验研究回执",
   verify: "独立核验研究证据",
@@ -25,17 +27,24 @@ const DESCRIPTIONS = {
   doctor: "Check the fixed public-paper runner and dependencies. No market/model calls or account writes.",
   describe: "Describe the selected profile's ordered workflow, public-data policy, output evidence and completion requirements. For new AI research, pass {\"profile\":\"us-public-intelligence-paper-v2\"} explicitly. No business worker starts.",
   run: "Accept one complete public US paper workflow in a trusted paper deployment. Pass exactly schema_version=\"tiger.agent-request/v1\", profile, paper_account=\"public-usd\" and idempotency_key. New AI research uses profile=\"us-public-intelligence-paper-v2\". Preserve the identical request/key on retries and the returned run_id for status, then receipt and verify. accepted/running is not completion.",
+  resume: "Recover one stopped intelligence-paper run under its original admission, source, policy, paper account and deadline. Pass only its existing run_id. Unknown provider/source attempts must reconcile first; a committed/completed run is observed without starting another worker.",
+  supplement: "Create a new full intelligence-paper admission for symbols that are already pending_research in a verified parent receipt. Pass schema_version=\"tiger.research-supplement-request/v1\", parent_run_id, symbols and a new idempotency_key. This never expands the parent snapshot or reuses its trade approval.",
   status: "Read the existing run's state. A successful query may describe a failed business run and never supplies a completion summary.",
   receipt: "Independently verify immutable evidence and the account commit, then read the existing run's completion summary. Never execute or resume a stage.",
   verify: "Independently verify the existing run's immutable evidence, identities, hashes and account commit. Never execute or resume a stage.",
 };
-export function toolName(operation) { return operation === "doctor" ? "tiger_doctor" : `tiger_workflow_${operation}`; }
+export function toolName(operation) {
+  if (operation === "doctor") return "tiger_doctor";
+  if (operation === "supplement") return "tiger_research_supplement";
+  return `tiger_workflow_${operation}`;
+}
 export function toolDefinitions(mode = "readonly") {
   const outputSchema = structuredClone(RESULT_SCHEMA);
   delete outputSchema.$defs;
-  const tools = OPERATIONS.filter((operation) => mode === "paper" || operation !== "run").map((operation) => ({
+  const mutations = new Set(["run", "resume", "supplement"]);
+  const tools = OPERATIONS.filter((operation) => mode === "paper" || !mutations.has(operation)).map((operation) => ({
     name: toolName(operation), title: TITLES[operation], description: DESCRIPTIONS[operation], inputSchema: REQUEST_SCHEMAS[operation], outputSchema,
-    annotations: { readOnlyHint: operation !== "run", destructiveHint: false, idempotentHint: true, openWorldHint: operation === "run" },
+    annotations: { readOnlyHint: !mutations.has(operation), destructiveHint: false, idempotentHint: true, openWorldHint: mutations.has(operation) },
   }));
   return validateToolDefinitions(tools);
 }
@@ -186,7 +195,8 @@ export function serve(options, { stdin = process.stdin, stdout = process.stdout,
       .catch((error) => failureEnvelope(operation, error))
       .then((envelope) => {
         reply(id, { content: [{ type: "text", text: JSON.stringify(envelope) }], structuredContent: envelope,
-          isError: !envelope.operation_ok || (operation === "run" && ["failed", "blocked", "interrupted"].includes(envelope.status)) });
+          isError: !envelope.operation_ok || (["run", "resume", "supplement"].includes(operation)
+            && ["failed", "blocked", "interrupted"].includes(envelope.status)) });
       }).finally(() => { inflight.delete(id); maybeClosed(); });
   }
 

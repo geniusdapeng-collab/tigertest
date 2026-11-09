@@ -1,0 +1,281 @@
+{
+  "schema": "tiger.research-status-repair/v1",
+  "actor": "root/parse_quality",
+  "role": "repair",
+  "commit": "919c459",
+  "status": "work_stopped_at_owner_request_local_commit_only",
+  "changed_files": [
+    "trading_system/research_status.py",
+    "trading_system/report.py",
+    "trading_system/report_html.py",
+    "tests/test_repair_research_status.py",
+    "scripts/acceptance/research-report.mjs"
+  ],
+  "coverage": {
+    "code_files_total": 26,
+    "A_full_read": 15,
+    "B_executed_not_full_read": 6,
+    "C_selected_integration_reads": 5,
+    "D_unread": 0,
+    "files": [
+      {
+        "path": "trading_system/research_status.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "c3374c588e6242c650281954052278a1b5d570b335a097ad99f2a664be5dc749"
+      },
+      {
+        "path": "trading_system/report.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "1b62742aaad37076941d1183c1f0d61d128637e43db6e4c76b907c95a296d2c7"
+      },
+      {
+        "path": "trading_system/report_html.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "fd92813b7b10577089b2a838bb0cbbe64665d9d3d1dbedb18322badb809a3324"
+      },
+      {
+        "path": "tests/test_repair_research_status.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "13dcfd236c19fcaeeda854dda9acb6361eb2544476ef92827d304060f5b9e55e"
+      },
+      {
+        "path": "scripts/acceptance/research-report.mjs",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "23dae07361c29462672fe431bf5df67d4434bef317e5fcd4f18a563d56ae1bd6"
+      },
+      {
+        "path": "trading_system/config.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "2a24174635f1994ec1a6c2338df46652347d40b53bd3bbacd73c4a02e3af2972"
+      },
+      {
+        "path": "trading_system/data_models.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "b6cb53f1da33dbf4d5ff27db1d47c2c6b1727b2b562656bc4f608c3d18271d51"
+      },
+      {
+        "path": "trading_system/report_assets.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "a54576adb03f8c197bef30646f860a2ceb4a1ca04a111b3c0d68051d9d94db51"
+      },
+      {
+        "path": "trading_system/redline/__init__.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "3c70e8909b2c78b4227a6912111749904e16a2493264a20a26304a3165f81732"
+      },
+      {
+        "path": "trading_system/research_audit.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "003d8d1bda36dafa74ca1f9d806bf6a6a41c84375fc41a7bc23111d5f7a6c8bb"
+      },
+      {
+        "path": "tests/test_report_truthfulness.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "a4814e14c21907af02fb8ce9ecd8a1249c736750670bafd2ebb4fd36c59c022a"
+      },
+      {
+        "path": "tests/test_report_html.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "5bfdf66d28b07e8e57ef155eeb9be1dedc74c3f9282c354175988f6495785c69"
+      },
+      {
+        "path": "tests/test_research_audit.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "1483d27aaff23d4747113ba021ebbb66a21ffdfaffe389f66395c429aded6b0c"
+      },
+      {
+        "path": "scripts/acceptance/report-layout.mjs",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "88055148a25916350c55cedf6cbcd97a8bbf97f601762344fb4af44804296546"
+      },
+      {
+        "path": "scripts/acceptance/lib/playwright.mjs",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "A",
+        "sha256": "25429b420a366eba26f7af6afcc7c07ed9041fc4ef7a7eb20cef015376357bbd"
+      },
+      {
+        "path": "tests/test_report_chain_count.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "B",
+        "sha256": "04d14bf3af8dff628980d3557d958f964b7c204f1a5f241b0dcee0c978a073e9"
+      },
+      {
+        "path": "tests/test_report_whitepaper_assets.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "B",
+        "sha256": "966d8ab36158d05d24875ad8027ac4f7544ce2a7c0c3eff8f557d0308b367e4f"
+      },
+      {
+        "path": "tests/test_intelligence_workflow_v2.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "B",
+        "sha256": "9dfd659cfa808880aa0fe1cd48ba0a2b7fece19aafeb1d220b0b88d6b37c40a7"
+      },
+      {
+        "path": "tests/test_intelligence_proof.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "B",
+        "sha256": "261ec17270d5e5750b273a9d9951eedc4960323ce4594f5180fba6918d5a4b5e"
+      },
+      {
+        "path": "tests/test_intelligence_scoring_proof.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "B",
+        "sha256": "c0e882018639234afc570109955dbcdc0e55850402bce7328524c48807f3ebe5"
+      },
+      {
+        "path": "tests/test_intelligence_json_observation_proof.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-repair-implementation-20261108/parse-quality",
+        "evidence": "B",
+        "sha256": "cdb124550127e59d18aff267b23115f0fdc9c5d353e8927d989abe8417b2b4f2"
+      },
+      {
+        "path": "trading_system/llm/intelligence_required.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+        "evidence": "C",
+        "sha256": "b101fc394a0f74e90b60064856f16f7e41344e469bdb84040db95fdd7a1ef980"
+      },
+      {
+        "path": "trading_system/pipeline.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+        "evidence": "C",
+        "sha256": "c1a149a163a141aa80881316903cb6dcdd086b98c96e4c3eb0125a29a05d4ff1"
+      },
+      {
+        "path": "trading_system/agent_runtime.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+        "evidence": "C",
+        "sha256": "d250a7b26856ad7423841619fd22ea0b4f908a6009bc39bca562cd6690f1eb4a"
+      },
+      {
+        "path": "trading_system/tasks/store.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+        "evidence": "C",
+        "sha256": "a19480451b0df52e4537beba72800684e0ca1591e2d35457e2e20bee6ca1c892"
+      },
+      {
+        "path": "trading_system/research_followup.py",
+        "checkout": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+        "evidence": "C",
+        "sha256": "cf3227dec71ebb0defd8054852e421d50e2e4aa4e54410af83d05094d248ca73"
+      }
+    ],
+    "notes": "A applies to listed files and implementation read. C root integration references were selectively read; no full integration understanding claimed. Root research_work.py and research_risk.py were additionally read to understand inputs, not changed. Six B files were included in interrupted expanded regression; do not claim every B test executed."
+  },
+  "python_tests": {
+    "research-status-before.xml": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "20",
+      "skipped": "0",
+      "tests": "20",
+      "time": "0.239",
+      "timestamp": "2026-11-08T11:11:33.068169+08:00",
+      "hostname": "macdeMacBook-Air.local"
+    },
+    "research-status-hardening-before.xml": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "5",
+      "skipped": "0",
+      "tests": "29",
+      "time": "0.167",
+      "timestamp": "2026-11-08T11:19:47.621774+08:00",
+      "hostname": "macdeMacBook-Air.local"
+    },
+    "research-status-focused.xml": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "tests": "29",
+      "time": "0.147",
+      "timestamp": "2026-11-08T11:20:17.935044+08:00",
+      "hostname": "macdeMacBook-Air.local"
+    },
+    "research-status-report-regression.xml": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "tests": "99",
+      "time": "4.641",
+      "timestamp": "2026-11-08T11:20:49.804570+08:00",
+      "hostname": "macdeMacBook-Air.local"
+    },
+    "research-status-full-regression.xml": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "tests": "185",
+      "time": "104.326",
+      "timestamp": "2026-11-08T11:24:19.427110+08:00",
+      "hostname": "macdeMacBook-Air.local"
+    }
+  },
+  "focused": "29 passed 0.18s",
+  "report_regression": "99 passed 4.64s",
+  "expanded_regression": {
+    "state": "interrupted_at_user_request",
+    "passed_before_interrupt": 185,
+    "exit_code": 2,
+    "duration_seconds": 104.34,
+    "path": "research-status-full-regression.xml",
+    "claim": "not a completed full regression"
+  },
+  "browser": {
+    "layout_receipt": "research-status-layout-first/layout.json",
+    "layout_cases_passed": 40,
+    "controls_receipt": "research-status-controls-first/receipt.json",
+    "control_widths": [
+      320,
+      390,
+      768,
+      1440
+    ],
+    "control_assertions_passed": 36,
+    "page_errors": 0,
+    "external_requests": 0,
+    "manual_visual_read": [
+      "research-status-controls-first/status-390.png",
+      "research-status-controls-first/cards-1440.png"
+    ],
+    "limitations": "Native Chrome CUA bridge timed out twice. Fallback used installed Chrome in an isolated headless QA context. Only two screenshots were manually inspected; all 40 layout cases had automated measurements. Static offline filtering is not a live scheduler disconnect/reconnect test."
+  },
+  "interface": {
+    "call": "project_research_status(raw=None, *, work_status=None, document_dispositions=None, verification=None, observed_state=None, report_ready=False, observation_state=\"connected\", run_id=None)",
+    "verification": "Complete return of successful agent_runtime.verify_run; caller owns verification boundary. For complete security cards pass verified complete result.raw, not summary gates alone.",
+    "report": "report_research_status always projects report_ready prepublication; never treats raw.research_status as authority."
+  },
+  "integration_pending": [
+    "Root cherry-pick and independent A review",
+    "Root runner/runtime/Node/MCP caller integration and final raw proof integration",
+    "Root source_index/run_id changes need integrated tests",
+    "Full regression interrupted by user request",
+    "No live runtime retry/cancel/unknown-provider reconciliation browser flow verified",
+    "No paid model/source calls or production/main release"
+  ],
+  "cleanup": {
+    "local_http_8876": "stopped",
+    "playwright_browser": "closed by finally",
+    "native_CUA": "completion summary sent"
+  },
+  "diff_check": "passed before commit",
+  "credential_scan": "not run after explicit stop request"
+}

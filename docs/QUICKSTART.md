@@ -1,11 +1,13 @@
 # 老虎全球资产管理 · 快速上手（QUICKSTART）
 
 > 两条使用路径：**A. 交易内核单用**（Python，开箱即用）｜**B. 全栈**（内核 + WorkLoom 治理底座，适合团队/机构）。
+>
+> 下方 `main.py` 命令用于内核开发、离线演示和历史兼容。新的 AI 研究、官网更新、原身份 resume、候选 supplement、独立 receipt/verify 必须使用 [Agent 操作指南](AGENT-CLIENTS.md) 的受控 CLI/MCP 与 `us-public-intelligence-paper-v2`；`--demo`、透传和本页旧命令都不能作为新研究完成证明。
 
 ## A. 交易内核单用（5 分钟）
 
 ```bash
-git clone https://github.com/workloom-ai/workroom-tiger.git
+git clone https://github.com/geniusdapeng-collab/workroom-tiger.git
 cd workroom-tiger
 bash scripts/setup.sh        # 装依赖 + 冒烟测试 + 环境自检
 ```

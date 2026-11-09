@@ -1,0 +1,80 @@
+{
+  "schema": "tiger.intelligence-catalog/v1",
+  "version": "tiger-public-ai-infrastructure-pilot-2026-11-06.2",
+  "sources": {
+    "nvidia_official_releases": {
+      "material_types": [
+        "issuer_ir"
+      ],
+      "publisher": "NVIDIA",
+      "entitlement": {
+        "kind": "public"
+      },
+      "priority": 5
+    },
+    "fed_g17_industry_summary": {
+      "material_types": [
+        "industry_data",
+        "macro_policy"
+      ],
+      "publisher": "Board of Governors of the Federal Reserve System",
+      "entitlement": {
+        "kind": "public"
+      },
+      "priority": 10
+    },
+    "goldman_data_center_power_transcript": {
+      "material_types": [
+        "institutional_commentary",
+        "person_statement"
+      ],
+      "publisher": "Goldman Sachs",
+      "business_unit": "Goldman Sachs Exchanges public episode",
+      "author_ids": [
+        "person:brian-singer-gs-episode",
+        "person:carly-davenport-gs-episode"
+      ],
+      "entitlement": {
+        "kind": "public"
+      },
+      "allowed_uses": [
+        "topic_analysis",
+        "historical_baseline"
+      ],
+      "priority": 30,
+      "person_statement_basis": "original_transcript"
+    }
+  },
+  "entities": {
+    "institution:goldman-sachs": {
+      "type": "institution",
+      "name": "Goldman Sachs"
+    },
+    "person:brian-singer-gs-episode": {
+      "type": "person",
+      "name": "Brian Singer",
+      "role_history": [
+        {
+          "institution_id": "institution:goldman-sachs",
+          "role": "Episode speaker attributed in the original transcript",
+          "observed_in_source_on": "2026-09-01",
+          "source_id": "goldman_data_center_power_transcript",
+          "current_affiliation_verified": false
+        }
+      ]
+    },
+    "person:carly-davenport-gs-episode": {
+      "type": "person",
+      "name": "Carly Davenport",
+      "role_history": [
+        {
+          "institution_id": "institution:goldman-sachs",
+          "role": "Episode speaker attributed in the original transcript",
+          "observed_in_source_on": "2026-09-01",
+          "source_id": "goldman_data_center_power_transcript",
+          "current_affiliation_verified": false
+        }
+      ]
+    }
+  }
+}

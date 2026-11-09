@@ -21,6 +21,29 @@ test("B01/B02: exact operation schemas reject missing, unknown and wrongly typed
   assert.equal(Object.keys(RESULT_SCHEMA.properties).length, 12);
 });
 
+test("public resume and supplement schemas are exact and readonly-safe", async (t) => {
+  const resume = { run_id: RUN_ID };
+  const supplement = { schema_version: "tiger.research-supplement-request/v1",
+    parent_run_id: RUN_ID, symbols: ["NVDA", "BRK.B"], idempotency_key: "supplement-key-0001" };
+  assert.deepEqual(validateRequest("resume", resume), resume);
+  assert.deepEqual(validateRequest("supplement", supplement), supplement);
+  for (const value of [
+    { ...resume, profile: "us-public-intelligence-paper-v2" },
+    { ...supplement, symbols: [] },
+    { ...supplement, symbols: ["NVDA", "NVDA"] },
+    { ...supplement, symbols: ["nvda"] },
+    { ...supplement, profile: "us-public-intelligence-paper-v2" },
+  ]) assert.throws(() => validateRequest(value.symbols ? "supplement" : "resume", value), { code: "INVALID_REQUEST" });
+  const fixture = await runnerFixture(t);
+  for (const [operation, input] of [["resume", resume], ["supplement", supplement]]) {
+    const denied = await invokeWorkflow(operation, input, { ...fixture.options, mode: "readonly" });
+    assert.equal(denied.error.code, "READ_ONLY");
+  }
+  assert.deepEqual(await fixture.calls(), []);
+  assert.equal(validateEnvelope(result("resume"), "resume").status, "running");
+  assert.equal(validateEnvelope(result("supplement"), "supplement").status, "accepted");
+});
+
 test("B02: duplicate decoded keys, malformed JSON, depth, nonfinite numbers and invalid UTF-8 are rejected", () => {
   for (const raw of ['{"profile":1,"profile":2}', '{"a":{"mode":1,"mo\\u0064e":2}}', '{"arguments":{},"arguments":{}}',
     "NaN", "Infinity", "-Infinity", "1e400", "01", "1.", "{}{}", "[1,]", '{"a":1,}', " ", '"\\x20"', '"a\n"', "[".repeat(66) + "0" + "]".repeat(66)]) {

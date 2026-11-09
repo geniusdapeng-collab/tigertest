@@ -27,7 +27,7 @@ P0 为完整阶段执行、固定请求边界、独立模拟账户、持久幂�
 
 ## 固定 profile 和版本
 
-新的 AI 研究和官网更新默认必须显式选择 `us-public-model-required-paper-v1`。CLI 兼容函数默认 profile `us-public-paper-v1` 仅保留旧调用/历史语义；`us-public-active-paper-v1` 为可选实验。操作默认与兼容函数默认不同。各配置账户名称均为 `public-usd`，初始资金为 100000 USD，股票池使用已有 `extended` 定义；应使用独立 state-root，避免在同一账户混用决策/待成交语义。另建 state-root 不会继承旧账户，更不表示导入了真实券商资产。model-required 基于 `reviewed_source_defaults`，不启用 active 的板块代理或主线溢出实验。
+新的 AI 研究和官网更新默认必须显式选择 `us-public-intelligence-paper-v2`。`us-public-model-required-paper-v1` 保留旧严格路径；CLI 兼容函数默认 profile `us-public-paper-v1` 仅保留旧调用/历史语义；`us-public-active-paper-v1` 为可选实验。各配置账户名称均为 `public-usd`，初始资金为 100000 USD；应使用独立 state-root，避免在同一账户混用决策/待成交语义。另建 state-root 不会继承旧账户，更不表示导入了真实券商资产。
 
 model-required 的纯固定 policy 声明 `deepseek-flash` / `DeepSeek-V4.1-Flash-1017` 观察映射、JSON mode、场景化 thinking 及同提供方 `provider_native_search`，不读取 key 来生成 policy hash。实际配置仅从可信启动环境四变量取得，原两个 profile 继续剥离模型凭据。官方别名映射不是不可变模型快照；来源、观察日期及限制随 manifest 保存。`clean.llm_semantic` 与 `tech.sentiment` 明确非思考，`tech.risk` / `sector.narrative` 使用 high，最终 `decision.debate` 使用 max；策略来自 bundle `model-policy.yml`，各调用的独立证明绑定同一场景。请求通过仓库内官方 tokenizer 对完整序列化内容计价，输出预算自动取 `min(393216, 1048576 - 输入 tokens)`，禁止固定小预算或按字符截断证据。Flash 不支持托管 Responses web_search，应用通过原生 Search 收集全部 14 个既有主题，并把安全资料传给 Flash；Fetch 接口支持留在适配器，固定 collector 不调用。官方能力和加载步骤见 [AGENT-CLIENTS.md](AGENT-CLIENTS.md)。
 
@@ -87,6 +87,10 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 ## 状态、账户和进程
 
 状态目录包含短期提交锁、账户锁、幂等键映射、运行目录和账户版本目录。对外业务请求仅含 schema_version、profile、paper_account、idempotency_key 四个字段。第一次接纳持久化请求身份后，才启动独立业务进程；同键重试只能返回原身份与实际状态。
+
+新 intelligence run 在 worker 正常停止后可通过单独 `resume` 控制操作继续原 run_id。resume 不创建新 identity，不改变原 request/source/policy/account-before/calendar/deadline；父 attempt 的失败事件、I/O、work、日志与进程证据只增不改归档，新 attempt 从原账户与日历重建。已收到 native 先复算 usage；unknown/in-flight 调用保留预留并要求先对账。engine 已完成但 seal 前崩溃只做 closeout，不重跑 pipeline。
+
+`supplement` 不是旧 run 的续跑：它从独立核验的父 receipt 读取 pending candidate，建立新 scope、新 admission 和完整新 run。旧快照不扩写，旧批准不复用；即使原信号已过期，也只标记 `original_signal_expired` 并执行新研究。
 
 运行期间，所有业务写入发生在该 run 的工作目录。账户提交的步骤为：
 

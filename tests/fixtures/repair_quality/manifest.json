@@ -1,0 +1,419 @@
+{
+  "schema": "tiger.repair-quality-gold/v1",
+  "frozen_at": "2026-11-08T01:10:14.014313+00:00",
+  "frozen_by": "root/parse_quality",
+  "base_commit": "7dd502c3826de58e4f35659251797d4faa1c479a",
+  "purpose": "Independent labels fixed before semantic changes; fixtures do not prove production financial quality.",
+  "split_policy": "Runtime may not read heldout labels. Changes require independent adjudication, new version and rerun.",
+  "cases": [
+    {
+      "id": "financial-periods",
+      "split": "development",
+      "source": "development/financial-periods.txt",
+      "source_sha256": "09f490b83cfd7b66ba997b8f83a32d80548c6a52f4d52b06fea6a58fbe082bb2",
+      "provenance": {
+        "kind": "synthetic_fixture",
+        "source_authority": "none",
+        "not_real_market_observation": true
+      },
+      "labels": [
+        {
+          "id": "q3-revenue",
+          "severity": "critical",
+          "quote": "USD 10 million",
+          "start": 54,
+          "end": 68,
+          "expected": {
+            "subject": "Alpha Robotics",
+            "metric": "revenue",
+            "period": "Q3 2026",
+            "currency": "USD",
+            "unit": "million",
+            "value": "10"
+          }
+        },
+        {
+          "id": "counterevidence",
+          "severity": "critical",
+          "quote": "USD 4 million of non-recurring licence revenue",
+          "start": 132,
+          "end": 178,
+          "expected": {
+            "kind": "qualification",
+            "material": true
+          }
+        },
+        {
+          "id": "prior-period",
+          "severity": "critical",
+          "quote": "USD 8 million in Q3 2025",
+          "start": 77,
+          "end": 101,
+          "expected": {
+            "period": "Q3 2025",
+            "basis": "year_over_year_comparator"
+          }
+        }
+      ]
+    },
+    {
+      "id": "origin-conflict",
+      "split": "development",
+      "source": "development/origin-conflict.txt",
+      "source_sha256": "d907148ac95fe27b6d13c7b37ea34a392ac385f707d77ed9fcba84e038678677",
+      "provenance": {
+        "kind": "synthetic_fixture",
+        "source_authority": "none",
+        "not_real_market_observation": true
+      },
+      "labels": [
+        {
+          "id": "independence",
+          "severity": "critical",
+          "quote": "republishes Source A verbatim",
+          "start": 110,
+          "end": 139,
+          "expected": {
+            "origin_count_for_A_and_B": 1
+          }
+        },
+        {
+          "id": "revision",
+          "severity": "critical",
+          "quote": "backlog USD 9 million",
+          "start": 245,
+          "end": 266,
+          "expected": {
+            "status": "corrected",
+            "value": "9",
+            "currency": "USD",
+            "unit": "million"
+          }
+        },
+        {
+          "id": "withdrawal",
+          "severity": "critical",
+          "quote": "earlier USD 12 million figure is withdrawn",
+          "start": 272,
+          "end": 314,
+          "expected": {
+            "status": "withdrawn",
+            "retain_history": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "subject-missing",
+      "split": "development",
+      "source": "development/subject-missing.txt",
+      "source_sha256": "f73e3d6426bbbcbb0a7441e4f18cf1c540bf02d96d85ff8ee47db506af14c8f5",
+      "provenance": {
+        "kind": "synthetic_fixture",
+        "source_authority": "none",
+        "not_real_market_observation": true
+      },
+      "labels": [
+        {
+          "id": "subject",
+          "severity": "critical",
+          "quote": "Only Alpha Holdings reported a capital shortfall",
+          "start": 77,
+          "end": 125,
+          "expected": {
+            "subject": "Alpha Holdings",
+            "not_subject": "Alpha Robotics"
+          }
+        },
+        {
+          "id": "missing",
+          "severity": "critical",
+          "quote": "No audited cash-flow statement for Alpha Robotics is supplied",
+          "start": 127,
+          "end": 188,
+          "expected": {
+            "required_evidence": "cash_flow",
+            "state": "unknown"
+          }
+        }
+      ]
+    },
+    {
+      "id": "financial-units",
+      "split": "heldout",
+      "source": "heldout/financial-units.txt",
+      "source_sha256": "93eb5db59c01adbb901a3a2d899f841c14d0a9735ec352d835586d2428b1e298",
+      "provenance": {
+        "kind": "synthetic_fixture",
+        "source_authority": "none",
+        "not_real_market_observation": true
+      },
+      "labels": [
+        {
+          "id": "revenue",
+          "severity": "critical",
+          "quote": "Revenue | 2500",
+          "start": 83,
+          "end": 97,
+          "expected": {
+            "subject": "Beta Devices",
+            "metric": "revenue",
+            "period": "fiscal year ended 30 June 2026",
+            "currency": "EUR",
+            "unit": "thousands",
+            "value": "2500"
+          }
+        },
+        {
+          "id": "negative-cashflow",
+          "severity": "critical",
+          "quote": "Operating cash flow | -900",
+          "start": 98,
+          "end": 124,
+          "expected": {
+            "metric": "operating_cash_flow",
+            "currency": "EUR",
+            "unit": "thousands",
+            "value": "-900",
+            "polarity": "negative"
+          }
+        },
+        {
+          "id": "qualification",
+          "severity": "critical",
+          "quote": "includes 1100 of one-time settlement income",
+          "start": 143,
+          "end": 186,
+          "expected": {
+            "kind": "qualification",
+            "material": true
+          }
+        },
+        {
+          "id": "missing-rate",
+          "severity": "critical",
+          "quote": "no USD conversion rate",
+          "start": 207,
+          "end": 229,
+          "expected": {
+            "state": "unknown",
+            "forbidden": "invent_fx_conversion"
+          }
+        }
+      ]
+    },
+    {
+      "id": "temporal-contradiction",
+      "split": "heldout",
+      "source": "heldout/temporal-contradiction.txt",
+      "source_sha256": "c935a6fcf680834a254e062ea1e9e1ecd67b285ad460f646f558e47d86028349",
+      "provenance": {
+        "kind": "synthetic_fixture",
+        "source_authority": "none",
+        "not_real_market_observation": true
+      },
+      "labels": [
+        {
+          "id": "future-event",
+          "severity": "critical",
+          "quote": "Earnings call scheduled for 2026-10-30",
+          "start": 60,
+          "end": 98,
+          "expected": {
+            "as_of": "2026-10-15T00:00:00Z",
+            "event_state": "scheduled_future",
+            "not_state": "reported"
+          }
+        },
+        {
+          "id": "partial",
+          "severity": "critical",
+          "quote": "full transcript is unavailable",
+          "start": 156,
+          "end": 186,
+          "expected": {
+            "completeness": "partial",
+            "results": "unknown"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ambiguous-conflicting",
+      "split": "heldout",
+      "source": "heldout/ambiguous-conflicting.txt",
+      "source_sha256": "2cc979d7a0c1c0872fb7a17eef53bc3415905a8e09a588a306b39fb2a7b50088",
+      "provenance": {
+        "kind": "synthetic_fixture",
+        "source_authority": "none",
+        "not_real_market_observation": true
+      },
+      "labels": [
+        {
+          "id": "entity",
+          "severity": "critical",
+          "quote": "Delta Semiconductor and Delta Airlines are different issuers",
+          "start": 13,
+          "end": 73,
+          "expected": {
+            "must_not_merge": true
+          }
+        },
+        {
+          "id": "origin",
+          "severity": "critical",
+          "quote": "Site Two reproduces Wire One",
+          "start": 141,
+          "end": 169,
+          "expected": {
+            "independent_origins": 1
+          }
+        },
+        {
+          "id": "counterevidence",
+          "severity": "critical",
+          "quote": "corrects growth to -2% year over year",
+          "start": 188,
+          "end": 225,
+          "expected": {
+            "value": "-2",
+            "unit": "percent",
+            "comparison": "year_over_year",
+            "material": true
+          }
+        },
+        {
+          "id": "unverified",
+          "severity": "critical",
+          "quote": "alleges insolvency without evidence",
+          "start": 283,
+          "end": 318,
+          "expected": {
+            "state": "unverified_risk_lead",
+            "not_state": "confirmed_risk"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fed-g17-capture",
+      "split": "heldout",
+      "source": "heldout/fed-g17-capture.txt",
+      "source_sha256": "5bd64bb368d06183abc296a969686b7e7355adde3259dc46a7f7737148e51734",
+      "provenance": {
+        "kind": "archived_public_primary_source",
+        "url": "https://www.federalreserve.gov/releases/g17/current/g17.txt",
+        "document_id": "docver_11be7102d67bddfb1065bf7c8fdc6e13",
+        "raw_sha256": "5bd64bb368d06183abc296a969686b7e7355adde3259dc46a7f7737148e51734",
+        "first_seen": {
+          "evidence": {
+            "kind": "local_observation"
+          },
+          "precision": "instant",
+          "raw": "2026-11-06T02:29:57.374215+00:00",
+          "timezone": "UTC",
+          "value": "2026-11-06T02:29:57.374215+00:00"
+        },
+        "retrieved": {
+          "evidence": {
+            "kind": "source_transport"
+          },
+          "precision": "instant",
+          "raw": "2026-11-06T02:29:57.361149+00:00",
+          "timezone": "UTC",
+          "value": "2026-11-06T02:29:57.361149+00:00"
+        },
+        "archive_authority": "unverified",
+        "label_scope": "Independent reading of summary table and notes only; original full raw retained. Archive origin authority remains unverified; not a live source revalidation."
+      },
+      "labels": [
+        {
+          "id": "release-date",
+          "severity": "critical",
+          "quote": "October 16, 2026",
+          "start": 273,
+          "end": 289,
+          "expected": {
+            "publication_date_text": "2026-10-16",
+            "not_retrieval_date": "2026-11-06",
+            "archive_published_precision": "unknown",
+            "do_not_rewrite_historical_metadata": true
+          }
+        },
+        {
+          "id": "preliminary",
+          "severity": "critical",
+          "quote": "[r]  Revised.  [p]  Preliminary.",
+          "start": 8872,
+          "end": 8904,
+          "expected": {
+            "r": "revised",
+            "p": "preliminary",
+            "required_qualification": "September figures carry preliminary status"
+          }
+        },
+        {
+          "id": "total-index",
+          "severity": "critical",
+          "quote": "102.6      102.7      103.0      103.2      103.3      104.0",
+          "start": 1779,
+          "end": 1839,
+          "expected": {
+            "series": "industrial production total index",
+            "period": "September 2026",
+            "value": "104.0",
+            "unit": "index",
+            "base": "2017=100",
+            "seasonally_adjusted": true
+          }
+        },
+        {
+          "id": "total-monthly",
+          "severity": "critical",
+          "quote": ".8         .1         .2         .2         .1         .7",
+          "start": 1850,
+          "end": 1907,
+          "expected": {
+            "series": "industrial production total index",
+            "period": "September 2026",
+            "value": "0.7",
+            "unit": "percent_change",
+            "comparison": "month_over_month",
+            "not_comparison": "year_over_year"
+          }
+        },
+        {
+          "id": "manufacturing-scope",
+          "severity": "critical",
+          "quote": "plus the logging industry and the newspaper, periodical, book, and directory publishing industries.",
+          "start": 9386,
+          "end": 9485,
+          "expected": {
+            "qualification": "G17 manufacturing includes logging and specified publishing",
+            "must_preserve": true
+          }
+        }
+      ]
+    }
+  ],
+  "rubric": {
+    "critical_error_tolerance": 0,
+    "required_critical_fact_recall": 1.0,
+    "required_counterevidence_recall": 1.0,
+    "missing_or_unknown": "retain denominator and mark incomplete",
+    "no_future_information": true,
+    "no_origin_count_inflation": true,
+    "no_invented_currency_period_subject": true
+  },
+  "metrics": [
+    "acquisition_eligible_over_observed",
+    "required_evidence_cells_satisfied_over_required",
+    "first_attempt_valid_over_admitted_originals",
+    "eventually_valid_over_admitted_originals",
+    "recovered_over_failed_recoverable",
+    "business_complete_over_admitted_runs",
+    "elapsed_seconds_p50_p95_with_sample_count"
+  ],
+  "disputes": [],
+  "sha256": "a27ec21cf36d2c3dc83d058a13b4e476aaf5fc1210c5bcee77578b7077dc9872"
+}

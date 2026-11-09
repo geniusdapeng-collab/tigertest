@@ -1,0 +1,742 @@
+{
+  "schema": "tiger.checkpoint-reading/v1",
+  "audit_commit": "7dd502c3826de58e4f35659251797d4faa1c479a",
+  "code_commit": "97aa30cd84d4d57043e7f2e503c59a1b7f12e332",
+  "scope": "Changed files since approved repair audit; current-byte complete reading claims only when attested, all other files conservatively machine-only. Earlier reading receipts retained separately.",
+  "total": 104,
+  "counts": {
+    "B": 68,
+    "A": 36
+  },
+  "files": [
+    {
+      "path": "docs/INTELLIGENCE-ACQUISITION.md",
+      "sha256": "64dce750320f46905fd59314fe98988a7256a395f339260e4bb5ff3ce75aec27",
+      "bytes": 26476,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "docs/INTELLIGENCE-TOPICS.md",
+      "sha256": "2264cff2c79067b0e57970a943c12f0998ff14d16cbfe42da9b752cea582cc6b",
+      "bytes": 25558,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "scripts/acceptance/research-report.mjs",
+      "sha256": "23dae07361c29462672fe431bf5df67d4434bef317e5fcd4f18a563d56ae1bd6",
+      "bytes": 8258,
+      "evidence": "A",
+      "basis": "research-status-receipt.json"
+    },
+    {
+      "path": "scripts/tiger-topic-mcp.mjs",
+      "sha256": "5db0dbf44d87f6085a9e75a2b7e971755430c9d41ea97d8763e8fd5a4a253267",
+      "bytes": 10572,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "scripts/tiger-topic-semantics.test.mjs",
+      "sha256": "ca12065cfd17d9c9f00c6f67bca2628ef9a21f83e0704d850c8ba06a7b7c7805",
+      "bytes": 4155,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/.gitattributes",
+      "sha256": "7d2879f9be9e316efd9fda97c3fd67647f210ce26888616a4b9f34dfdb6bc6e4",
+      "bytes": 119,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/README.md",
+      "sha256": "bbf2b68ce14dba118f3c109c6a0f104e97fe31c1b8b38596f210a8fa9a07d572",
+      "bytes": 3938,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/development/financial-periods.txt",
+      "sha256": "09f490b83cfd7b66ba997b8f83a32d80548c6a52f4d52b06fea6a58fbe082bb2",
+      "bytes": 271,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/development/origin-conflict.txt",
+      "sha256": "d907148ac95fe27b6d13c7b37ea34a392ac385f707d77ed9fcba84e038678677",
+      "bytes": 316,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/development/subject-missing.txt",
+      "sha256": "f73e3d6426bbbcbb0a7441e4f18cf1c540bf02d96d85ff8ee47db506af14c8f5",
+      "bytes": 190,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/heldout/ambiguous-conflicting.txt",
+      "sha256": "2cc979d7a0c1c0872fb7a17eef53bc3415905a8e09a588a306b39fb2a7b50088",
+      "bytes": 370,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/heldout/fed-g17-capture.txt",
+      "sha256": "5bd64bb368d06183abc296a969686b7e7355adde3259dc46a7f7737148e51734",
+      "bytes": 58823,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/heldout/financial-units.txt",
+      "sha256": "93eb5db59c01adbb901a3a2d899f841c14d0a9735ec352d835586d2428b1e298",
+      "bytes": 263,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/heldout/temporal-contradiction.txt",
+      "sha256": "c935a6fcf680834a254e062ea1e9e1ecd67b285ad460f646f558e47d86028349",
+      "bytes": 287,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/fixtures/repair_quality/manifest.json",
+      "sha256": "b3117ccb353e122b7eb26950e3d6f63317abb63a93ba6d7bb7cf7ef6c98034d3",
+      "bytes": 12911,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_agent_runtime_policy.py",
+      "sha256": "5f95e1b0a3af79e0913bf069cce053a0e1a9245b92bd187035f39e055bc1c010",
+      "bytes": 21860,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_json_observation_proof.py",
+      "sha256": "8df1b4d44aefcbfadb706a9a662c668e82c83208e5c69095b99b5c8775e972fd",
+      "bytes": 32703,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_topic.py",
+      "sha256": "b9031db5f83b04b0d0f8a72c14655773751c3ddd0811d96ba42a2f15ccde9828",
+      "bytes": 40428,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_topic_feedback.py",
+      "sha256": "2de2ce6518d74e491b8ef1901cb44336221639ee636497bb6650d2c09070298c",
+      "bytes": 17620,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_topic_identity.py",
+      "sha256": "34323233fc5f199cdeb57652fca44aea8978a091e1d4c508f01722426b4a6156",
+      "bytes": 23719,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_topic_model_view.py",
+      "sha256": "6ba4e998fc542647aaaca66359f7932db91c516ba70874618ebe48ecf1abd714",
+      "bytes": 15814,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_topic_safety_integration.py",
+      "sha256": "265fa2887b1a4b081421013a402b9e6ee64af26bf286d8921848a3a91f0a7cc9",
+      "bytes": 34864,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_intelligence_topic_transport_contract.py",
+      "sha256": "507b571a9f68dad33f5a99f31fc7b1fae40c2807be328df58d3c2b16dff45ea0",
+      "bytes": 19641,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_model_budget.py",
+      "sha256": "993c6cf2fc92b2c26e4307c962947b2e52b03301082cfae36cd4b0aa599db458",
+      "bytes": 3566,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_model_required_workflow.py",
+      "sha256": "d1fae05011572746518736d39778310d8a3b9c5af2c8301d6f97c2128ffab1da",
+      "bytes": 20345,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_provider_prompt_budget.py",
+      "sha256": "dc4378c423e899ab511bb71dc7432af514d25e74e98d075062b06bf1aad60353",
+      "bytes": 13436,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_rejected_native.py",
+      "sha256": "d56656d54d902b62a321ff08780be3404868bdad369ec6cab2393bc118b4c187",
+      "bytes": 7343,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_repair_http_observation.py",
+      "sha256": "8b4a40b71386c6baa146665376f9da205a7ac4ea86c6c20c175ffe1caf381a56",
+      "bytes": 6389,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_repair_parse_manifest.py",
+      "sha256": "379155f1804e9735969519a94b3855baa39278b2b73f96f574a1996a4089e9d6",
+      "bytes": 11028,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_repair_quality_corpus.py",
+      "sha256": "3c09be286d5ae7b3853323b1be4d18e88bced0bfc47d4dad58b5fddd6cdae674",
+      "bytes": 1371,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_repair_research_status.py",
+      "sha256": "13dcfd236c19fcaeeda854dda9acb6361eb2544476ef92827d304060f5b9e55e",
+      "bytes": 18332,
+      "evidence": "A",
+      "basis": "research-status-receipt.json"
+    },
+    {
+      "path": "tests/test_repair_source_concurrency.py",
+      "sha256": "4bc74d5e42937e594682c2aa25fbe4961828bd2fd9d23de8d0e2e91161784896",
+      "bytes": 18901,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_repair_topic_semantics.py",
+      "sha256": "ae85ffe7d7de7a740a635edbe89ac03acd2a5864588e902efca0b8d269adff1e",
+      "bytes": 25135,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_research_evaluation.py",
+      "sha256": "2e81e9e81e1d060daa2df370ce3675577ec059d605f9c8a91c8d6d658b260173",
+      "bytes": 10561,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_research_followup.py",
+      "sha256": "78b948eca2af9a43931923d69249b2f8c3313b0c9ec87c8b29447b9e75c150a7",
+      "bytes": 7870,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_research_parent_resume.py",
+      "sha256": "a22ea5f1bd4374951f06a57bb40283677c24f5274eb90ded4f49fde23357cea5",
+      "bytes": 11861,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_research_pending_risk.py",
+      "sha256": "d9f8310ac1536973ca95f6a6610c7a210385fcb9aeb41365fe7fa59fa0aa3734",
+      "bytes": 3574,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_research_relations.py",
+      "sha256": "4efba6b768e47438cdc9c4627f2a3be2fecc05889f9a985bb03ee9f9caa9c5a9",
+      "bytes": 5639,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_research_sources.py",
+      "sha256": "c53535587da1078b3c01af5b14e44331d7732ebee10eb05048a96626ce0571b7",
+      "bytes": 6224,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_research_work_execution.py",
+      "sha256": "91cc75057cbff252468105145e3517e1d6f8144119915d9f075d5fe942e9789b",
+      "bytes": 4397,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_research_work_proof.py",
+      "sha256": "3ed4d9bbeb41ed84944f262b3475b7e9a0e8c10d7f3622f30ab1b3ba5fa8a508",
+      "bytes": 37628,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "tests/test_research_work_semantics.py",
+      "sha256": "9e2662f2656701f835d3f64b33759083d605c1073630e7f8c96761133289e34f",
+      "bytes": 6990,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_task_child_context.py",
+      "sha256": "ab4f10fa7c67108d657a681db8a121208404ce99f0e801aed89d500828d3b941",
+      "bytes": 26157,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_task_coordinator_scope.py",
+      "sha256": "faf5935c210815b955edcf4dc6911c5cb7247ee89bc62ef41cf9cc37e40541d2",
+      "bytes": 1845,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "tests/test_task_plan_extensions.py",
+      "sha256": "a1ca56a2ca25d6fb5d40adad66bda2b9c943f6dfa59cbac5bd75b518b295c0d8",
+      "bytes": 3847,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_task_recovery_validation_cost.py",
+      "sha256": "98383edc490c9a54144306c34826c397df240ff5f3551814efe4763d1a0ba34b",
+      "bytes": 1992,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_task_resource_admission.py",
+      "sha256": "f9905a64cf0369baf2135b32fa84f494d358346ce48f9824cd01dc96c2512490",
+      "bytes": 5149,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "tests/test_task_work_units.py",
+      "sha256": "0bb3494c8c5a24f3a297fbc84c513042be4ef6ee1c53da25217b3cfd12db2723",
+      "bytes": 24004,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/agent_evidence.py",
+      "sha256": "f37d91824234e421bbc79b33c49c541d988267f5a7b63e2a3e97fb73af2f3643",
+      "bytes": 23422,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/agent_runner.py",
+      "sha256": "25a30361a5d8e3cd75f5c7fe1bac3047324944d6b34c4fc6948354a4e983fada",
+      "bytes": 28012,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/agent_runtime.py",
+      "sha256": "d250a7b26856ad7423841619fd22ea0b4f908a6009bc39bca562cd6690f1eb4a",
+      "bytes": 69616,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/agent_supervisor.py",
+      "sha256": "3f7140c4e26a0353a8fc497313cca3d760a907c8afa66a8897f19903981dbfe2",
+      "bytes": 34388,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/adapters.py",
+      "sha256": "0f459f1ffa0487c2e7dcb51679c41f787b783fd277e95b591cfd1a320004a825",
+      "bytes": 17222,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/archive.py",
+      "sha256": "a816afe853cc7e5e53d66d89e72d7d622f30f731b5b436c1076396c75998d4a1",
+      "bytes": 48868,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/extract.py",
+      "sha256": "0e06c0424b146a65d4d059db97a5b9ab118881623209c3cfdcaf14f533df2cb5",
+      "bytes": 12472,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/host_limits.py",
+      "sha256": "a3c7ea881ef7d08c4844cedb1aac57a240b3ee1756ce71219f67742fac19ef57",
+      "bytes": 7716,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/monitoring.py",
+      "sha256": "f08541d45dc2ad1ce8c1b79d4030658a42f45adbe0e3475b60c63846ebc5c223",
+      "bytes": 54582,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/parse_limits.py",
+      "sha256": "f528d06340bc29c018d801f9e498cb07b8a46bd958508a85820c738558c114cd",
+      "bytes": 24852,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/parse_manifest.py",
+      "sha256": "2024146dfa08994a504807672a6d0c16bc6b6f3b12f0667a6e4b96bd3441717f",
+      "bytes": 15162,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/parse_worker.py",
+      "sha256": "01f29cc5c4c65ea84049c91d34fe5d537afacd84d1b11fe98e01f6e3979b65f4",
+      "bytes": 4617,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/scrapling_parser.py",
+      "sha256": "96ad125250fc4ae2d6ba4be3af05c5894ee3b020a39948db4a4ad1f0081608fd",
+      "bytes": 6397,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/service.py",
+      "sha256": "78d99dc63ae1ff1775a997d379b42e316da1e582742b737d3fbc5949fbc2d596",
+      "bytes": 87131,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/topic.py",
+      "sha256": "447b6537ed27a4b27f29074c53a0f704b6213128baa0a577ca5ebeeaa0cfa504",
+      "bytes": 120335,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/topic_cli.py",
+      "sha256": "d2563ea375a8d47f8be18ee0968d12ebed0dd74ab40da49fbe8cb2a5c958dabc",
+      "bytes": 15471,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/topic_semantics.py",
+      "sha256": "3ee3a36285b6a883442ca13bebe6936f168ecb3dd227c9d8a8ec560edd7b4d13",
+      "bytes": 7502,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence/transport.py",
+      "sha256": "e7a830f402c04122140eb48abf01bab4e483c015eec0a5d8d1d6d2719190d2fb",
+      "bytes": 22789,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/intelligence_workflow.py",
+      "sha256": "69b77bfb41d1eba9bb5fe3d64409571f62d0bb6c41a4d919a0b60f0c4baf98c1",
+      "bytes": 22209,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-LICENSE.txt",
+      "sha256": "f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040",
+      "bytes": 1084,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-encoding.py",
+      "sha256": "13231c592e958fb39e2af6001dae69d90e7a36b265702b9b390236fb387599e2",
+      "bytes": 37962,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-provenance.json",
+      "sha256": "defed385fc535b53f835ff81df398f3d539e51dfa505d3a627d34b226f5f784a",
+      "bytes": 1598,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-tokenizer.json",
+      "sha256": "c90dfa01249db1be4245780a052ede752e1361c612ac6d08e2bdada7d599476b",
+      "bytes": 6367257,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/deepseek_required.py",
+      "sha256": "828b0e19e08c83e73500275adf70b8dd50e466dbb511f3c14d9707f5812aeb4f",
+      "bytes": 66499,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/http_observation.py",
+      "sha256": "6b985c114bcd024bb06cb18d65d0d465c94156bea03da94432fc47117c981b9c",
+      "bytes": 5353,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/intelligence_proof.py",
+      "sha256": "9b62f946ae98b0fe62479a889552ebf989078b8e323ef0ce723f19287762967a",
+      "bytes": 113469,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/json_observation.py",
+      "sha256": "75c72cb1194acf257fc1c27cb32d69165714707e7373bec86d85b7c36bce4db6",
+      "bytes": 14447,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/model_budget.py",
+      "sha256": "17c466a10dabeb3d63c3df2bf7baf66b4d886ea76c034c0e520609c4dd4ef0b5",
+      "bytes": 12954,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/provider_prompt.py",
+      "sha256": "813f6a704ad34b2e9789a62f4ead5809d7ff210bce5165c180d31fd1214d76d0",
+      "bytes": 12167,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/rejected_native.py",
+      "sha256": "d8c9405ae88c819ed24a068e17e3702c1fbc737695f1ff4c995c4404b6ea7d86",
+      "bytes": 8334,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/llm/required_proof.py",
+      "sha256": "cc6a47b078485efcab20821158db89608dab998a87a381b5b3128ad399982d72",
+      "bytes": 41542,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/resume_native.py",
+      "sha256": "46db6aea3d9c7453b5fa40ce53a9a876efa674ef86ce56df27d9d47ed5739038",
+      "bytes": 981,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/strict_clean_transport.py",
+      "sha256": "a139e6fb5d1477ca08f30b2ca5d07b2df0c4537350dbdf759195deed38bb6b7d",
+      "bytes": 18002,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/llm/work_proof.py",
+      "sha256": "7d4427e326458d96e566791b71a9e22d2ec2c6e1b5b214e00f0defa346826740",
+      "bytes": 44447,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/llm/work_required.py",
+      "sha256": "c86bd766309d3aa8a6ee19a3b449c781f108b3e0aeb67de347ca919c104afbf3",
+      "bytes": 30786,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/llm/work_semantics.py",
+      "sha256": "e39c7d203b7e244d0d4e6a5eeab10b129faee8e3a503ec4718aa6649591bab1c",
+      "bytes": 9234,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/pipeline.py",
+      "sha256": "c1a149a163a141aa80881316903cb6dcdd086b98c96e4c3eb0125a29a05d4ff1",
+      "bytes": 71119,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/redline/model_diagnostics.py",
+      "sha256": "edc0186c1c626fb9c25b09462509afdd538905075cbe46820a2c3a7cddc625ae",
+      "bytes": 7674,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/report.py",
+      "sha256": "1b62742aaad37076941d1183c1f0d61d128637e43db6e4c76b907c95a296d2c7",
+      "bytes": 44464,
+      "evidence": "A",
+      "basis": "research-status-receipt.json"
+    },
+    {
+      "path": "trading_system/report_html.py",
+      "sha256": "fd92813b7b10577089b2a838bb0cbbe64665d9d3d1dbedb18322badb809a3324",
+      "bytes": 199446,
+      "evidence": "A",
+      "basis": "research-status-receipt.json"
+    },
+    {
+      "path": "trading_system/research_evaluation.py",
+      "sha256": "c1538e350d7bb15a5dbda8592fa14485348a54aa376e202a92ed58c5e00fc4ce",
+      "bytes": 26896,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/research_followup.py",
+      "sha256": "cf3227dec71ebb0defd8054852e421d50e2e4aa4e54410af83d05094d248ca73",
+      "bytes": 10924,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/research_relations.py",
+      "sha256": "432524da88e0e1d8f59dd322bd57525e552dd7bc114fa67174d20bc3c84d7473",
+      "bytes": 11963,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/research_replay.py",
+      "sha256": "3597d117416a1313f6cabc9120768b82a6e54ad5084d354de4790cfefa2d5569",
+      "bytes": 14987,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/research_resume.py",
+      "sha256": "ee2f3a19d36adc55aabad87686fa5f49c37bf8f60cfb08be275d9678b66191e8",
+      "bytes": 24404,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/research_risk.py",
+      "sha256": "ef78fa468cc432c2c2e6bdbbbcc4e463c55f798c57ffceddf2418ca1f1bcaa45",
+      "bytes": 6925,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/research_snapshot.py",
+      "sha256": "190fedb7380e29f7fc670627b0e00ef44f979ecb7e29b3a45daad0ffb661d1e9",
+      "bytes": 3392,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/research_sources.py",
+      "sha256": "10f6b29783acf49ba43e7c9fd80f75e90a9e0fcae969512ad971850d73263055",
+      "bytes": 11476,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/research_status.py",
+      "sha256": "c3374c588e6242c650281954052278a1b5d570b335a097ad99f2a664be5dc749",
+      "bytes": 20180,
+      "evidence": "A",
+      "basis": "research-status-receipt.json"
+    },
+    {
+      "path": "trading_system/research_work.py",
+      "sha256": "7e35c0b49dabccc82130cf73c583bb7d9efbda35e5ce19699bc3190bb803b12d",
+      "bytes": 4203,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/tasks/__init__.py",
+      "sha256": "d52676bfc4ab1874757f803bc37538bbcdb9968468ed51608c8d4daeae1291d5",
+      "bytes": 677,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/tasks/context.py",
+      "sha256": "adcc3adf3d387d43e879e085c6ec914ffdc2b7b5ba73baf40c526cd7178bde85",
+      "bytes": 23919,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    },
+    {
+      "path": "trading_system/tasks/contracts.py",
+      "sha256": "117b0416dd5adc1c2614b0c6be4a78a913c064a96cbaf73c15619441e93c5123",
+      "bytes": 7646,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/tasks/recovery.py",
+      "sha256": "d43de1fb1658b0c4fbeb814c0e04944c0c291ec9b830ab69f6ab0839f4747501",
+      "bytes": 3786,
+      "evidence": "A",
+      "basis": "capacity-governance-handoff/reading-current.json"
+    },
+    {
+      "path": "trading_system/tasks/scheduler.py",
+      "sha256": "63b0f9e169d045613fcf03acf3b9cd750a650effa92f9828121b6b90c1337f51",
+      "bytes": 10804,
+      "evidence": "A",
+      "basis": "root complete authored/read contents"
+    },
+    {
+      "path": "trading_system/tasks/store.py",
+      "sha256": "a19480451b0df52e4537beba72800684e0ca1591e2d35457e2e20bee6ca1c892",
+      "bytes": 61561,
+      "evidence": "B",
+      "basis": "Full-file hash/inventory; Python syntax where applicable. No current final-byte full reading claim."
+    }
+  ],
+  "machine_only_reason": "User requested stopping implementation and preserving progress; no repeated broad final review was launched. Tokenizer assets and prior changed dependencies retain exact hashes but are not promoted to current A reading."
+}

@@ -1,0 +1,1448 @@
+{
+  "schema": "tiger.repair-execution-plan/v1",
+  "source_head": "7dd502c3826de58e4f35659251797d4faa1c479a",
+  "implementation_authorized": false,
+  "tasks": [
+    {
+      "id": "EP00",
+      "title": "冻结三基线与变更合同",
+      "priority": "P0",
+      "owner": "技术负责人及独立验收",
+      "dependencies": [],
+      "effort_days": [
+        1,
+        2
+      ],
+      "why": "保证后续每个结果都能归属到准确代码、输入与验收合同，防止一边改实现一边改变成功口径。",
+      "steps": [
+        "建立审计→修复→验收三份代码基线：审计用当前完整提交；每卡修复前刷新真正默认分支并复现问题；验收提交保留审计/修复祖先关系。另冻结输入、环境配置与验收量尺三类清单。",
+        "为新语义任务、恢复协议、快照和状态建立版本决策记录；旧历史合同只读，执行新任务必须显式选择。",
+        "将问题、EP00—EP23、AT 用例和 PR/验收产物建立可追踪关系；每卡先写可执行失败断言；同一问题三次未修成须换会话并补强证据。本轮暂停状态作为启动边界。"
+      ],
+      "files": [
+        "AGENTS.repo.md",
+        "docs/TIGER-OPERATOR.md",
+        "trading_system/agent_evidence.py",
+        "bundles/trading/agent-workflow.schema.json"
+      ],
+      "acceptance": [
+        "AT01：同一基线重建得到同一原件清单与哈希；任何 source、输入、policy 或 schema 变化产生新基线。",
+        "AT26：旧负例仍保留原结论；基线和验收器分别有身份，测试修改不能静默替换旧失败。"
+      ],
+      "rollback": "只新增版本和索引，保留原基线；登记错误用更正记录，不覆盖旧回执。",
+      "issues": [
+        "I19",
+        "I20",
+        "I21"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP01",
+      "title": "统一入口模式与产品承诺",
+      "priority": "P0",
+      "owner": "产品负责人及入口维护者",
+      "dependencies": [
+        "EP00"
+      ],
+      "effort_days": [
+        1,
+        2
+      ],
+      "why": "消除操作文档与入口的模式漂移，确保用户进入真实新研究路径。",
+      "steps": [
+        "以受控新研究 profile 为明确默认，引导与示例分别标识真实研究、历史兼容、演示及独立 topic。",
+        "统一 OPERATOR、STRICT-WORKFLOW、QUICKSTART、PROJECT_INTRO 对市场范围、五阶段、paper 提交和独立 verify 的说明；同步清洗协议 v2/v3 说明、README 和公开验证文档的历史数量与承诺。",
+        "doctor 的依赖就绪与 provider 可用性分开；describe 返回实际模式和所需权限，不能用 disabled 或 passthrough 冒充新研究。"
+      ],
+      "files": [
+        "docs/TIGER-OPERATOR.md",
+        "docs/TIGER-STRICT-WORKFLOW.md",
+        "docs/QUICKSTART.md",
+        "docs/PROJECT_INTRO.md",
+        "docs/INTELLIGENCE-ACQUISITION.md",
+        "docs/STRICT-CLEAN-PROTOCOL.md",
+        "README.md",
+        "docs/PUBLIC_VERIFICATION.md",
+        "scripts/tiger-agent.mjs",
+        "trading_system/agent_runner.py"
+      ],
+      "acceptance": [
+        "AT02：按每个正式示例执行到 describe，实际 profile 与文案一致；demo 和历史路径不能进入新研究成功统计。",
+        "AT25：readonly及未授权请求不能开启paper/实盘。CN/HK普通研究可报告；缺可核验FX时保持blocked_currency/execution_blocked，不输出可执行股数，不把CNY/HKD计入USD现金风险，不猜汇率迁移旧账。"
+      ],
+      "rollback": "保留历史显式 profile，不恢复含糊默认；文档版本可回退但不能回退到错误承诺。",
+      "issues": [
+        "I18"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP02",
+      "title": "修复完整请求计量与窗口准入",
+      "priority": "P0",
+      "owner": "模型传输维护者",
+      "dependencies": [
+        "EP00"
+      ],
+      "effort_days": [
+        2,
+        4
+      ],
+      "why": "解除 009 已定位的预算阻断；避免再用 canonical HTTP JSON token 数冒充 provider 的实际消息计量。",
+      "steps": [
+        "固定 endpoint、实际模型策略、tokenizer 与消息/tool/schema framing 版本，逐项比较最后发送边界与计量输入。",
+        "实现经验证完整计数或有依据的保守上界；计量不支持的形态返回 COUNTER_UNVERIFIED。输出上限由合法剩余窗口计算，不加无依据固定 2304 buffer。",
+        "复核 tools、严格结构、历史、模式和序列化变化；预发送 request hash 变化时重新准入。将 009 原 wire 纳入确定性负例，再用正式入口取得正向证据。"
+      ],
+      "files": [
+        "trading_system/llm/model_budget.py",
+        "trading_system/llm/strict_clean_transport.py",
+        "trading_system/llm/deepseek_required.py",
+        "trading_system/llm/scene_policy.py"
+      ],
+      "acceptance": [
+        "AT03：009 原请求被正确判为原上限不可用；修改后的完整输入与上限满足经验证窗口，差值 2304 仅是该样本事实。",
+        "AT04：工具/schema 增长、临界一 token、SDK 覆盖和模式变化均测；只有正式全链运行能证明最终路径合法。"
+      ],
+      "rollback": "停用未验证计量版本，恢复上一个已证明的请求合同或显式阻断；不缩掉原件、不降低质量合同，不靠增大超时绕开 400。",
+      "issues": [
+        "I01",
+        "I05"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP03",
+      "title": "统一外部结果观测与未知核对",
+      "priority": "P0",
+      "owner": "模型与采集传输维护者",
+      "dependencies": [
+        "EP00"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "已发出结果未知必须能被追踪，格式失败和 HTTP 失败仍需准确保留计费与回执事实。",
+      "steps": [
+        "统一 before_send、dispatch_unknown、sent_usage_unknown、terminal 的状态，记录 request/response hashes、provider ID、finish_reason 和 usage 是否已知。",
+        "明确 400 确定性参数错误不重发相同请求；可重试瞬时错误按单层退避和 deadline 管理；unknown 先核对，SDK 不暗中重试。原 execution 全局一次格式重答额度通过持久 CAS 管理，不因 batch、worker 或 client 重置；改变次数须显式新政策。",
+        "安全有界读取HTTPError正文，记录长度、完整性、hash和分类，补足009原请求未读错误正文的观测缺口；超限或敏感体保留安全摘要，不把脱敏产物称原始native。历史009 usage仍未知，不用max=1对照或诊断反填。"
+      ],
+      "files": [
+        "trading_system/llm/json_observation.py",
+        "trading_system/llm/deepseek_required.py",
+        "trading_system/intelligence/transport.py",
+        "trading_system/agent_evidence.py"
+      ],
+      "acceptance": [
+        "AT05：发送前失败零外呼；发送后断网保留 unknown；原生响应已落盘可恢复验证，不发生第二次未授权调用。",
+        "AT06：400/401/403/413/429/5xx、空或超大错误体、length、缺usage、错模型各有准确终态；全局重答额度不被重置，已知usage只结算一次。"
+      ],
+      "rollback": "暂停新 attempt，保留未决预留与原生证据；回滚不能把 unknown 变成未发送。",
+      "issues": [
+        "I02",
+        "I14"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP04",
+      "title": "建立模块容量与资源准入",
+      "priority": "P0",
+      "owner": "运行时及解析维护者",
+      "dependencies": [
+        "EP00"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "防止窗口修复后继续撞解析、字段数量、磁盘、内存或业务时限边界。",
+      "steps": [
+        "登记现有解析 60 秒、32 MiB 输入、16 MiB 文本、768 MiB 内存及 span 128、主体 64、事件 64、claim 128 的适用路径，不将这些值误作全局永恒默认。",
+        "任务规划同时考虑原件大小、结构复杂度、预期结果、临时盘与并发峰值；保留完整原件，对超限资料明确重新组织或适配解析。",
+        "预留资源并记录 actual/estimated；区分启动准备、业务 deadline 和 provider 超时；测试缓存独立，清理仅按任务归属和保留期。"
+      ],
+      "files": [
+        "trading_system/intelligence/parse_limits.py",
+        "trading_system/intelligence/parse_worker.py",
+        "trading_system/agent_supervisor.py",
+        "trading_system/llm/intelligence_required.py"
+      ],
+      "acceptance": [
+        "AT07：边界前、等于边界、超边界及组合并发测试，均无静默截断。",
+        "AT08：磁盘不足、内存不足、解析挂起、启动慢、业务超时分别分类，已落盘证据完整且恢复有条件。"
+      ],
+      "rollback": "降低并发至已验证配置或暂停准入；不扩大未测资源上限，不删除用户目录或历史证据。",
+      "issues": [
+        "I05",
+        "I15"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP05",
+      "title": "实现持久工作单元账本",
+      "priority": "P0",
+      "owner": "Python 运行时与存储维护者",
+      "dependencies": [
+        "EP00",
+        "EP03",
+        "EP04"
+      ],
+      "effort_days": [
+        4,
+        6
+      ],
+      "why": "把原生证据持久化升级为可恢复业务状态，消除成功中间成果随进程丢失的问题。",
+      "steps": [
+        "建立 work_unit、edge、attempt、lease_epoch 和事件索引；实现 ready/running/validated/failed/unknown/blocked 状态转换与唯一约束。",
+        "按 manifest 和合同键复用成果；网络和模型在事务外，结果通过短事务提交；原件 blob 与账本交接失败有可恢复规则。",
+        "追加迁移版本，旧事件库只读验证；恢复先核对未知外部效果、结果文件和租约，再重新调度可执行单元。"
+      ],
+      "files": [
+        "trading_system/agent_evidence.py",
+        "trading_system/agent_runner.py",
+        "trading_system/redline/execution.py",
+        "拟新增 trading_system/tasks/store.py 与 migrations"
+      ],
+      "acceptance": [
+        "AT09：在领取、发送、响应、校验、封存、汇合各点崩溃后恢复，已验证单元不重复执行。",
+        "AT10：两个 worker 抢同单元只接受一份结果，过期 epoch 拒绝提交；数据库锁冲突可界定恢复。"
+      ],
+      "rollback": "停止新合同调度，保留账本和结果；旧合同继续读验证，新任务可回到旧兼容入口，禁止把新状态倒写旧库。",
+      "issues": [
+        "I04",
+        "I08",
+        "I14",
+        "I20"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP06",
+      "title": "隔离子任务执行上下文",
+      "priority": "P0并发前置",
+      "owner": "执行器维护者",
+      "dependencies": [
+        "EP05"
+      ],
+      "effort_days": [
+        2,
+        4
+      ],
+      "why": "保持单 owner 审计语义，同时允许受控子任务；避免共享客户端与 active IO 状态竞态。",
+      "steps": [
+        "父任务拥有范围和汇合，子任务拥有独立上下文、attempt、model client 和结果引用；保留父子证据关系。",
+        "执行许可、请求配额与账户预算分别管理；不得放宽现有 owner 检查为任意线程可写。",
+        "协调器维护依赖队列，worker 不同步等待同池子任务；取消、lease 过期和 heartbeat 有明确规则。"
+      ],
+      "files": [
+        "trading_system/redline/execution.py",
+        "trading_system/agent_supervisor.py",
+        "trading_system/llm/deepseek_required.py",
+        "拟新增 trading_system/tasks/scheduler.py"
+      ],
+      "acceptance": [
+        "AT10：完成顺序置换不改变 manifest 和确定性结果；无跨任务证据混用。",
+        "AT11：满池、取消、超时、旧 worker 回来均无死锁、双结算或越权。"
+      ],
+      "rollback": "配置并发退回 1，保留新账本；不得删除父子审计关系以兼容旧逻辑。",
+      "issues": [
+        "I08",
+        "I16"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP07",
+      "title": "完善原件解析与位置映射",
+      "priority": "P0",
+      "owner": "采集与解析维护者",
+      "dependencies": [
+        "EP04",
+        "EP05"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "全文存在不代表表格、脚注、附件和限定条件被正确保留。",
+      "steps": [
+        "输出 parse manifest，列正文段、表格单元、脚注与附件关系、位置映射、解析器版本、完整性及失败原因。",
+        "记录原始发布时间、事件时间、首次可得/获取、修订及 as_of 的来源和可信度；缺时间则 unknown，不拿抓取时间冒充发布。",
+        "复杂 PDF 或表格失败进入适配解析和复核队列；保持原字节不变，不降为摘要后标成全文成功。"
+      ],
+      "files": [
+        "trading_system/intelligence/extract.py",
+        "trading_system/intelligence/parse_worker.py",
+        "trading_system/intelligence/archive.py",
+        "trading_system/intelligence/scrapling_parser.py"
+      ],
+      "acceptance": [
+        "AT12：有表格、脚注、附件、乱码、扫描页和超长文档的标准样本，位置可回查；缺失可见。",
+        "AT13：修订稿和迟到稿时间不会污染 as_of 前的研究快照。"
+      ],
+      "rollback": "回到旧解析版本只用于旧合同；新任务不支持的格式明确不完整，原件保留待重解析。",
+      "issues": [
+        "I05",
+        "I11"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP08",
+      "title": "拆解语义处理与身份合同",
+      "priority": "P0",
+      "owner": "语义流水线维护者",
+      "dependencies": [
+        "EP02",
+        "EP05",
+        "EP07"
+      ],
+      "effort_days": [
+        4,
+        6
+      ],
+      "why": "让每份文档的事实提取、归一、校验与封存有明确边界，并解决漏行与错误 ID 的责任归属。",
+      "steps": [
+        "定义 extract、normalize、validate、document_review 的职责和输入输出；确定性校验不额外用模型替代。",
+        "引入显式新合同，由程序管理文档任务身份，模型产出语义内容；保留批次双射校验和原 native 回复。",
+        "核验主体、时间、期间、币种、单位、数值与引用；普通文本与渲染约束分离；文档级复核检查重要事实遗漏。",
+        "专题 analysis/review/report 同步完整事实来源规则、事实与推断区分和用户结论数量约束；partial RSS 不能作为完整事实依据，会前/会后矛盾不得通过。保留同文唯一连续空格/NBSP映射，禁止跨文换引用ID。"
+      ],
+      "files": [
+        "trading_system/llm/intelligence_required.py",
+        "trading_system/llm/clean_keyed_codec.py",
+        "trading_system/llm/strict_clean_transport.py",
+        "trading_system/cleaning/pipeline.py",
+        "trading_system/intelligence/topic.py",
+        "trading_system/intelligence/citation_resolution.py"
+      ],
+      "acceptance": [
+        "AT14：遗漏、重复、伪 ID、空主体、非法 enum、比较符号、错引用各有明确失败定位，程序不补造语义。",
+        "AT15：逐原件终态清单与输入双射；成功表示处理合同完成，评分资格另由证据闸门决定。",
+        "AT39：专题RSS事实、错doc引用和时序矛盾继续拒绝；同文NBSP与用户数量约束正确处理。"
+      ],
+      "rollback": "新合同开关退回旧版本仅用于新任务选择；保留新结果作只读证据，不转换为旧合同成功。",
+      "issues": [
+        "I02",
+        "I03",
+        "I04",
+        "I20",
+        "I23"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP09",
+      "title": "实现分段完整性与局部恢复",
+      "priority": "P0",
+      "owner": "任务编排及语义维护者",
+      "dependencies": [
+        "EP08"
+      ],
+      "effort_days": [
+        2,
+        4
+      ],
+      "why": "长文和坏字段不能吞掉其他结果；分段不能丢失上下文、脚注和反证。",
+      "steps": [
+        "超长或复杂原件按章节、表格或语义边界规划子单元，登记完整位置覆盖及父级汇合合同。",
+        "仅在既定全局重答合同内处理已定位失败单元，保留前次答复和错误；unknown、truncation和identity错误不能伪装格式错误来续额度。额度耗尽保持失败，改政策必须显式版本化；修复后重跑相关完整语义校验。",
+        "恢复同 run 与输入合同；旧五阶段执行不直接强行 resume，必须通过新任务账本和独立证明接续。"
+      ],
+      "files": [
+        "trading_system/llm/intelligence_required.py",
+        "trading_system/agent_evidence.py",
+        "拟新增 trading_system/tasks/recovery.py"
+      ],
+      "acceptance": [
+        "AT16：后半单元失败时前半结果原字节保留且不重发；局部修复后父级完整性通过。",
+        "AT17：跨章节限定条件、反证和附件不能遗漏；unknown 单元不会以新键绕开重跑。"
+      ],
+      "rollback": "暂停失败单元及其依赖；可读已封存成果，不将部分父文档标为完整。",
+      "issues": [
+        "I02",
+        "I03",
+        "I04",
+        "I05",
+        "I14"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP10",
+      "title": "分离原件审计与任务证据视图",
+      "priority": "P0",
+      "owner": "证据模型维护者",
+      "dependencies": [
+        "EP07",
+        "EP08"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "减轻重复输入和结构负担，同时保持足以复核金融判断的完整上下文。",
+      "steps": [
+        "定义 raw、validated facts、task evidence view 三层；审计 metadata 留在原件与账本，必要身份和口径进入任务视图。",
+        "视图携带 source spans、选择理由和未纳入内容索引；重大事实、冲突和数值检查可以返回原文。",
+        "对照原全量输入和新视图，评价关键事实、反证和财务口径遗漏，而不只比较 token 数。"
+      ],
+      "files": [
+        "trading_system/llm/intelligence_required.py",
+        "trading_system/search/event_identity.py",
+        "trading_system/intelligence/snapshots.py",
+        "拟新增 trading_system/evidence_views.py"
+      ],
+      "acceptance": [
+        "AT18：完整原件与元数据哈希不变；每条关键结论可回到原件；审计字段脱离模型不影响验真。",
+        "AT20：金标关键事实和反证召回不退化；视图漏关键上下文即拒收。"
+      ],
+      "rollback": "选择回到完整证据视图并保留合法预算；不删除原件来节省存储或 token。",
+      "issues": [
+        "I06"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP11",
+      "title": "建立跨文关系与时点核验",
+      "priority": "P0",
+      "owner": "金融证据与数据维护者",
+      "dependencies": [
+        "EP07",
+        "EP08",
+        "EP10"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "防止转载重复、主体混淆、修订和冲突被当成独立支持。",
+      "steps": [
+        "在现有 event identity 上扩展 publisher、syndication、origin group、事件同一性及修订关系；不同域名不是充分独立条件。",
+        "为事实建主体、期间、单位和币种口径；区分发布、事件、首次可得、抓取、修订与决策时点。",
+        "支持与反证并存；不以来源数量覆盖冲突；重大冲突触发查证或限制使用资格。"
+      ],
+      "files": [
+        "trading_system/search/event_identity.py",
+        "trading_system/intelligence/contracts.py",
+        "trading_system/intelligence/archive.py",
+        "trading_system/research_audit.py"
+      ],
+      "acceptance": [
+        "AT13：未来、旧稿更新、修订、撤稿、同名主体、同比与环比混用不能跨过质量门槛。",
+        "AT19：十站转载一稿仍一组；相互矛盾的数据保留双方、时期及查证结果。"
+      ],
+      "rollback": "新关系版本不覆盖旧关系；疑似错误归并拆出新版本并让受影响下游失效。",
+      "issues": [
+        "I10",
+        "I11"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP12",
+      "title": "按研究问题补证与覆盖准入",
+      "priority": "P0",
+      "owner": "产品与情报规划维护者",
+      "dependencies": [
+        "EP11"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "把“拿到文章”改为“满足待证问题”，支持局部缺口与全局阻断。",
+      "steps": [
+        "固定 target × question × evidence_type × time_window 覆盖格，明确 required、来源独立性、原件完整性和使用资格。",
+        "定向补缺口并记录每轮原因、来源失败、耗时和结果；重复无进展或超过合同 deadline 时输出缺口，不能循环到底。",
+        "区分单证券排除、任务部分研究、组合全局风险未知；不能删除 required 格或把范围缩成易成功目标。"
+      ],
+      "files": [
+        "trading_system/intelligence/planner.py",
+        "trading_system/intelligence/service.py",
+        "trading_system/llm/intelligence_required.py",
+        "trading_system/intelligence_workflow.py"
+      ],
+      "acceptance": [
+        "AT21：最新 topic 12 维 unknown 样本仍准确显示；新证据只填满足条件的格，不用篇数填充。",
+        "AT22：局部与全局缺口按合同分别处理，完整 paper 成功条件不因局部排除而被偷偷降低。"
+      ],
+      "rollback": "恢复上一版覆盖规则需新任务合同；不能在运行中把 required 改为 optional 使失败变绿。",
+      "issues": [
+        "I09",
+        "I21"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP13",
+      "title": "增加待核风险线索通道",
+      "priority": "P0",
+      "owner": "风险与证据维护者",
+      "dependencies": [
+        "EP11",
+        "EP12"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "当前 score_docs 路径已证实，但实际漏警未证实；先用负例验证，再补独立待核通道。",
+      "steps": [
+        "区分可评分证据、风险已证事实和待核线索；低资格来源的重大信号触发定向查证，不贡献正向评分。",
+        "定义影响范围、严重性、待核期限及何时阻断；谣言不能直接变成已证实风险，未发现风险不能写成风险已排除。",
+        "保留现有 numeric veto；新增通道的证据和结论必须可追溯。"
+      ],
+      "files": [
+        "trading_system/pipeline.py",
+        "trading_system/agents/risk_manager_agent.py",
+        "trading_system/tech_chain/risk_evidence.py",
+        "trading_system/research_audit.py"
+      ],
+      "acceptance": [
+        "AT23：评分不合格但含重大线索的材料进入查证；无佐证时显示未证实；伪造负面不得变成事实。",
+        "AT23：控制组无真实漏警则记录验证结果，不宣称历史发生损失。"
+      ],
+      "rollback": "停用有误自动解释，保留线索及保守待核状态；不削弱原有硬风险门槛。",
+      "issues": [
+        "I12"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP14",
+      "title": "冻结统一研究快照并升级验真",
+      "priority": "P0",
+      "owner": "快照及独立证明维护者",
+      "dependencies": [
+        "EP05",
+        "EP10",
+        "EP11",
+        "EP12",
+        "EP13"
+      ],
+      "effort_days": [
+        2,
+        4
+      ],
+      "why": "所有分析必须消费同一可重放证据版本，不能在并行中各看不同资料。",
+      "steps": [
+        "冻结目标范围、原件、事实、覆盖、冲突、策略和 as_of，生成不可变 snapshot manifest。",
+        "在新合同下把多个子单元证明汇合为五类语义职责的完整证明；独立 verifier 按原始证据复算，不读成功 flag 直接认可。",
+        "资料修订使受影响快照失效并新建版本；旧快照仍可按当时事实回放。"
+      ],
+      "files": [
+        "trading_system/intelligence/snapshots.py",
+        "trading_system/agent_evidence.py",
+        "trading_system/agent_runtime.py",
+        "trading_system/llm/intelligence_proof.py",
+        "trading_system/paper_proof.py",
+        "trading_system/redline/execution.py"
+      ],
+      "acceptance": [
+        "AT24：归档并发增长不改变冻结快照；不同 stage 混用 hash 被拒绝。",
+        "AT26：旧四种 clean 合同、观察 v1/v2/v3 与新合同分别核验；旧失败不重签。"
+      ],
+      "rollback": "撤销新合同准入并保留旧快照读路径；不能替换旧 manifest 内容以兼容新代码。",
+      "issues": [
+        "I06",
+        "I16",
+        "I20"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP15",
+      "title": "提高采集实际并发",
+      "priority": "P1",
+      "owner": "采集与调度维护者",
+      "dependencies": [
+        "EP03",
+        "EP04",
+        "EP06",
+        "EP07"
+      ],
+      "effort_days": [
+        2,
+        4
+      ],
+      "why": "将有效并发 1 提升为有测量证据的受控并发，而不是只修改配置数字。",
+      "steps": [
+        "将查询、正文和附件规划为依赖工作单元；独立来源和文档可同时运行，同文附件依赖明确。",
+        "复用现有 query checkpoint、attempt 和 host limits；全局及同源许可原子获取，速率限制和 robots 约束保持。",
+        "记录排队、网络、解析、写盘各段耗时；从 1→2→4 阶梯比较完成时间、有效覆盖和失败率。"
+      ],
+      "files": [
+        "trading_system/intelligence/service.py",
+        "trading_system/intelligence/adapters.py",
+        "trading_system/intelligence/host_limits.py",
+        "trading_system/intelligence/transport.py"
+      ],
+      "acceptance": [
+        "AT27：实际同时进行的 I/O 可观测，达到所选上限且不超限；无查询遗漏或重复未知重发。",
+        "AT28：相同语料覆盖不退化，限流、失败和数据库写竞争下仍完成或准确阻断。"
+      ],
+      "rollback": "调度并发退到 1；保留已经完成的归档和检查点，不用重抓掩盖回退。",
+      "issues": [
+        "I07"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP16",
+      "title": "提高文档处理实际并发",
+      "priority": "P1",
+      "owner": "语义调度维护者",
+      "dependencies": [
+        "EP06",
+        "EP09",
+        "EP14"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "让独立原件同时处理，并保持同文依赖、provider 限额和资源边界。",
+      "steps": [
+        "按文档工作单元领取许可，任务权重同时考虑内存、窗口和 provider 负载；不能仅按文档数均分。",
+        "隔离模型 client 与输出引用，按确定性顺序汇合；取消只影响未发出或可取消单元。",
+        "阶梯对比质量、长尾延迟、吞吐和恢复；模型随机差异单独记录，不要求不真实的字节相同。"
+      ],
+      "files": [
+        "拟新增 trading_system/tasks/scheduler.py",
+        "trading_system/llm/intelligence_required.py",
+        "trading_system/redline/execution.py"
+      ],
+      "acceptance": [
+        "AT27：相同 manifest 不因完成顺序遗漏；共享配额不超卖；未知请求不会释放为可重试许可。",
+        "AT28：吞吐提升在质量与资源门槛内，若无收益则保持串行并记录原因。"
+      ],
+      "rollback": "并发退至 1，继续使用新持久账本和已校验成果。",
+      "issues": [
+        "I04",
+        "I08"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP17",
+      "title": "并行专业分析与串行组合提交",
+      "priority": "P0正确性加P1并行",
+      "owner": "研究流水线与账户维护者",
+      "dependencies": [
+        "EP06",
+        "EP14"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "专业任务并行降低等待，最终组合仍使用一套资金和风险约束。",
+      "steps": [
+        "舆情、风险、叙事从同一冻结快照 fork，结果经完整性和版本 join；融合与板块只在依赖满足后执行。",
+        "量化特征可先计算；数值风险 veto、组合暴露、资金和最终批准顺序处理，不允许每个股票独立占用同一笔资金。",
+        "提交前比较账户版本，唯一 commit 与账户指针原子更新；冲突后重算相关组合，不复用旧批准。"
+      ],
+      "files": [
+        "trading_system/pipeline.py",
+        "trading_system/agents/risk_manager_agent.py",
+        "trading_system/agents/sector_agent.py",
+        "trading_system/agent_supervisor.py",
+        "trading_system/agent_runtime.py",
+        "trading_system/paper_ledger.py"
+      ],
+      "acceptance": [
+        "AT29：不同完成顺序下 deterministic 约束一致；缺任一必要分析不得跳过 join。",
+        "AT30：双任务争同账户、提交前后崩溃、旧 worker 返回，最多一次有效提交，无资金双分配。"
+      ],
+      "rollback": "退回专业串行；账户采用新更正/补偿事件，禁止回写旧余额或删账伪装未提交。",
+      "issues": [
+        "I16"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP18",
+      "title": "补齐新增候选研究闭环",
+      "priority": "P1",
+      "owner": "候选与研究规划维护者",
+      "dependencies": [
+        "EP12",
+        "EP14"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "保持范围外候选未研究即不可评分的保护，同时给它可执行的后续路径。",
+      "steps": [
+        "将新候选加入 pending_research，记录发现依据、允许范围与截至时间，不直接混入已冻结目标集。",
+        "在授权范围内创建研究范围新版本，补必需资料、重做受影响分析和组合约束；超时则转下一任务。",
+        "报告明确候选被选、否决、待研究或时效失效，不能把过滤当成已研究否决。"
+      ],
+      "files": [
+        "trading_system/agents/universe_scanner_agent.py",
+        "trading_system/intelligence_workflow.py",
+        "trading_system/intelligence/planner.py",
+        "trading_system/pipeline.py"
+      ],
+      "acceptance": [
+        "AT31：范围外高分候选先待研究，补齐后新快照可重评分；无权限或已过截止不能扩池。",
+        "AT31：新增候选失效时不污染原任务，旧决策卡仍可回放。"
+      ],
+      "rollback": "暂停扩展候选入口，保留未研究标记；不把它强行塞进原快照。",
+      "issues": [
+        "I13"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP19",
+      "title": "交付真实状态与决策卡",
+      "priority": "P0基础加P1体验",
+      "owner": "产品和报告入口维护者",
+      "dependencies": [
+        "EP01",
+        "EP05",
+        "EP12",
+        "EP14"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "让用户知道结果是否可信、为何阻断、如何恢复及账户是否发生变化。",
+      "steps": [
+        "先落四轴状态、稳定计数、阻塞原因和恢复条件，再提供逐证券证据卡和完整来源导航。",
+        "Node、Python、MCP 与报告共用状态合同；取消观察、取消调度、业务结束和账户提交分别表达。",
+        "桌面移动布局和各交互全态实际验证；报告价格、股数和风险来自既有批准数值对象。",
+        "接入现有watch/tick的变化、无变化、持续失联、休眠空窗与待复核事件。更正关联原报告但不改写；无变化不制造提醒，不自动触发未授权付费研究或账户动作。"
+      ],
+      "files": [
+        "trading_system/agent_runner.py",
+        "scripts/tiger-agent.mjs",
+        "scripts/tiger-topic.mjs",
+        "trading_system/report.py",
+        "trading_system/report_html.py",
+        "trading_system/intelligence/monitoring.py",
+        "trading_system/intelligence/topic_cli.py",
+        "bundles/trading/agent-workflow.schema.json"
+      ],
+      "acceptance": [
+        "AT32：completed+partial 与 completed+sufficient 明确不同；WAIT_EVIDENCE 不混入合格 HOLD；P0逐证券归因齐全，原封存topic报告与current_source_status分离。",
+        "AT33：空、加载、错、禁用、重试、取消和断线恢复在桌面移动均可理解，原 run_id 保留。",
+        "AT40与AT42：监测空窗如实显示；修订仅待复核。对话入口能取得可核专题结果，不必手写JSON，不开启账户或未授权付费动作。"
+      ],
+      "rollback": "保留旧报告读路径，新版本卡片可隐藏但四轴真实性不能回退成单一成功标签。",
+      "issues": [
+        "I17",
+        "I18",
+        "I21",
+        "I24"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP20",
+      "title": "建立金融质量和可靠性评测集",
+      "priority": "P0",
+      "owner": "独立质量负责人及研究复核者",
+      "dependencies": [
+        "EP00",
+        "EP01"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "把引用正确与事实完整、处理完成与决策可用分别评估，避免只围绕已知报错写测试。",
+      "steps": [
+        "在改动前冻结含财务期间、单位、表格脚注、主体歧义、转载、重大反证及缺资料的金标样本；训练/调参集与保留验收集分离。",
+        "以当时可得资料构造历史研究，避免未来数据；关键事实由独立人工或独立审阅流程判定并留争议裁决。",
+        "定义获取有效率、覆盖、首轮/修复后成功、恢复、全链完成和时效；记录分母与版本，不将收益或安全阻断混成成功率。",
+        "建立结果复盘记录，把流程失败、数据漏项、语义错误、风控和市场结果分开；每项归因绑定原任务/证据/规则与paper账本。事后资料不能充当事前信息，不启动策略优化。"
+      ],
+      "files": [
+        "tests/ 中对应证据与全链用例",
+        "trading_system/intelligence_benchmark.py",
+        "trading_system/intelligence_replay.py",
+        "拟新增评测语料 manifest 与质量 rubric"
+      ],
+      "acceptance": [
+        "AT20：金标每个高严重度事实和反证有位置和验收标签，出现主体/金额/时点/关键反证错误即阻断。",
+        "AT34：所有统计含原始分子分母、样本量、模式、日期和合同；unknown 不从分母消失。",
+        "AT41：复盘每项归因可回到原时点依据，paper、真实成交和市场结果分开；未知保留未知。"
+      ],
+      "rollback": "冻结评测版本，不为实现通过修改标签；确有标签错误须独立裁决、新版本并重测受影响范围。",
+      "issues": [
+        "I03",
+        "I09",
+        "I11",
+        "I12",
+        "I19",
+        "I21",
+        "I23",
+        "I24"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP21",
+      "title": "完成固定版本全链与故障验收",
+      "priority": "P0",
+      "owner": "独立验收负责人",
+      "dependencies": [
+        "EP02",
+        "EP03",
+        "EP04",
+        "EP09",
+        "EP10",
+        "EP11",
+        "EP12",
+        "EP13",
+        "EP14",
+        "EP15",
+        "EP16",
+        "EP17",
+        "EP18",
+        "EP19",
+        "EP20"
+      ],
+      "effort_days": [
+        3,
+        5
+      ],
+      "why": "把机制证明落实到完整真实任务，并检测局部成功掩盖下游失败的问题。",
+      "steps": [
+        "先执行相关单元与集成，再在最终冻结 head 跑原仓全套和必要 UI/协议检查；失败保留原报告，修复后重跑适当范围。",
+        "从真实业务入口执行原 237 完整基线与独立验真；五类语义职责、原件终态、质量闸门、数值风险与 paper 提交都要有证据。",
+        "执行正常、边界、故障、权限、恢复、并发和历史兼容矩阵；新并行模块实施后追加其用例，不拿旧版本 CI 代替。"
+      ],
+      "files": [
+        "原仓 CI 和 tests",
+        "scripts/tiger-agent.mjs",
+        "trading_system/agent_runtime.py",
+        "trading_system/llm/intelligence_proof.py",
+        "trading_system/paper_proof.py",
+        "拟新增本任务验收矩阵与证据索引"
+      ],
+      "acceptance": [
+        "AT01—AT34 与 AT39—AT42 的适用项无未解释失败；原件完整而有效证据不足时诚实失败，不改分母。",
+        "AT35：固定最终版本真实任务可复核；完成至少一个全量正例仅是功能通过，不宣称总体稳定性。"
+      ],
+      "rollback": "不进入发布门；发现阻断或严重问题立即回对应包修复，重新冻结基线并重新验收受影响面。",
+      "issues": [
+        "I19",
+        "I20",
+        "I21"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP22",
+      "title": "灰度观察回滚与发布收据",
+      "priority": "P0发布门",
+      "owner": "发布负责人及独立验收",
+      "dependencies": [
+        "EP21"
+      ],
+      "effort_days": [
+        2,
+        3
+      ],
+      "why": "让工程验收、实际观察和真实上线状态分开，交付到 main 与可下载制品而非仅开 PR。",
+      "steps": [
+        "先只读/影子验证，再新隔离 paper 对照，最后原授权 paper 账户；同一受控合同连续观察 7—14 天，记录来源变化、失败、恢复及数据新鲜度。",
+        "发布前回读真正默认分支、head/base、必需 CI、差异与审查，不沿用本计划中的历史 main 记录；普通 PR 合并后回读 main SHA 和制品哈希。",
+        "出现在关键事实、未知外部重复、账户双提交、证据缺失等问题即停止新任务；保持历史证据、账户账本与回滚版本可读。"
+      ],
+      "files": [
+        "docs/AUTOMATIC-RD-DELIVERY.md",
+        "仓库发布脚本与原 CI",
+        "版本开关、任务准入与制品 manifest"
+      ],
+      "acceptance": [
+        "AT36：回滚演练不丢原件、不删账、不重复外部效果；旧版本能读其支持的历史合同。",
+        "AT37：main SHA、CI、Release 制品下载与字节验证、Issue 收尾均一致；长期观察单列结论。"
+      ],
+      "rollback": "关闭新合同准入、停用问题并发或视图，保留已提交账户；用更正事件而非回滚历史资金。",
+      "issues": [
+        "I19",
+        "I21"
+      ],
+      "status": "planned_not_started"
+    },
+    {
+      "id": "EP23",
+      "title": "持续情报与跨任务失效传播",
+      "priority": "P2",
+      "owner": "产品及情报平台维护者",
+      "dependencies": [
+        "EP22"
+      ],
+      "effort_days": [
+        8,
+        15
+      ],
+      "why": "在任务级可靠性成立后，进一步减少重复研究和修订迟滞。",
+      "steps": [
+        "定义审定垂直研究方向、每方向的待证问题与核心来源组合，以及长期证据保留、订阅、修订撤稿、迟到事件、历史时点查询和依赖索引；仅有archive不能视为解决选题和信源维护。",
+        "资料更新生成新版本并识别受影响的快照、决策卡和跟踪任务；历史结论按当时可得信息保留。",
+        "用独立提案评估多账户、多任务、跨机吞吐与数据库迁移；达到需求证据后才扩充基础设施。"
+      ],
+      "files": [
+        "trading_system/intelligence/archive.py",
+        "trading_system/intelligence/snapshots.py",
+        "专题 watch/tick 链路",
+        "拟新增跨任务失效索引"
+      ],
+      "acceptance": [
+        "AT38：修订只使受影响下游失效；未受影响历史保持可复核，时点查询无未来数据。",
+        "AT38：持续吞吐与保留量通过实测，方可声明支持持续容量。"
+      ],
+      "rollback": "停止新订阅，保留不可变历史和离散任务入口；任务内一致性不依赖此 P2 能力。",
+      "issues": [
+        "I22"
+      ],
+      "status": "planned_not_started"
+    }
+  ],
+  "issues": [
+    {
+      "id": "I01",
+      "type": "当前阻断 bug",
+      "finding": "009 服务端输入 850560 加输出 200320，超过 1048576 窗口 2304；本地 wire 计量与实际 framing 不一致。",
+      "evidence": "B E01；A E04",
+      "priority": "P0",
+      "work_packages": "EP02"
+    },
+    {
+      "id": "I02",
+      "type": "历史失败 需回归",
+      "finding": "005 第二批响应无法定位；006 非法 enum 与空主体；007 漏 ID 后重答虽 119 个 ID 齐全，仍被普通 > 文本规则拒绝。",
+      "evidence": "B E02",
+      "priority": "P0",
+      "work_packages": "EP03、EP08、EP09、EP21"
+    },
+    {
+      "id": "I03",
+      "type": "历史失败 需回归",
+      "finding": "008 两次 118 篇任务仅 40 行、39 个有效 ID；没有触及输出上限，不能推断模型固定只处理 40 篇。",
+      "evidence": "B E02",
+      "priority": "P0",
+      "work_packages": "EP08、EP09、EP20"
+    },
+    {
+      "id": "I04",
+      "type": "架构缺口",
+      "finding": "clean 同时承载所有批次、校验、覆盖判断与补研究，已完成语义结果缺可恢复任务账本。",
+      "evidence": "A E04",
+      "priority": "P0",
+      "work_packages": "EP05、EP08、EP09"
+    },
+    {
+      "id": "I05",
+      "type": "容量边界",
+      "finding": "解析器与 span、主体、事件、主张数量均有限额；能进模型窗口不等于工作量可可靠完成。",
+      "evidence": "A E04、E05",
+      "priority": "P0",
+      "work_packages": "EP04、EP07、EP09"
+    },
+    {
+      "id": "I06",
+      "type": "架构负担",
+      "finding": "审计元数据、原件和重复严格结构混在模型输入；需保留完整原件同时区分任务所需语义视图。",
+      "evidence": "A E04；方案D",
+      "priority": "P0",
+      "work_packages": "EP10、EP14"
+    },
+    {
+      "id": "I07",
+      "type": "已证瓶颈",
+      "finding": "配置并发上限 4，查询、正文和附件主要嵌套串行，有效并发记录为 1。",
+      "evidence": "A E05",
+      "priority": "P1",
+      "work_packages": "EP06、EP15"
+    },
+    {
+      "id": "I08",
+      "type": "并发前置缺口",
+      "finding": "单 owner、阶段不可重叠、单未完成模型 IO 及共享可变客户端禁止直接套线程池。",
+      "evidence": "A E04",
+      "priority": "P0前置",
+      "work_packages": "EP05、EP06"
+    },
+    {
+      "id": "I09",
+      "type": "覆盖缺口",
+      "finding": "文章存在不代表证券、问题、时间、类型和来源要求满足；最新专题 12 维 unknown 仅属该任务范围。",
+      "evidence": "A E06；B E03",
+      "priority": "P0",
+      "work_packages": "EP11、EP12、EP20"
+    },
+    {
+      "id": "I10",
+      "type": "信息质量缺口",
+      "finding": "域名分组不等于独立来源；字节去重不等于同一事件归并、版本修订和冲突核对。",
+      "evidence": "A E05；方案D",
+      "priority": "P0",
+      "work_packages": "EP11"
+    },
+    {
+      "id": "I11",
+      "type": "信息质量风险",
+      "finding": "发布时间、事件时间、首次可得、抓取与修订若混淆，可能造成旧闻、未来信息或错误财务期间。未证明所有运行发生此错。",
+      "evidence": "A已有字段；D风险",
+      "priority": "P0",
+      "work_packages": "EP07、EP11、EP20"
+    },
+    {
+      "id": "I12",
+      "type": "待验证风险",
+      "finding": "tech.risk 当前使用 score_docs；评分不合格的重大负面线索应另设待核通道，实际漏警未证实。",
+      "evidence": "A E06；D漏警",
+      "priority": "P0",
+      "work_packages": "EP13、EP20"
+    },
+    {
+      "id": "I13",
+      "type": "业务衔接缺口",
+      "finding": "冻结 frontier 后新增候选被标记未研究并排除；保护正确，但缺补研究、新版本和重评分闭环。",
+      "evidence": "A E06",
+      "priority": "P1",
+      "work_packages": "EP18"
+    },
+    {
+      "id": "I14",
+      "type": "恢复与未知",
+      "finding": "原始回执落盘不等于可续跑；已发出未知结果不能当成未执行。009 原 attempt 的 usage 不能被技术对照补成 0。",
+      "evidence": "A E04；B E01",
+      "priority": "P0",
+      "work_packages": "EP03、EP05、EP09"
+    },
+    {
+      "id": "I15",
+      "type": "资源与环境",
+      "finding": "历史全套测试发生 ENOSPC；个别启动时限测试受机器负载影响。需区分环境与业务 bug，不擦掉失败记录。",
+      "evidence": "B E07",
+      "priority": "P0",
+      "work_packages": "EP04、EP21"
+    },
+    {
+      "id": "I16",
+      "type": "并行设计风险",
+      "finding": "舆情、风险、叙事可消费同一冻结快照；融合与板块依赖汇合；组合预算与账户提交必须统一。",
+      "evidence": "A E04、E06；方案D",
+      "priority": "P1",
+      "work_packages": "EP14、EP17"
+    },
+    {
+      "id": "I17",
+      "type": "状态与体验缺口",
+      "finding": "任务观察成功不等于业务成功，当前状态不足以展示逐单元完成、缺口、unknown、恢复条件。",
+      "evidence": "A E04；界面D",
+      "priority": "P0基础",
+      "work_packages": "EP19"
+    },
+    {
+      "id": "I18",
+      "type": "产品承诺漂移",
+      "finding": "操作手册、严格工作流和快速开始默认模式、演示路径、三市可用边界不一致。",
+      "evidence": "A E09",
+      "priority": "P0",
+      "work_packages": "EP01"
+    },
+    {
+      "id": "I19",
+      "type": "验收缺口",
+      "finding": "局部机制、结构和原件归属检查通过不能证明全链完成或持续生产容量；最新冻结版本没有完整全套绿灯。",
+      "evidence": "B E07",
+      "priority": "P0",
+      "work_packages": "EP20、EP21、EP22"
+    },
+    {
+      "id": "I20",
+      "type": "版本兼容风险",
+      "finding": "新 codec、任务与恢复协议会影响历史证明；需按精确版本解析，避免重签旧记录。",
+      "evidence": "A E04、E08；方案D",
+      "priority": "P0",
+      "work_packages": "EP00、EP05、EP08、EP14"
+    },
+    {
+      "id": "I21",
+      "type": "方法与统计风险",
+      "finding": "空 HOLD、缺资料阻断、HTTP 200、schema 通过和真实决策完成容易混算。交易收益也不能由流程通过推出。",
+      "evidence": "B E02、E03；规则D",
+      "priority": "P0",
+      "work_packages": "EP19、EP20、EP21"
+    },
+    {
+      "id": "I22",
+      "type": "后续演进",
+      "finding": "持续资料订阅、事件历史和跨任务失效传播尚需设计；当前先保证任务内修订一致性。",
+      "evidence": "D",
+      "priority": "P2",
+      "work_packages": "EP23"
+    },
+    {
+      "id": "I23",
+      "type": "正确拒绝与语义缺口",
+      "finding": "专题 IR calendar 使用 partial RSS 证明事实被正确拒绝，重答另有会前/会后矛盾；同文 NBSP 窄修复不允许跨文换 ID。",
+      "evidence": "A/B E14",
+      "priority": "P0",
+      "work_packages": "EP08、EP11、EP20、EP21"
+    },
+    {
+      "id": "I24",
+      "type": "产品运维衔接",
+      "finding": "已有 topic watch/tick 的无变化、失联、休眠空窗和待复核事件需进入交付卡；研究结果复盘应区分流程、数据、语义、风险和市场结果。",
+      "evidence": "A文档；D体验",
+      "priority": "P1",
+      "work_packages": "EP19、EP20、EP22"
+    }
+  ],
+  "tests": [
+    {
+      "id": "AT01",
+      "dimension": "正常与回归",
+      "precondition": "冻结 source、输入、policy",
+      "steps": "重建 manifest，再各改变一项版本",
+      "expected": "相同输入可重放；变化生成新基线，旧记录保留。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT02",
+      "dimension": "入口",
+      "precondition": "所有正式与演示示例",
+      "steps": "doctor/describe 逐一校对模式和权限",
+      "expected": "新研究模式显式；历史/演示不计真实完成。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT03",
+      "dimension": "窗口边界",
+      "precondition": "009 原始完整请求与已知服务数字",
+      "steps": "离线计量对照，正式入口观察最终发送",
+      "expected": "原上限被拒；完整输入合法化后无同类超窗，误差方法有版本。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT04",
+      "dimension": "参数边界",
+      "precondition": "含 tools/schema/历史的请求",
+      "steps": "增减到边界、修改 mode、模拟中间层改写",
+      "expected": "未知计量拒绝；最终 body 变化重新准入；不静默截证据。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT05",
+      "dimension": "网络与恢复",
+      "precondition": "单个外部 attempt",
+      "steps": "发送前、发送后、响应落盘后断开",
+      "expected": "只对已知安全状态重试；unknown 保留，结果可核对。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT06",
+      "dimension": "输出错误",
+      "precondition": "已有和构造原生响应",
+      "steps": "注入 length、空白、错模型、缺 usage、坏 JSON",
+      "expected": "业务失败与账务状态分开；原生证据保留，已知 usage 一次结算。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT07",
+      "dimension": "模块边界",
+      "precondition": "完整正文、表格和高实体语料",
+      "steps": "在字节/时间/对象数量边界前后执行",
+      "expected": "明确成功或超限；无静默截断，父级覆盖可查。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT08",
+      "dimension": "资源错误",
+      "precondition": "独立测试目录和可控配额",
+      "steps": "磁盘满、内存压力、解析挂起、启动慢",
+      "expected": "资源不足正确阻断和恢复，证据文件无半成品冒充完成。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT09",
+      "dimension": "崩溃恢复",
+      "precondition": "有部分 validated 结果的任务",
+      "steps": "在账本六个持久边界杀 worker 后接续",
+      "expected": "原成果复用；未完成单元继续；无重复未知外呼。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT10",
+      "dimension": "并发一致性",
+      "precondition": "双 worker 与同一工作单元",
+      "steps": "同时领取、过期续写、置换完成顺序",
+      "expected": "唯一有效结果、旧 epoch 拒绝、无跨任务引用。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT11",
+      "dimension": "调度故障",
+      "precondition": "满 worker 池和长任务",
+      "steps": "取消、heartbeat 断开、父子依赖阻塞",
+      "expected": "无线程池自等死锁；lease 与外部账务各自正确。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT12",
+      "dimension": "解析完整性",
+      "precondition": "PDF、扫描页、表格、脚注和附件",
+      "steps": "解析并逐位置检查",
+      "expected": "完整内容可定位；不支持和缺失显式记录。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT13",
+      "dimension": "时点与财务",
+      "precondition": "旧稿、修订、未来数据、同名主体",
+      "steps": "按 as_of 回放并比较事实",
+      "expected": "无未来泄露；单位、币种、期间及主体不混用。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT14",
+      "dimension": "结构与身份",
+      "precondition": "006/007/008 负例与新合同",
+      "steps": "漏、重、伪 ID，空主体，普通 >，脚本片段",
+      "expected": "定位失败单元；不补造内容；正常比较文本不被语义误伤。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT15",
+      "dimension": "覆盖计数",
+      "precondition": "237 原件 manifest",
+      "steps": "汇合所有单元并审计状态",
+      "expected": "每份原件唯一明确终态；处理通过与评分可用分开。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT16",
+      "dimension": "局部修复",
+      "precondition": "前批已验证、后批失败",
+      "steps": "只重试已核定失败单元",
+      "expected": "前批字节不变、不重发；父级完整性重验。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT17",
+      "dimension": "长文分段",
+      "precondition": "跨段限定条件和反证文档",
+      "steps": "拆分处理并父级复核",
+      "expected": "未丢章节/表格/脚注/反证，未知单元不被跳过。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT18",
+      "dimension": "原件与视图",
+      "precondition": "原始全文及任务视图",
+      "steps": "重建原件，回查各关键主张",
+      "expected": "哈希不变，原文可回取，视图版本可追溯。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT19",
+      "dimension": "独立性与冲突",
+      "precondition": "十站同稿、独立来源、矛盾数值",
+      "steps": "构造关系并做覆盖判定",
+      "expected": "转载只一组；冲突两侧保留，不能多数票擦除。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT20",
+      "dimension": "金融质量",
+      "precondition": "冻结金标及保留集",
+      "steps": "独立复核事实、反证、数值和遗漏",
+      "expected": "高严重度事实错误为零；关键事实与反证达到预先冻结的完整性要求。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT21",
+      "dimension": "证据缺口",
+      "precondition": "最新 topic 12 维 unknown 负例",
+      "steps": "加入部分满足或不满足的新资料",
+      "expected": "只填真正满足格，unknown 有原因，文章数量不替代覆盖。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT22",
+      "dimension": "业务边界",
+      "precondition": "局部证券缺资料、全局风险未知",
+      "steps": "按完整 paper 合同执行",
+      "expected": "局部与全局处理正确；不能靠改 required 格变成功。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT23",
+      "dimension": "风险线索",
+      "precondition": "评分不合格的负面线索和伪造反例",
+      "steps": "查证、无佐证、相反佐证各路径",
+      "expected": "待核与已证实分开，风险门槛保留，不将谣言当事实。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT24",
+      "dimension": "快照并发",
+      "precondition": "冻结快照后继续采集",
+      "steps": "归档增长并混用 stage hash",
+      "expected": "原快照稳定，混版本拒绝，更新产生新版本。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT25",
+      "dimension": "权限与输入安全",
+      "precondition": "readonly/不同租户/恶意网页",
+      "steps": "请求改端点、key、root、权限或加入指令",
+      "expected": "无越权外呼、无跨租户读取、无秘密输出。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT26",
+      "dimension": "历史兼容",
+      "precondition": "四种旧 clean 合同及观察版本",
+      "steps": "用各自冻结 verifier 回放",
+      "expected": "历史成功/失败语义不变，新合同不伪装旧合同。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT27",
+      "dimension": "受控并发",
+      "precondition": "相同 manifest 和 1/2/4 许可",
+      "steps": "置换顺序并记录同时进行 I/O",
+      "expected": "上限真实且不超额，工作清单不漏项，未知不释放。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT28",
+      "dimension": "效率回归",
+      "precondition": "相同规模与质量门的串并行样本",
+      "steps": "比较端到端、长尾、资源和覆盖",
+      "expected": "质量不退化且记录真实收益；失败率上升则不扩大并发。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT29",
+      "dimension": "分析汇合",
+      "precondition": "同一 snapshot 三路分析",
+      "steps": "一支失败、慢返回或不同 hash",
+      "expected": "完整 join 后才综合；必要分支失败不降级绕过。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT30",
+      "dimension": "账户原子性",
+      "precondition": "两个任务共享同一 paper 账户版本",
+      "steps": "并发提交及提交前后崩溃",
+      "expected": "唯一提交；过期版本重算，无资金双分配。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT31",
+      "dimension": "候选补研究",
+      "precondition": "扫描新增范围外证券",
+      "steps": "补证成功、失败、超时与越权扩池",
+      "expected": "新范围新快照重评分；无证据不进入原已研究集合。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT32",
+      "dimension": "状态真实性",
+      "precondition": "充分HOLD、缺证WAIT、failed、unknown",
+      "steps": "读取各入口和报告",
+      "expected": "四轴一致；等待证据不计合格决策完成。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT33",
+      "dimension": "前端体验",
+      "precondition": "桌面和移动，错误与空数据",
+      "steps": "点击重试/取消，断线重连，截图复核",
+      "expected": "各态可理解，无溢出，保留原身份与准确作用范围。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT34",
+      "dimension": "统计正确性",
+      "precondition": "固定版本任务清单含失败未知",
+      "steps": "复算分子分母及分层报表",
+      "expected": "不删除失败、不混 profile、不把机制或收益混算。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT35",
+      "dimension": "真实全链",
+      "precondition": "最终冻结版本与完整237基线",
+      "steps": "正式入口运行及独立 receipt/verify",
+      "expected": "必要阶段与质量门成立；完整paper有同run账户版本与唯一提交/发布证明，零交易不豁免账户验真。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT36",
+      "dimension": "回滚",
+      "precondition": "新合同有部分成果和已提交账户",
+      "steps": "关闭新准入并恢复兼容读路径",
+      "expected": "无证据丢失、无重复外部效果、账本不回写。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT37",
+      "dimension": "集成发布",
+      "precondition": "最终候选、全套CI与真实证据",
+      "steps": "普通合并，回读 main，下载制品核哈希",
+      "expected": "版本、测试、Release 和最终收据一致；不得停在 PR。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT38",
+      "dimension": "长期演进",
+      "precondition": "持续订阅与修订/迟到数据",
+      "steps": "失效传播、历史查询及负载观察",
+      "expected": "只更新受影响后继，历史时点可复核，无未来泄露。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT39",
+      "dimension": "专题语义回归",
+      "precondition": "IR calendar RSS、同文NBSP、错doc及max3要求",
+      "steps": "分析、修复、独立review、报告逐层核对",
+      "expected": "partial RSS事实和会前/会后矛盾拒绝；NBSP只同文唯一连续映射，不换doc ID；数量约束贯通。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT40",
+      "dimension": "监测连续性",
+      "precondition": "已授权watch、无变化、修订、断网和休眠",
+      "steps": "执行有界tick并读取交付卡",
+      "expected": "空窗与first_seen如实；无变化不制造提醒；新变化仅待复核，不越权启动付费或账户动作。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT41",
+      "dimension": "复盘归因",
+      "precondition": "原任务快照、paper账本和后续观察",
+      "steps": "关联数据、语义、风险及市场原因",
+      "expected": "每条归因可追溯；后见材料不充当事前依据；paper与真实成交不混算。",
+      "actual": "未执行，待实施"
+    },
+    {
+      "id": "AT42",
+      "dimension": "对话专题交付",
+      "precondition": "可信research模式及用户主题/时间约束",
+      "steps": "自然语言提出任务，经同一CLI/MCP创建、查询、取报告与核验",
+      "expected": "用户不手写JSON；topic身份稳定，来源/反证/未知明确，无paper账户与交易动作，界面不是执行前置。",
+      "actual": "未执行，待实施"
+    }
+  ]
+}

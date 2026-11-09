@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import copy
 from datetime import date, timedelta
 from urllib.parse import urlsplit
 
@@ -10,6 +11,21 @@ from .contracts import (FetchResult, SearchRequest, SearchResult, SourceError,
                         canonical, credential_free_url, safe_value, source_time)
 from .extract import extract_response
 from .transport import HttpTransport
+
+
+def isolate_source_transports(adapters):
+    """Copy adapter handles while isolating supported mutable HTTP transports."""
+    result = {}
+    for source_id, original in adapters.items():
+        transport = getattr(original, "transport", None)
+        forked = transport.fork() if isinstance(transport, HttpTransport) else None
+        if forked is None:
+            result[source_id] = original
+        else:
+            adapter = copy(original)
+            adapter.transport = forked
+            result[source_id] = adapter
+    return result
 
 
 def _hit(row, *, url, title, snippet, text="", published=None, text_kind="snippet", metadata=None):
@@ -28,12 +44,14 @@ def _rows(value, response_bytes=0):
 
 
 class WebFetch:
-    def __init__(self, transport: HttpTransport | None = None):
+    def __init__(self, transport: HttpTransport | None = None, *, parser_policy=None):
         self.transport = transport or HttpTransport()
+        self.parse_policy = parser_policy
 
     def fetch(self, url: str) -> FetchResult:
         response = self.transport.request("GET", url, headers={"User-Agent": "WorkLoom-Tiger-Research/1.0"})
-        return extract_response(response, original_url=url)
+        return extract_response(response, original_url=url, policy=self.parse_policy,
+                                deadline=getattr(self.transport, "deadline", None))
 
 
 class _SearchAdapter(WebFetch):
@@ -191,6 +209,13 @@ class DeepSeekAdapter(_SearchAdapter):
     source_id = "deepseek"
     endpoint = "https://api.deepseek.com/v1/tools/search"
 
+    def _usage(self, payload):
+        # Native Search/Fetch are billed per successful request, not generated
+        # tokens. A completed response proves the known request unit even when
+        # the endpoint does not include a separate usage object.
+        return {"state": "reported_requests", "successful_requests": 1,
+                "requires_reconciliation": False}
+
     def search(self, request: SearchRequest) -> SearchResult:
         self._require()
         body = {"query": deepseek_query(request), "count": request.count, "need_content": True}
@@ -242,7 +267,7 @@ class DeepSeekBridge:
         count = diagnostic.get("request_count")
         received = diagnostic.get("bytes_received", 0)
         return SourceError(code, http_status=status,
-            delivery="not_sent" if count == 0 else "unknown",
+            delivery="not_sent" if count == 0 else "returned" if status is not None else "unknown",
             bytes_received=received if type(received) is int and received >= 0 else 0,
             details={"request_count": count} if type(count) is int and count >= 0 else {})
 
@@ -261,7 +286,7 @@ class DeepSeekBridge:
         receipt = getattr(self.client, "search_receipts", [])
         return SearchResult(hits, {"query": query, "count": request.count, "need_content": True},
             {"bridge": "admitted-deepseek-client", "receipt": receipt[-1] if receipt else None},
-            {"state": "unknown", "requires_reconciliation": True},
+            {"state": "reported_requests", "successful_requests": 1, "requires_reconciliation": False},
             ["Compatibility bridge cannot distinguish provider content from summary/snippet; Fetch is required for original-page evidence"])
 
     def fetch(self, url: str) -> FetchResult:
@@ -279,7 +304,8 @@ class DeepSeekBridge:
             "application/json", "provider_markdown", "unknown",
             source_time(row.get("published")), metadata={"bridge": "admitted-deepseek-client",
                 "receipt": receipt[-1] if receipt else None, "raw_format": "sanitized_provider_projection",
-                "transport_sha256": digest_bytes(canonical(row))})
+                "transport_sha256": digest_bytes(canonical(row))},
+            usage={"state": "reported_requests", "successful_requests": 1, "requires_reconciliation": False})
 
 
 def digest_bytes(value: bytes) -> str:

@@ -64,6 +64,29 @@ node scripts/tiger-intelligence.mjs monitor \
 一轮完整业务时限时停止接纳下一轮。Node 宿主另有进程时限和输出上限。完整研究
 采用其审查过的采集计划限额；这些工具预算与模型合法上下文/输出窗口分别管理。
 
+服务库的新并发入口由可信运行器显式传入 `source_workers=2..4`；默认值 `1`
+保留旧执行顺序、计划格式和历史回执语义，业务请求不能选择线程数。实际 worker 数
+还受冻结计划的 `limits.concurrency` 限制。公共来源按 source 分组并发，同一 source
+内部顺序不变；SEC 目录先完成再接纳后续来源，搜索或带凭据的来源在公共波次之间
+串行执行并继续执行未知用量对账门禁。`source_runtime` 回执分别记录配置上限、
+接纳上限与同时处于调用中的来源操作峰值；该峰值包含等待 host 许可和解析的操作，
+不是每个站点的 HTTP 并发数或耗时承诺。
+
+每个来源使用独立 HTTP 可变状态；无法安全复制的自定义传输保留共享锁。实际请求、
+robots 探测和重定向每一跳仍经过持久 host ledger，因此两个不同来源到达同一主机
+时继续串行，Retry-After 也跨来源共享。请求数与解码字节在 SQLite 事务内先预留，
+已知回执按真实用量释放剩余容量；未知结果保留预留，不因线程结束自动返还。
+争用可释放的在途额度时只在原 deadline 内等待，不创建新的付费请求或扩大预算。
+内容寻址 blob 先写入私有临时文件并 fsync，再用原子且不可覆盖的发布动作暴露完整
+路径，并发写同一原文不会看到空文件或半文件。
+
+若运行器提供 `observe_io`，并发模式必须同时提供
+`observer_factory(source_id)`。工厂在对应工作线程中创建独立 observer，返回
+`observe(method, inputs, invoke)`；observer 必须先持久化请求证据再调用 `invoke`。
+缺少工厂会在创建归档前以 `SOURCE_OBSERVER_FACTORY_REQUIRED` 拒绝，不能跨线程
+复用父执行日志。已完成的查询和原请求回执继续作为恢复检查点，未知 dispatch
+保留原 attempt 身份，失败后也先等待已启动的同波次来源结束再返回。
+
 同一个 `request_id` 与轮次绑定固定计划。重复相同请求读取原冻结结果，不重新付费
 采集；相同 ID 改动截止、股票或来源会冲突。监测每一轮有独立 job 和回执。
 中断可能留下在途或未知结果，必须用原身份核查，不能将观察中断写成采集完成。
@@ -115,10 +138,80 @@ node scripts/tiger-intelligence.mjs evidence \
 均不接受密钥；只读 Node 子进程不会收到采集 key。提供商用量未知时保留
 `requires_reconciliation`，不能在成本报告里把未知数写成 0。
 
+### 模型 JSON 失败、格式重答与计量
+
+新接纳的情报 paper 运行在冻结 policy 的 `model_contract` 中登记
+`response_observation_contract=tiger.deepseek-json-observation/v2`。该标记由已核验的
+冻结源码确定；业务请求不能开启、关闭或更换合同。没有该源码标记的历史运行继续
+重放原 policy、wire 与证明，不补写为新合同。
+
+- **HTTP 返回体无法读成 JSON**：诊断明确标为 `http_envelope`，只保存实际观察到的
+  HTTP 状态、响应字节数、哈希、是否纯空白与是否完整读完。没有已核验的模型、响应
+  身份、stop 和 usage 时，计费仍未知，不自动重发。纯空白 HTTP 返回体不能当成
+  已知模型空回答。
+- **已核验完整回复的 assistant 内容不是合法 JSON，或仅有空白**：先把去凭据、
+  不含私有 reasoning 的原生回复与实际 usage 持久化，再解析内容。只有原失败能由
+  同一快照重算且内容未因脱敏改变时，才可使用一次格式重答。
+- **模型第二次仍失败**：保留第一、第二次各自的原生观测。两次 usage 已知就分别
+  计入；第二次外层响应或 usage 未知则继续待对账，不能删除首次已知用量。
+
+格式失败与原有 schema 失败共享整次执行的**一个**重答额度，不按阶段、分片或
+重新创建客户端重置。重答发送相同完整 wire、同模型和同场景，仍使用原合法输出
+窗口；不补裁原文、不降低数组/字符串限制、不修补 JSON、也不改变行情范围或数值
+风险门槛。DeepSeek 官方说明 JSON 模式可能返回仅含 U+0020 的 assistant 内容，
+即使 finish_reason 为 stop；这只解释为什么需显式区分空内容与空 HTTP 返回体，
+不能证明某次历史失败的实际原因。[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)
+
+原生观测通过 `response_observation` 的显式快照引用绑定到成功 IO 或失败阶段的
+事件链。独立证明从这些原回复重新计算 JSON/schema 结果和重答资格；失败阶段
+始终是 failed，不因已留计量证据而变成完整研究。已通过 canonical model、响应
+身份、stop 和 usage 核心检查的失败可以保留已知用量；length、非 canonical
+回复或未通过核心检查的回复仍是未知计量，不能宣称所有带 usage 的失败均已结算。
+
+成功的独立模型证明另列 `chat_accounting`，包括格式重答前后的全部已知 chat
+用量；单个调用的 `usage` 仍是最后一次实际回复的 usage。失败时
+`model-failure-accounting.json` 仅说明显式绑定的 chat 观测与已知/未知计量。
+没有 chat 观测表示观测数为 0，不能推断整次运行免费；Search/Fetch 和来源采集
+仍须单独核对原 archive 账目。验证被拒绝或摘要无法写入时明确记为 unverified，
+保留原业务失败，不补造零费用。
+
+如操作者需要仅让固定模型域名直连，可在可信启动环境显式设置
+`NO_PROXY=localhost,127.0.0.1,::1,api.deepseek.com`。默认仍是三个 loopback 项；
+只允许额外加入 `api.deepseek.com`，拒绝其他域名、URL、凭据形式及重复项。
+原代理配置继续用于其他网络来源；该启动配置不是一次失败的根因证明，也不能由
+业务请求修改端点或全局代理。
+
 完整 v2 工作流可由可信启动环境的 `TIGER_INTEL_REGISTRY_FILE` 指向审查过的绝对
 配置路径，登记可选来源和发行人 IR；`TIGER_INTEL_ARCHIVE_ROOT` 可显式绑定已有
 原文档案作为基线。基线只复用截止前已观察的原文版本，不复用模型标注或旧语义分。
 独立采集 CLI 只开放内置来源 ID 的启用，不从请求加载任意配置文件或 IR URL。
+
+### 只用已观察原文完成新一轮研究
+
+可信启动者可在同一 registry JSON 顶层设置 `"acquisition_mode": "snapshot_only"`，
+与 `sources`、`registered_sources`、`policy_version` 并列；示例见
+[snapshot-only.json.example](../config/intelligence/snapshot-only.json.example)。它仍须通过
+`TIGER_INTEL_ARCHIVE_ROOT` 显式绑定原文档案。启动时封存审定股票池与共享主题的有限
+原文快照，快照为空、来源身份不匹配、原文损坏或未知 mode 都拒绝接纳。普通业务请求
+继续只有原四字段，不能选择采集模式、路径或扩大来源权限。
+
+该模式保留完整审定池、行情候选、研究问题、来源许可、请求与 Fetch 预算、两轮研究
+及五个必需语义模型阶段。采集计划明确记录 `acquisition_mode` 并绑定 plan hash，
+采集不构造可联网的来源适配器，所有来源调用在占用请求预算之前被拒绝；初次收集只读入已经
+验证的原文版本。后续补查记录 `SNAPSHOT_ONLY_NO_LIVE_ACQUISITION` 和零来源调用，
+资料不足仍为 partial/null；不能由已有一篇文章推断其他目标已经覆盖。模型仍需重新
+读取这些原文并完成结构化、舆情、风险、板块叙事与决策，旧模型标注或结论不会复用。
+
+新模式的 admission 快照仅将元数据读取预算设为 32 MiB，以容纳多个完整原文的
+索引与关联回执；仍限制最多 256 原文、2048 候选扫描、64 MiB 原文加文本、8192
+关联和 30 秒准备时限。这些实际 limits 随 manifest 冻结并在离线证明中重验。
+缺省和显式 `live` 保留原 8 MiB 元数据预算与原采集计划字节合同。达到任一边界仍
+披露快照缺口，不裁剪文章或把 partial 改成 completed。
+
+返回的 `intelligence.acquisition_mode`、零来源用量、已封存 baseline 和重新生成的
+五阶段模型回执分别可核查。零来源请求不表示模型免费，也不消除另一轮任务已存在
+的未知计费用量；原失败运行和未知回执应保留原身份，新的 snapshot-only 研究使用
+新的 admission、任务与回执。离线证明只使用本轮封存原文，不要求旧档案一直在线。
 
 可信配置可以只启用官方直接源而不启用搜索工具。必需资料不足时，补查仍留下
 `research_unavailable` 回执并冻结 partial 包，五个必需语义阶段照常调用模型；
@@ -152,6 +245,30 @@ publisher/origin、查询命中、时间精度和附件引用。HTML 优先 `<ma
 行业与境外研究主体分别标识。模型提供原文 quote/offset、事件类型、期间和目标，
 确定性验证器检查确切原文区间、审定身份和时序；未知值保留未知，不用抓取时间、
 标题 hash 或英文季度正则替代全部事件语义。
+
+### 清洗标识与历史重放
+
+新清洗提示使用 `typed-clean-complete-format/v1`。事件的 `target_ids` 只选本次输入列出的
+裸产业链 ID 或 ETF 代码；采集档案里的 `global:`、`chain:`、`sector:`、`security:`
+和 `account:` 标识属于另一套命名空间，不能直接复制进事件。宏观或政策属性通过
+`event_type=macro/policy` 表达；不涉及给定产业链或 ETF 时，事件目标可以为空数组。
+
+每个 typed event 必须引用本篇 `subjects[].id`，且主体有可核验的原文 span。无法
+确证主体时不造该 typed event 及依赖它的 claim，原文和文档行仍完整保留，中文摘要
+如实写明事实或反证以及未解决的主体缺口；有原文依据的负面事件和反证仍须保留。
+这只是对模型输出格式和引用关系的说明，不放宽 schema，不补写或删除模型答案，
+也不改变原文分批、五阶段、合法窗口、一次执行级格式重答或逐事件证据资格规则。
+
+摘要等纯文本说明字段不能使用 `<` 或 `>` 表达比较、排序，须写成“优于”“低于”等
+中文；原文、逐字 quote 和 value/unit/currency 的字面绑定继续保留，宿主不转义、
+替换或修补模型答案。每批提示明确写出本批真实行数，要求按输入顺序逐字复制每个 ID。
+同 URL、同故事或相同正文的不同来源和版本仍各自输出，不能去重、按相关性删行或
+添加 `_dup` 之类的新 ID；资料不足的行仍保留文档、中文摘要、反证和未解决缺口。
+
+历史 `typed-clean-legacy/v1`、`typed-clean-summary-characters/v1` 与
+`typed-clean-identifiers/v1` 的提示字节继续保留。
+独立证明按已识别的冻结模块 SHA 选择当时的提示，未知或被修改的冻结实现拒绝重放；
+新的提示不能补签旧运行，也不能让旧的不合格回答变成合格。
 
 `allowed_uses` 按事件分为 background、analysis、scoring、action。一段宏观材料
 可以供背景阅读，却不能借此取得某股票的行动资格。action 只是允许作为行动证据
@@ -238,3 +355,9 @@ python scripts/intelligence-replay.py \
 | `PLAN_CONFLICT` / `JOB_REVISION_CONFLICT` | 同一身份的输入或冻结版本冲突；不可覆盖原证据 |
 | `INFLIGHT_ATTEMPTS` / `FROZEN_BUNDLE` | 在途请求不得冻结；已冻结任务不得补改 |
 | `EVIDENCE_NOT_FOUND` / `HASH_MISMATCH` | 证据缺失或损坏；拒绝生成成功摘要，不重写 hash 兜底 |
+
+## 同 run 恢复与候选补研
+
+已停止的 v2 paper run 可由可信 paper 模式调用 `resume`，请求只含原 `run_id`。系统先取得原账户和 run 锁，再校验 frozen admission、原 source/policy/account-before/calendar/deadline；不会刷新截止、换幂等键或复制账户。已验证 WorkStore 结果直接复用，已收到的 native 先复算 usage；`dispatched/observed` 与来源 `inflight/unknown` 保留预留并阻断新发送，直到原身份完成对账。失败 attempt 的事件、I/O、work、日志和进程证据只增不改归档。engine 已完成但尚未发布时只执行 closeout，不再运行 pipeline。
+
+已独立核验的父 receipt 若包含 `pending_candidates`，可信 paper 模式可调用 `supplement`。请求仅含 `schema_version`、`parent_run_id`、已审定 `symbols` 和一个新幂等键。父候选 manifest、父 receipt、证券身份和 requested-at 必须重新核对；新任务重新观察行情、执行完整采集/原文/五阶段语义/数值风险和账户 CAS。旧信号过截止只标记 `original_signal_expired`，不继承旧批准。`status` 返回四轴投影和 pending 候选状态，最终仍以新 run 的 receipt/verify 为准。

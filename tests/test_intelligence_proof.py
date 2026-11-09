@@ -280,7 +280,8 @@ def test_actual_authoritative_policy_binds_paper_order_and_independent_paper_led
     from trading_system.paper_proof import verify_paper_execution
     execution, root, args, _, _, _ = intelligence_fixture(tmp_path, monkeypatch, authoritative=True)
     packet = read_json(root, "intelligence-input.json")
-    atomic_json(root, "policy.json", policy_manifest(INTELLIGENCE_PROFILE, intelligence_input=packet))
+    atomic_json(root, "policy.json", policy_manifest(INTELLIGENCE_PROFILE, intelligence_input=packet,
+        response_observation_contract=execution.response_observation_contract))
     output = main._daily(args, "yahoo", execution=execution)
     result = asdict(output.result)
     admission = {"clock": {"run_date": execution.run_date.isoformat(), "market_timezone": "America/New_York",
@@ -449,16 +450,32 @@ def test_explicit_raw_baseline_is_copied_reannotated_and_replayed_without_ambien
     assert any(row["status"] == "present" and row["target_id"] == "chain:memory" for row in frozen["gaps"])
 
 
-def test_failed_discovery_calls_are_replayable_unknowns_and_never_become_clean_risk(tmp_path, monkeypatch):
+@pytest.mark.parametrize("http_status", [503, None])
+def test_failed_discovery_calls_preserve_billing_certainty_and_never_become_clean_risk(tmp_path, monkeypatch, http_status):
     from trading_system.redline.model_diagnostics import RequiredModelUnavailable
     execution, root, args, _, _, _ = intelligence_fixture(tmp_path, monkeypatch)
     original = DeepSeekRequiredClient._post_json
     def post(client, path, request):
         if path == "/v1/tools/search":
-            raise RequiredModelUnavailable("HTTP_ERROR", http_status=503)
+            raise (RequiredModelUnavailable("HTTP_ERROR", http_status=http_status) if http_status is not None
+                   else RequiredModelUnavailable("NETWORK_TIMEOUT"))
         return original(client, path, request)
     monkeypatch.setattr(DeepSeekRequiredClient, "_post_json", post)
     monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda seconds: None)
+    if http_status is None:
+        from trading_system.intelligence.archive import Archive
+        from trading_system.intelligence.contracts import IntelligenceError
+        with pytest.raises(IntelligenceError) as error:
+            main._daily(args, "yahoo", execution=execution)
+        assert error.value.code == "RECONCILIATION_REQUIRED"
+        archive = Archive(root / "intelligence", readonly=True)
+        with archive._session() as connection:
+            job_id = connection.execute("SELECT job_id FROM jobs").fetchone()[0]
+        attempts = archive.attempts(job_id)
+        assert len(attempts) == 1 and attempts[0]["status"] == "unknown"
+        assert attempts[0]["result"]["usage"]["requires_reconciliation"] is True
+        assert not (root / "result.json").exists()
+        return
     output = main._daily(args, "yahoo", execution=execution)
     result = asdict(output.result)
     admission = {"clock": {"run_date": execution.run_date.isoformat(), "market_timezone": "America/New_York",
@@ -466,7 +483,7 @@ def test_failed_discovery_calls_are_replayable_unknowns_and_never_become_clean_r
     summary = verify_intelligence_model(root, result, admission)
     assert summary["call_count"] == 5 and summary["search_count"] == 0
     assert result["raw"]["docs_collected"] == 0 and result["raw"]["intelligence"]["state"] == "partial"
-    assert result["raw"]["intelligence"]["usage"]["unreconciled_attempts"] > 0
+    assert (result["raw"]["intelligence"]["usage"]["unreconciled_attempts"] > 0) == (http_status is None)
     assert all(row["risk_level"] is None for row in result["raw"]["tech_signals"])
     assert result["picks"] == []
     source_gaps = [row for row in result["raw"]["intelligence"]["gaps"] if row.get("source_reason")]

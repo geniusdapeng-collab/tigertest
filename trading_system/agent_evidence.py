@@ -363,9 +363,9 @@ def read_snapshot(root: Path, ref: dict, *, run_id: str, stage: str,
     return blob["value"]
 
 
-def verify_events(root: Path, run_id: str, specs: list[dict]) -> dict:
+def verify_events(root: Path, run_id: str, specs: list[dict], *, event_relative: str = "events.jsonl") -> dict:
     """Recompute the ordered execution stream and all declared child I/O refs."""
-    raw = read_bytes(root, "events.jsonl", limit=16 * 1024 * 1024)
+    raw = read_bytes(root, event_relative, limit=16 * 1024 * 1024)
     if not raw.endswith(b"\n"):
         raise EvidenceInvalid("RUN_INCOMPLETE", "Unfinished execution stream")
     try:

@@ -9,25 +9,30 @@ No provider, source adapter or model may open a network connection here.
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+import ast
 from datetime import date, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from ..agent_evidence import (EvidenceInvalid, normalize, read_bytes, read_json,
-                              read_snapshot, strict_json, verify_events, checked_root, safe_path)
+                              read_snapshot, strict_json, verify_events, checked_root, safe_path,
+                              digest, json_bytes)
 from ..cleaning.pipeline import rule_base_clean
 from ..intelligence import (build_plan, default_registry,
                             project_to_rawdocuments, replay_observation, verify_bundle)
 from ..intelligence.archive import Archive
 from ..intelligence.contracts import IntelligenceError, SearchRequest, SearchResult, safe_value, source_time
 from ..intelligence.planner import compile_requests
+from ..intelligence.registry import acquisition_mode
 from ..intelligence.adapters import deepseek_query, _hit
 from ..intelligence_workflow import (ACQUISITION_CONTRACT, SOURCE_CONTENT_CONTRACT,
     SEARCH_MODE, TOOL_LIMITS, entity_registry, restore_frame, validate_input_packet,
     verify_frontier, acquisition_policy, value_hash)
+from ..intelligence_workflow import validate_baseline_manifest
 from ..redline import LLMUnavailable
 from ..redline.execution import (REQUIRED_MODEL_STAGES, RequiredModelFailed,
                                  daily_stage_contract, ExecutionContractError)
@@ -44,13 +49,19 @@ from ..tech_chain.universe import TECH_SUBCHAINS, CHAIN_TOPICS, SECTOR_TOPICS
 from . import intelligence_required as semantic
 from .deepseek_required import (MODEL, RELEASE, SEARCH_MODE as NATIVE_SEARCH_MODE,
     DeepSeekRequiredClient, sanitize_model_text, sanitize_model_value, sanitize_url, validate_schema)
-from .model_budget import (CONTEXT_TOKENS, POLICY_VERSION, REGISTRY_VERSION,
-    TOKENIZER_SHA256, TokenBudgetError, chat_request_core, plan_request)
+from .model_budget import (CONTEXT_TOKENS, TokenBudgetError, budget_contract,
+    frozen_budget_contract, chat_request_core, plan_request)
 from .required_schemas import (sentiment_schema, risk_schema, narrative_schema,
                                decision_schema, validate_target_assessments)
 from .required_proof import (_hash, _plain, _same_watch_facts, _verify_search_request,
                              _verify_search_rows)
 from .scene_policy import KERNEL_SCENE_MAP, scene_config, ScenePolicyError
+
+LEGACY_CLEAN_SOURCE_SHA256 = "dc15de6306fe8e134df343ea42a0bf8073b4a7408e8c6eca2b3e418022a61c3f"
+SUMMARY_CLEAN_SOURCE_SHA256 = "3db582964bbfa8a709ff3c40c5f72ec4012b1f6a06b74f6c5e57e5a4771b5008"
+SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256 = "8d3154751d3b92e0024590cb9d2226d68638a59156a81ba0ecd626eec9845222"
+IDENTIFIERS_CLEAN_SOURCE_SHA256 = "6cea0fe5533469d8888ecde8e7fd9bb853c7c1dea544136c0dd2655292b61f36"
+COMPLETE_CLEAN_SOURCE_SHA256 = "1cc9445e1684801e2e2d8a571ce98c7d5c49ccb65c68a0134e594d8f668cd1aa"
 
 
 def _fail(stage=None):
@@ -62,14 +73,73 @@ def _same(actual, expected, stage=None):
         _fail(stage)
 
 
+def frozen_clean_format_contract(run):
+    """Recognize only known frozen prompt code, without importing/executing it."""
+    stage = "clean.llm_semantic"
+    content = read_bytes(Path(run), "source/trading_system/llm/intelligence_required.py")
+    observed = hashlib.sha256(content).hexdigest()
+    if observed == LEGACY_CLEAN_SOURCE_SHA256:
+        return semantic.LEGACY_CLEAN_FORMAT_CONTRACT
+    if observed in {SUMMARY_CLEAN_SOURCE_SHA256, SNAPSHOT_ONLY_SUMMARY_CLEAN_SOURCE_SHA256}:
+        return semantic.SUMMARY_CLEAN_FORMAT_CONTRACT
+    if observed == IDENTIFIERS_CLEAN_SOURCE_SHA256:
+        return semantic.IDENTIFIERS_CLEAN_FORMAT_CONTRACT
+    if observed == COMPLETE_CLEAN_SOURCE_SHA256:
+        return semantic.COMPLETE_CLEAN_FORMAT_CONTRACT
+    trusted = Path(semantic.__file__).read_bytes()
+    if observed != hashlib.sha256(trusted).hexdigest():
+        _fail(stage)
+    try:
+        tree = ast.parse(content.decode("utf-8"))
+        values = [node.value for node in tree.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "CLEAN_FORMAT_CONTRACT"
+                    for target in node.targets)]
+        if (len(values) != 1 or not isinstance(values[0], ast.Constant)
+                or values[0].value != semantic.CLEAN_FORMAT_CONTRACT):
+            _fail(stage)
+    except (UnicodeError, SyntaxError, TypeError, ValueError):
+        _fail(stage)
+    return semantic.CLEAN_FORMAT_CONTRACT
+
+
 def _request(parameters):
     return SearchRequest(**{key: tuple(value) if key in {"domains", "entities", "targets"} else value
                             for key, value in parameters.items()})
 
 
+def _source_parameters(spec, operation, parameters, *, research_work=False):
+    """Remove only the internally recorded, trusted extractor policy field.
+
+    Every other field remains in the request identity and must still match the
+    independently compiled plan. A page cannot nominate its own parser policy.
+    """
+    if operation == "search":
+        context = parameters.get("context", {})
+        if "_parse_policy" not in context:
+            return parameters
+        recorded = context["_parse_policy"]
+        result = {**parameters, "context": {key: value for key, value in context.items() if key != "_parse_policy"}}
+    else:
+        if "_parse_policy" not in parameters:
+            return parameters
+        recorded = parameters["_parse_policy"]
+        result = {key: value for key, value in parameters.items() if key != "_parse_policy"}
+    from ..intelligence.parse_limits import ParsePolicy
+    trusted = spec.options.get("extractor")
+    expected = None if trusted is None else ParsePolicy.from_value(trusted)
+    if research_work:
+        expected = replace(ParsePolicy.from_value(trusted), manifest_version="v1")
+    if expected is None or recorded != expected.public():
+        _fail()
+    return result
+
+
 class _Replay:
-    def __init__(self, run, admission, scene_policy_path):
+    def __init__(self, run, admission, scene_policy_path, *, _partial=False,
+                 _event_relative="events.jsonl"):
         self.run, self.admission, self.scene_policy_path = Path(run), admission, scene_policy_path
+        self.budget_contract = frozen_budget_contract(read_bytes(
+            self.run, "source/trading_system/llm/model_budget.py"))
         clock = admission["clock"]
         self.cutoff = datetime.fromisoformat(clock["admitted_at_utc"])
         run_date = clock["run_date"]
@@ -79,6 +149,20 @@ class _Replay:
             _fail()
         self.assessment = {key: clock[key] for key in ("run_date", "market_timezone")}
         self.policy = read_json(self.run, "policy.json") if (self.run / "policy.json").exists() else None
+        if self.policy is not None:
+            counter = self.policy.get("model_contract", {})
+            expected_counter = self.model_budget_contract()
+            if counter.get("tokenizer_sha256") != expected_counter["tokenizer_sha256"]:
+                _fail()
+            from .model_budget import LEGACY_COUNTER_ID
+            version_fields = {"counter_id": expected_counter["counter_id"],
+                "registry_version": expected_counter["registry_version"],
+                "budget_policy_version": expected_counter["policy_version"]}
+            if expected_counter["counter_id"] == LEGACY_COUNTER_ID:
+                if any(key in counter for key in version_fields):
+                    _fail()
+            elif any(counter.get(key) != value for key, value in version_fields.items()):
+                _fail()
         self.authoritative_paper = (self.policy is not None and
             self.policy.get("paper_ledger_contract") == "tiger.paper-execution.v1")
         if self.policy is not None and self.policy.get("paper_ledger_contract") not in {None, "tiger.paper-execution.v1"}:
@@ -86,8 +170,14 @@ class _Replay:
         contract = daily_stage_contract(True, intelligence=True, authoritative_paper=self.authoritative_paper)
         if self.policy is not None:
             _same(self.policy["stages"], contract)
-        verify_events(self.run, self.run.name, contract)
-        events = [strict_json(line) for line in read_bytes(self.run, "events.jsonl").splitlines()]
+        if _partial:
+            events = _partial_events(self.run, contract, event_relative=_event_relative)
+        else:
+            if _event_relative != "events.jsonl":
+                _fail()
+            verify_events(self.run, self.run.name, contract)
+            events = [strict_json(line) for line in read_bytes(self.run, "events.jsonl").splitlines()]
+        self.events = events
         self.ends = {row["stage"]: row for row in events if row["kind"] == "end"}
         self.outputs = {stage: self.snapshot(row, "output") for stage, row in self.ends.items()}
         self.inputs = {stage: self.snapshot(row, "input") for stage, row in self.ends.items()}
@@ -100,12 +190,30 @@ class _Replay:
         self.response_ids, self.call_ids, self.identities = [], set(), set()
         self.counts = {stage: 0 for stage in REQUIRED_MODEL_STAGES}
         self.chat_schema_retries = 0
+        self.observation_contract = (self.policy or {}).get("model_contract", {}).get(
+            "response_observation_contract", "")
+        self.observation_refs = set()
+        self.chat_observations = []
         self.native_searches, self.native_fetches = [], []
         self.attempt_stages = {}
 
     def snapshot(self, row, role):
         return read_snapshot(self.run, row[role + "_ref"], run_id=self.run.name,
                              stage=row["stage"], role=role)
+
+    def model_budget_contract(self):
+        value = getattr(self, "budget_contract", None)
+        if value is None:
+            try:
+                value = frozen_budget_contract(read_bytes(
+                    self.run, "source/trading_system/llm/model_budget.py"))
+            except EvidenceInvalid:
+                # A manually constructed planner replay may only need the
+                # current reviewed contract; complete proof construction still
+                # requires the frozen source and sets this field in __init__.
+                value = budget_contract()
+            self.budget_contract = value
+        return value
 
     def value(self, stage):
         return self.outputs[stage]["value"]
@@ -115,19 +223,33 @@ class _Replay:
             request = read_snapshot(self.run, call["input_ref"], run_id=self.run.name, stage=stage, role="input")
             response = read_snapshot(self.run, call.get("output_ref", call.get("error_ref")),
                                      run_id=self.run.name, stage=stage, role="output")
+            if call["method"] == "tasks.source.join" and (self.policy or {}).get("research_work") is not None:
+                if "error_ref" in call:
+                    _fail(stage)
+                from ..research_sources import expand_source_join
+                from .work_proof import work_proof
+                call = expand_source_join(self.run, work_proof(self).store, stage, request, response)
+                request = read_snapshot(self.run, call["input_ref"], run_id=self.run.name,
+                                         stage=stage, role="input")
+                response = read_snapshot(self.run, call.get("output_ref", call.get("error_ref")),
+                                          run_id=self.run.name, stage=stage, role="output")
             yield call, request, response
 
     def planner(self, stage):
         thinking = scene_config(KERNEL_SCENE_MAP[stage], self.scene_policy_path)["thinking"]
         mode, effort = thinking["type"], thinking.get("effort")
         def plan(payload, schema):
-            args = semantic.chat_arguments(stage, payload, schema, self.assessment)
+            args = semantic.chat_arguments(stage, payload, schema, self.assessment,
+                clean_format_contract=frozen_clean_format_contract(self.run)
+                    if stage == "clean.llm_semantic" else semantic.CLEAN_FORMAT_CONTRACT)
             system = sanitize_model_text(args["system"])
             user = sanitize_model_text(args["user"]) + "\n" + json.dumps(
                 sanitize_model_value(args["public_payload"]), ensure_ascii=False,
                 sort_keys=True, separators=(",", ":"), allow_nan=False)
             return plan_request(chat_request_core(system=system, user=user, schema=schema,
-                schema_hint={}, thinking_mode=mode, effort=effort, temperature=0.2))
+                schema_hint={}, thinking_mode=mode, effort=effort, temperature=0.2,
+                **({"clean_protocol": args["clean_protocol"]} if "clean_protocol" in args else {})),
+            counter_id=self.model_budget_contract()["counter_id"])
         return plan
 
     def chat(self, stage, call, request, proof, payload, schema):
@@ -142,27 +264,54 @@ class _Replay:
         mode, effort = thinking["type"], thinking.get("effort")
         metadata = {"thinking_mode": mode, "reasoning_effort": effort,
             "input_token_estimate": estimate, "output_ceiling": ceiling,
-            "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
-            "tokenizer_sha256": TOKENIZER_SHA256}
+            **{key: self.model_budget_contract()[key] for key in (
+                "policy_version", "registry_version", "tokenizer_sha256")}}
         body = request["request"]
-        if (request["schema"] != "tiger.deepseek-request.v1"
-                or request["endpoint"] != "https://api.deepseek.com/chat/completions"
+        observed = bool(self.observation_contract)
+        tool_protocol = "tools" in expected_body
+        if tool_protocol:
+            from .clean_keyed_codec import CONTRACT as CLEAN_CONTRACT
+            from .json_observation import TOOL_CONTRACT
+            if (self.observation_contract != TOOL_CONTRACT or stage != "clean.llm_semantic"
+                    or request.get("clean_protocol") != {"contract": CLEAN_CONTRACT}
+                    or proof.get("clean_protocol") != request["clean_protocol"]):
+                _fail(stage)
+        elif any(key in request or key in proof for key in ("clean_protocol", "native_parsed")):
+            _fail(stage)
+        if observed:
+            from .json_observation import SUPPORTED_CONTRACTS, contract_schemas
+            if (self.observation_contract not in SUPPORTED_CONTRACTS
+                    or request.get("response_observation_contract") != self.observation_contract):
+                _fail(stage)
+            schemas = contract_schemas(self.observation_contract)
+        elif "response_observation_contract" in request or "response_observation" in proof:
+            _fail(stage)
+        if (request["schema"] != (schemas["request"] if observed else "tiger.deepseek-request.v1")
+                or request["endpoint"] != ("https://api.deepseek.com/beta/chat/completions" if tool_protocol
+                                           else "https://api.deepseek.com/chat/completions")
                 or request["method"] != "POST" or request["provider"] != "deepseek"
                 or request["stage"] != stage or request["release"] != RELEASE
                 or request.get("scene") != KERNEL_SCENE_MAP[stage]
                 or any(request.get(key) != value or proof.get(key) != value for key, value in metadata.items())
                 or body != expected_body or request["request_sha256"] != _hash(body)
                 or request["output_schema"] != schema or request["schema_sha256"] != _hash(schema)
-                or proof["schema"] != "tiger.deepseek-call.v1" or proof["provider"] != "deepseek"
+                or proof["schema"] != (schemas["call"] if observed else "tiger.deepseek-call.v1")
+                or proof["provider"] != "deepseek"
                 or proof["stage"] != stage or proof["call_id"] != call_id
                 or proof.get("scene") != KERNEL_SCENE_MAP[stage]
                 or proof["request_sha256"] != request["request_sha256"]
                 or proof["schema_sha256"] != request["schema_sha256"]
                 or proof["model"] != MODEL or proof["requested_model"] != MODEL
-                or proof["release"] != RELEASE or proof["finish_reason"] != "stop"
+                or proof["release"] != RELEASE or proof["finish_reason"] != ("tool_calls" if tool_protocol else "stop")
                 or proof["search_mode"] != NATIVE_SEARCH_MODE
                 or not re.fullmatch(r"[0-9a-f]{64}", proof["transport_response_sha256"])):
             _fail(stage)
+        if observed:
+            self._chat_observation(stage, request, proof)
+            validate_schema(proof["parsed"], schema)
+            self.response_ids.append(proof["response_id"])
+            self.counts[stage] += 1
+            return proof["parsed"]
         retries = proof.get("retry_diagnostics", [])
         if (type(retries) is not list or self.chat_schema_retries + len(retries) > 1
                 or any(validate_model_diagnostic(item)["code"] != "OUTPUT_SCHEMA_MISMATCH"
@@ -206,6 +355,108 @@ class _Replay:
         self.counts[stage] += 1
         return proof["parsed"]
 
+    def _observed_attempts(self, stage, request, observation):
+        """Replay only journal-referenced native attempts, never discovered files."""
+        from .json_observation import SUPPORTED_CONTRACTS, replay_attempt, validate_reference_observation
+
+        if self.observation_contract not in SUPPORTED_CONTRACTS:
+            _fail(stage)
+        rejected_contract = ((self.policy or {}).get("research_work") or {}).get("rejected_native_contract")
+        if (request.get("rejected_native_contract") != rejected_contract
+                or rejected_contract is None and "rejected_native_contract" in request):
+            _fail(stage)
+        observation = validate_reference_observation(observation)
+        if (request.get("response_observation_contract") != self.observation_contract
+                or observation["schema"] != self.observation_contract
+                or observation["call_id"] != request["call_id"]
+                or observation["request_sha256"] != request["request_sha256"]):
+            _fail(stage)
+        attempts = observation["attempts"]
+        retry_count = len(attempts) - 1
+        if observation["retry_used"] != bool(retry_count) or self.chat_schema_retries + retry_count > 1:
+            _fail(stage)
+        self.chat_schema_retries += retry_count
+        results = []
+        for ordinal, row in enumerate(attempts, 1):
+            ref = row["observation_ref"]
+            if row["ordinal"] != ordinal or ref["path"] in self.observation_refs:
+                _fail(stage)
+            self.observation_refs.add(ref["path"])
+            native = read_snapshot(self.run, ref, run_id=self.run.name, stage=stage, role="output")
+            if (native["call_id"] != request["call_id"] or native["ordinal"] != ordinal
+                    or native["request_sha256"] != request["request_sha256"]):
+                _fail(stage)
+            replayed = replay_attempt(native, request)
+            _same(row["diagnostic"], replayed["diagnostic"], stage)
+            if ordinal < len(attempts) and not replayed["retry_eligible"]:
+                _fail(stage)
+            from .rejected_native import response_identity
+            response_id, _ = response_identity(native)
+            if response_id is not None:
+                identity = hashlib.sha256(response_id.encode()).hexdigest()
+                if identity in self.identities:
+                    _fail(stage)
+                self.identities.add(identity)
+            elif ordinal != len(attempts):
+                _fail(stage)
+            results.append((row, native, replayed))
+            self.chat_observations.append({"stage": stage, "call_id": request["call_id"],
+                "request_sha256": request["request_sha256"], "ordinal": ordinal,
+                "observation_ref": ref,
+                "response_id": response_id,
+                "diagnostic": replayed["diagnostic"], "usage": replayed["usage"]})
+        return results
+
+    def _chat_observation(self, stage, request, proof):
+        if (proof.get("response_observation_contract") != self.observation_contract
+                or "retry_attempt" in proof or "retry_diagnostics" in proof):
+            _fail(stage)
+        attempts = self._observed_attempts(stage, request, proof["response_observation"])
+        _, native, last = attempts[-1]
+        if last["diagnostic"] is not None or last["parsed"] is None or last["usage"] is None:
+            _fail(stage)
+        _same(proof["parsed"], last["parsed"], stage)
+        original = native["response"]
+        if request.get("clean_protocol") is not None:
+            _same(proof.get("clean_protocol"), request["clean_protocol"], stage)
+            _same(proof.get("native_parsed"), last["native_parsed"], stage)
+            # Preserve actual tool_calls and original arguments in the native
+            # proof. The business array exists only in its explicit projection.
+            safe_response = original
+        else:
+            if "native_parsed" in proof or "clean_protocol" in proof:
+                _fail(stage)
+            safe_response = {key: original[key] for key in ("id", "object", "model", "system_fingerprint", "usage")}
+            safe_response["choices"] = [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": json.dumps(last["parsed"], ensure_ascii=False,
+                    sort_keys=True, separators=(",", ":"), allow_nan=False)}}]
+        if (proof["response"] != safe_response or proof["response_sha256"] != _hash(safe_response)
+                or proof["response_id"] != original["id"]
+                or proof["system_fingerprint"] != original["system_fingerprint"]
+                or proof["usage"] != original["usage"]
+                or proof["transport_response_sha256"] != native["transport"]["body_sha256"]):
+            _fail(stage)
+        for _, _, result in attempts:
+            if result["usage"] is None:
+                _fail(stage)
+            self.usage(result["usage"], request["thinking_mode"], request["output_ceiling"], stage)
+        return attempts
+
+    def chat_accounting(self, *, other_model_io_count):
+        known = [row for row in self.chat_observations if row["usage"] is not None]
+        unknown = len(self.chat_observations) - len(known)
+        usage = ({key: sum(row["usage"][key] for row in known)
+                  for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+                 if known else None)
+        return {"accounting_scope": "chat_completions_only",
+            "source_accounting": "not_certified_by_this_report", "other_model_io_count": other_model_io_count,
+            "native_count": len(self.chat_observations), "observed_attempts_count": len(self.chat_observations),
+            "known_native_attempts": len(known), "known_usage": usage, "unknown_attempts": unknown,
+            "observation_state": "no_chat_observation" if not self.chat_observations else
+                                 "usage_unknown" if unknown else "known_usage",
+            "requires_reconciliation": bool(unknown), "format_reanswers": self.chat_schema_retries,
+            "observed_attempts": list(self.chat_observations)}
+
     @staticmethod
     def usage(usage, mode, ceiling, stage):
         if (DeepSeekRequiredClient._usage(usage, mode) != usage
@@ -229,6 +480,11 @@ class _Replay:
                 native.append((call, request, response))
                 continue
             if method == "model.deepseek.chat" and stage == "clean.llm_semantic":
+                continue
+            if (method == "tasks.child.join" and stage == "clean.llm_semantic"
+                    and (self.policy or {}).get("research_work") is not None):
+                # The explicit work proof later reconstructs every join,
+                # original native response and semantic result independently.
                 continue
             if method != "intelligence.source.request":
                 _fail(stage)
@@ -263,7 +519,11 @@ class _Replay:
             replayed = replay_observation(source, request["operation"], parameters, raw,
                 response_url=response["response_url"], headers=response["http_headers"],
                 received_at=response["received_at"], normalization_kind=response["normalization_kind"],
-                transport_sha256=response["transport_sha256"], request_count=response["request_count"])
+                transport_sha256=response["transport_sha256"], request_count=response["request_count"],
+                parse_failure=(response["normalized"].get("metadata", {}).get("parse_failure")
+                    if request["operation"] == "fetch" else
+                    next((hit.get("metadata", {}).get("parse_failure") for hit in response["normalized"].get("hits", [])
+                          if hit.get("metadata", {}).get("parse_failure")), None)))
             normalized = replayed.to_dict() if isinstance(replayed, SearchResult) else {
                 key: value for key, value in asdict(replayed).items() if key != "raw_bytes"}
             if request["operation"] == "fetch" and response["raw_redacted"]:
@@ -287,6 +547,13 @@ class _Replay:
                 ncall, nrequest, nproof = matching[0]
                 self.native_fetch(nrequest, nproof, parameters["url"], stage)
                 self.bind_native_usage(nproof, response, stage)
+                # A bound valid success receipt establishes exactly one
+                # successful native request. Historical unknown accounting is
+                # retained only for its exact old representation.
+                successful_usage = {"state": "reported_requests", "successful_requests": 1, "requires_reconciliation": False}
+                if response["usage"] != normalized["usage"]:
+                    _same(response["usage"], successful_usage, stage)
+                    normalized["usage"] = successful_usage
                 _same(strict_json(raw), nproof["page"], stage)
                 normalized["metadata"] = {"bridge": "admitted-deepseek-client",
                     "receipt": {key: value for key, value in nproof.items() if key not in {"schema", "page"}},
@@ -303,6 +570,9 @@ class _Replay:
                     _fail(stage)
                 self.native_search(nrequest, nproof, deepseek_query(_request(parameters)), stage, parameters["count"])
                 self.bind_native_usage(nproof, response, stage)
+                if response["usage"] != {"state": "unknown", "requires_reconciliation": True}:
+                    _same(response["usage"], {"state": "reported_requests", "successful_requests": 1,
+                        "requires_reconciliation": False}, stage)
                 rows = nproof["results"]
                 expected_hits = [_hit(row, url=row.get("url"), title=row.get("title", ""),
                     snippet=row.get("summary", ""), text=row.get("content", ""), text_kind="provider_text",
@@ -322,7 +592,9 @@ class _Replay:
                 and row["source_id"] == "deepseek" and row["operation"] == operation
                 and row["status"] in {"failed", "unknown"}
                 and (deepseek_query(_request(row["request"]["parameters"])) == request["request"]["query"]
-                     if operation == "search" else row["request"]["parameters"] == request["request"])]
+                     if operation == "search" else _source_parameters(registry.get(row["source_id"]), operation,
+                         row["request"]["parameters"], research_work=(self.policy or {}).get("research_work") is not None)
+                         == request["request"])]
             if not matches:
                 _fail(stage)
             row = matches[0]
@@ -332,7 +604,20 @@ class _Replay:
                 self.fetch_request(request, row["request"]["parameters"]["url"], stage)
             if response.get("error_type") != "RequiredModelUnavailable":
                 _fail(stage)
-            validate_model_diagnostic(response["diagnostic"])
+            diagnostic = validate_model_diagnostic(response["diagnostic"])
+            result = row["result"]
+            usage = result["usage"]
+            if usage == {"state": "not_charged", "requires_reconciliation": False}:
+                if (diagnostic["code"] != "HTTP_ERROR"
+                        or urlsplit(registry.get(row["source_id"]).endpoint).hostname != "api.deepseek.com"
+                        or result["error"]["details"].get("http_status") != diagnostic["http_status"]
+                        or result["error"]["details"].get("delivery") != "returned"):
+                    _fail(stage)
+            elif usage == {"state": "not_sent", "requires_reconciliation": False}:
+                if result["request_count"] != 0 or result["error"]["details"].get("delivery") != "not_sent":
+                    _fail(stage)
+            else:
+                _same(usage, {"state": "unknown", "requires_reconciliation": True}, stage)
             seen.append(row["attempt_id"])
             self.attempt_stages[row["attempt_id"]] = stage
         return seen
@@ -456,17 +741,82 @@ def _verify_baseline(packet, bundle):
             _fail("intelligence.freeze")
         return
     manifest = baseline["manifest"]
-    if (manifest["schema"] != "tiger.intelligence-baseline/v1" or manifest["tenant"] != "public"
-            or manifest["manifest_sha256"] != _hash({key: value for key, value in manifest.items() if key != "manifest_sha256"})
-            or manifest["as_of"] != bundle["as_of"] or len(bundle["baseline_refs"]) != 1):
+    validate_baseline_manifest(manifest)
+    scoped = manifest["schema"] == "topic_snapshot/v1"
+    if manifest["as_of"] != bundle["as_of"] or len(bundle["baseline_refs"]) != 1:
         _fail("intelligence.freeze")
+    selected_ids = {row["id"] for row in manifest["versions"]}
+    if scoped:
+        # Recompute membership independently of the runtime selection helper.
+        # Only labels in this admitted artifact can nominate a raw original;
+        # those labels never establish semantic scoring/action eligibility.
+        entities = set(bundle["allowed_entities"])
+        targets = {row["target_id"] for row in bundle["gaps"] if not row["target_id"].startswith("security:")}
+        targets.update(value.split(":", 1)[-1] for value in tuple(targets)
+            if value.startswith(("chain:", "sector:", "topic:")))
+        selected_ids = set()
+        for member in manifest["members"]:
+            subjects = {row if isinstance(row, str) else row.get("entity_id", row.get("id"))
+                for row in member["validated_subjects"] if isinstance(row, (str, dict))}
+            if (entities.intersection(member["requested_entity_ids"]) or entities.intersection(subjects)
+                    or targets.intersection(member["topic_ids"])):
+                selected_ids.add(member["id"])
+    selected_versions = [row for row in manifest["versions"] if row["id"] in selected_ids]
     receipt = bundle["baseline_refs"][0]
     expected = {"archive_id": manifest["archive_id"], "manifest_sha256": manifest["manifest_sha256"],
-        "manifest": manifest, "event_head": manifest["event_head"], "versions": manifest["versions"],
+        "manifest": manifest, "event_head": manifest["fixed_event_frontier"] if scoped else manifest["event_head"],
+        "versions": selected_versions,
         "imported_at": receipt["imported_at"], "reused_semantic_annotations": False, "reused_search_results": False}
+    if scoped:
+        expected["snapshot_id"] = manifest["snapshot_id"]
+        if manifest["registry_hash"] not in {"", packet["registry"]["sha256"]}:
+            _fail("intelligence.freeze")
+        head = manifest["fixed_event_frontier"]
+        cutoff = datetime.fromisoformat(manifest["cutoff"])
+        for member in manifest["members"]:
+            creation = member["creation_event"]
+            provenance = [creation, *(row["event"] for row in member["membership_provenance"])]
+            for event in provenance:
+                value = {key: value for key, value in event.items() if key not in {"sequence", "sha256"}}
+                if (event["tenant"] != manifest["tenant"] or event["sha256"] != _hash(value)
+                        or event["sequence"] > head["sequence"] or datetime.fromisoformat(event["at"]) > cutoff
+                        or event["payload"].get("document_id") != member["id"]):
+                    _fail("intelligence.freeze")
+            if (creation["kind"] != "document_version" or creation["payload"].get("document_sha256") != member["document_sha256"]
+                    or datetime.fromisoformat(member["first_seen_at"]) > cutoff):
+                _fail("intelligence.freeze")
+            requested = set()
+            topics = set()
+            for association in member["membership_provenance"]:
+                event = association["event"]
+                kind = association["kind"]
+                if kind == "requested_entity":
+                    if event["kind"] != "query_hit" or association["value"] not in event["payload"]["entities"]:
+                        _fail("intelligence.freeze")
+                    requested.add(association["value"])
+                elif kind in {"topic", "target"}:
+                    targets = event["payload"].get("targets", [])
+                    if (event["kind"] != "query_hit" or association["value"] not in targets
+                            and not any(value.split(":", 1)[-1] == association["value"] for value in targets)):
+                        _fail("intelligence.freeze")
+                    topics.add(association["value"])
+                elif kind == "receipt":
+                    if event["kind"] != "query_hit" or association["value"] != str(event["sequence"]):
+                        _fail("intelligence.freeze")
+                elif kind in {"source", "material", "validated_subject"}:
+                    subject_ids = {row if isinstance(row, str) else row.get("entity_id", row.get("id"))
+                        for row in member["validated_subjects"] if isinstance(row, (str, dict))}
+                    expected_values = {member["source_id"]} if kind == "source" else {member["material_type"]} if kind == "material" else subject_ids
+                    if event != creation or association["value"] not in expected_values:
+                        _fail("intelligence.freeze")
+                else:
+                    _fail("intelligence.freeze")
+            if member["requested_entity_ids"] != sorted(requested) or member["topic_ids"] != sorted(topics):
+                _fail("intelligence.freeze")
     _same(receipt, expected, "intelligence.freeze")
     by_id = {doc["id"]: doc for doc in bundle["documents"]}
-    for version in manifest["versions"]:
+    members = {member["id"]: member for member in manifest.get("members", [])}
+    for version in selected_versions:
         document = by_id[version["id"]]
         original = {key: value for key, value in document.items()
                     if key not in {"target_ids", "requested_entity_ids", "query_hit_ids"}}
@@ -477,12 +827,17 @@ def _verify_baseline(packet, bundle):
                 or version["first_seen_at"] != document["times"]["first_seen"]["value"]
                 or datetime.fromisoformat(version["first_seen_at"]) > datetime.fromisoformat(bundle["as_of"])):
             _fail("intelligence.freeze")
+        if scoped:
+            member = members[version["id"]]
+            for key in ("source_id", "source_version", "raw_blob", "text_blob"):
+                _same(member[key], original[key], "intelligence.freeze")
+            _same(member["validated_subjects"], original.get("validated_subjects", []), "intelligence.freeze")
 
 
-def _verify_document_attempts(bundle, packet):
+def _verify_document_attempts(bundle, packet, *, research_work=False):
     attempts = {row["attempt_id"]: row for row in bundle["attempts"]}
-    baseline_ids = ({row["id"] for row in packet["baseline"]["manifest"]["versions"]}
-                    if packet["baseline"] is not None else set())
+    registry = default_registry(packet["config"])
+    baseline_ids = {row["id"] for receipt in bundle["baseline_refs"] for row in receipt["versions"]}
     def bind(recipe, attempt, *, discovery=False):
         observation = attempt["result"].get("observation")
         if observation is None or attempt["status"] not in {"completed", "empty"}:
@@ -526,14 +881,17 @@ def _verify_document_attempts(bundle, packet):
             bind(recipe, attempts[refs[1]])
             parent = recipe.get("attachment", {}).get("parent_normalization")
             if parent is not None:
-                matches = [row for row in bundle["attempts"] if row["operation"] == "fetch"
+                parent_operation = parent.get("operation", "fetch")
+                matches = [row for row in bundle["attempts"] if row["operation"] == parent_operation
                     and row["source_id"] == parent["source_id"]
                     and row["request"]["parameters"] == parent["parameters"]
                     and row["result"].get("observation", {}).get("raw_response_ref") == parent["raw_response_ref"]]
                 if len(matches) != 1:
                     _fail()
-                bind(parent, matches[0])
-            elif recipe["parameters"] != {"url": hits[index]["url"]}:
+                parent_recipe = {**parent, "normalization_kind": parent["kind"]} if parent_operation == "search" else parent
+                bind(parent_recipe, matches[0], discovery=parent_operation == "search")
+            elif _source_parameters(registry.get(recipe["source_id"]),
+                    "fetch", recipe["parameters"], research_work=research_work) != {"url": hits[index]["url"]}:
                 _fail()
         else:
             # The search-only document's principal recipe is the same captured
@@ -547,6 +905,10 @@ def _verify_document_attempts(bundle, packet):
 
 def _verify_attempt_plan(replay, registry, bundle, plan, initial_documents, rounds):
     """Recompile admitted questions; arbitrary journal URLs cannot create a plan."""
+    if plan.get("acquisition_mode") == "snapshot_only":
+        if plan["query_plan"] or bundle["attempts"]:
+            _fail()
+        return
     directory = next((doc for doc in reversed(initial_documents) if doc["text_kind"] == "identity_directory"), None)
     allowed = {"search.collect": set(), "clean.llm_semantic": set()}
     for entry in plan["query_plan"]:
@@ -624,12 +986,16 @@ def _verify_attempt_plan(replay, registry, bundle, plan, initial_documents, roun
                         "web_page" if "web_page" in plan["source_ids"] else source)
         for hit in attempt["result"]["observation"]["normalized"]["hits"]:
             fetches.add((fetch_source, hit["url"]))
+            if spec.kind == "page":
+                fetches.update((fetch_source, attachment["url"]) for attachment in hit.get("attachments", []))
     for attempt in bundle["attempts"]:
         if attempt["operation"] == "fetch" and "observation" in attempt["result"]:
             for attachment in attempt["result"]["observation"]["normalized"].get("attachments", []):
                 fetches.add((attempt["source_id"], attachment["url"]))
     for attempt in bundle["attempts"]:
-        source, parameters = attempt["source_id"], attempt["request"]["parameters"]
+        source = attempt["source_id"]
+        parameters = _source_parameters(registry.get(source), attempt["operation"], attempt["request"]["parameters"],
+            research_work=(replay.policy or {}).get("research_work") is not None)
         if source not in plan["source_ids"] or attempt["request_sha256"] != _hash(attempt["request"]):
             _fail()
         stage = replay.attempt_stages.get(attempt["attempt_id"])
@@ -644,7 +1010,7 @@ def _verify_attempt_plan(replay, registry, bundle, plan, initial_documents, roun
             _fail(stage)
 
 
-def _verify_phase_status(archive, snapshot, bundle, plan):
+def _verify_phase_status(archive, snapshot, bundle, plan, *, research_work_policy=None):
     status = snapshot["status"]
     events = archive.events(bundle["job_id"])[:status["revision"]]
     phase_ids = {event["payload"]["attempt_id"] for event in events if event["kind"] == "attempt_started"}
@@ -661,6 +1027,15 @@ def _verify_phase_status(archive, snapshot, bundle, plan):
         "revision": len(events), "created_at": archive.status(bundle["job_id"])["created_at"],
         "plan_hash": plan["plan_hash"], "gaps": _project_gaps(events), "attempts": attempts,
         "inflight_attempts": [], "usage": usage, "effective_concurrency": 1, "bundle": None}
+    if research_work_policy is not None:
+        from .work_proof import source_runtime_from_events, source_usage
+        expected["usage"] = source_usage(attempts)
+        runtime = source_runtime_from_events(events, configured_workers=research_work_policy["source_workers"],
+                                             concurrency_limit=plan["limits"]["concurrency"])
+        if runtime is not None:
+            expected.update(source_runtime=runtime, effective_concurrency=runtime["peak_source_operations"])
+        elif plan.get("acquisition_mode") != "snapshot_only":
+            _fail()
     _same(status, expected)
     created = datetime.fromisoformat(expected["created_at"])
     if (events[0]["kind"] != "job_created" or created.utcoffset() is None
@@ -675,6 +1050,12 @@ def _verify_phase_status(archive, snapshot, bundle, plan):
 
 def _verify_acquisition(replay):
     packet = validate_input_packet(read_json(replay.run, "intelligence-input.json"))
+    mode = acquisition_mode(packet["config"])
+    if mode == "snapshot_only":
+        for stage, output in replay.outputs.items():
+            if any(call["method"] in {"model.deepseek.search", "model.deepseek.fetch", "intelligence.source.request"}
+                   for call in output["io_calls"]):
+                _fail(stage)
     if replay.policy is not None:
         _same(replay.policy["intelligence"], {**acquisition_policy(), "input_sha256": value_hash(packet)})
         for key, expected in {"source_content_contract": SOURCE_CONTENT_CONTRACT,
@@ -695,9 +1076,14 @@ def _verify_acquisition(replay):
     _same(finput["market_snapshot_ref"], replay.ends["data.prepare"]["output_ref"], "intelligence.frontier")
     from ..markets import get_market
     spec = get_market("us")
+    research_scope = None
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_proof import verified_research_scope
+        research_scope = verified_research_scope(replay)
     verify_frontier(frontier, numeric, finput["universe"], as_of=replay.cutoff,
         market_snapshot_ref=replay.ends["data.prepare"]["output_ref"],
-        portfolio_state=finput["portfolio_state"], scan_filters=spec.scan_filters(), sector_symbols=spec.sector_symbols)
+        portfolio_state=finput["portfolio_state"], scan_filters=spec.scan_filters(), sector_symbols=spec.sector_symbols,
+        **({"research_scope": research_scope} if research_scope is not None else {}))
     _same(frontier["security_ids"], prepared["security_roster"]["symbols"], "intelligence.frontier")
     plan = build_plan({"run_id": replay.run.name, "as_of": replay.cutoff.isoformat(), "market": "us",
         "universe": frontier["security_ids"], "entities": entity_registry(frontier)["entities"],
@@ -705,7 +1091,8 @@ def _verify_acquisition(replay):
         "market_snapshot_refs": frontier["market_snapshot_refs"], "holdings": frontier["holdings"], "pending": frontier["pending"],
         "watchlist": frontier["watchlist"], "topics": semantic.acquisition_topics({**CHAIN_TOPICS, **SECTOR_TOPICS}),
         "baseline_refs": ([{"manifest_sha256": packet["baseline"]["manifest"]["manifest_sha256"]}]
-                          if packet["baseline"] else []), "limits": dict(TOOL_LIMITS)}, registry)
+                          if packet["baseline"] else []), "limits": dict(TOOL_LIMITS),
+        **({"acquisition_mode": "snapshot_only"} if mode == "snapshot_only" else {})}, registry)
     freeze = replay.value("intelligence.freeze")
     archive_root = replay.run / "intelligence"
     checked_root(archive_root)
@@ -728,7 +1115,16 @@ def _verify_acquisition(replay):
     archive = Archive(archive_root, readonly=True)
     bundle = verify_bundle(archive_root, freeze["bundle_id"], expected_plan_hash=plan["plan_hash"],
         expected_registry_sha256=registry.public_manifest()["sha256"])
-    _same(freeze, bundle, "intelligence.freeze")
+    if (replay.policy or {}).get("research_work") is not None:
+        from ..research_work import validate_research_work_policy
+        validate_research_work_policy(replay.policy["research_work"])
+        if not isinstance(freeze, dict) or set(freeze) != set(bundle) | {"research_snapshot"}:
+            _fail("intelligence.freeze")
+        _same({key: value for key, value in freeze.items() if key != "research_snapshot"},
+              bundle, "intelligence.freeze")
+        # Its source/fact/coverage binding is recomputed after clean replay.
+    else:
+        _same(freeze, bundle, "intelligence.freeze")
     _same(archive.plan(bundle["job_id"]), plan, "intelligence.freeze")
     _verify_baseline(packet, bundle)
     expected_job = "intel_" + _hash({"tenant": "public", "replay_key": "daily:" + replay.run.name,
@@ -750,11 +1146,14 @@ def _verify_acquisition(replay):
             or row["result"].get("request_count") != 0
             or row["result"].get("usage", {}).get("state") != "not_sent" for row in absent)):
         _fail()
-    _verify_document_attempts(bundle, packet)
+    _verify_document_attempts(bundle, packet, research_work=(replay.policy or {}).get("research_work") is not None)
     usage = {"requests": sum(row["result"]["request_count"] for row in attempts),
         "fetches": sum(row["operation"] == "fetch" for row in attempts),
         "bytes": sum(row["result"]["bytes_received"] for row in attempts),
         "unreconciled_attempts": sum(bool(row["result"]["usage"].get("requires_reconciliation")) for row in attempts)}
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_proof import source_usage
+        usage = source_usage(attempts)
     _same(bundle["usage"], usage)
     if any(usage[key] > plan["limits"][key] for key in ("requests", "fetches", "bytes")):
         _fail()
@@ -767,9 +1166,12 @@ def _verify_acquisition(replay):
             _fail(stage)
         documents = _phase_documents(archive, expected_job, snapshot["status"]["revision"])
         _same(snapshot["entity_registry"], _entity_registry(plan, documents), stage)
-        _verify_phase_status(archive, snapshot, bundle, plan)
+        _verify_phase_status(archive, snapshot, bundle, plan,
+            research_work_policy=(replay.policy or {}).get("research_work"))
         phases.append(documents)
     _verify_attempt_plan(replay, registry, bundle, plan, phases[0], snapshots[1]["rounds"])
+    if mode == "snapshot_only":
+        _verify_snapshot_only(archive, bundle, plan, snapshots, phases)
     initial = project_to_rawdocuments(phases[0])
     collection = replay.value("search.collect")
     _same(collection, {"documents": initial, "topics": {**CHAIN_TOPICS, **SECTOR_TOPICS}, "batches": [],
@@ -777,7 +1179,11 @@ def _verify_acquisition(replay):
         "acquisition": snapshots[0]}, "search.collect")
     if snapshots[0]["rounds"]:
         _fail("search.collect")
-    base = rule_base_clean(initial, preserve_source=True)
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_semantics import validate_raw_documents
+        base = validate_raw_documents(initial)
+    else:
+        base = rule_base_clean(initial, preserve_source=True)
     _same(replay.inputs["clean.rule_base"], {"documents": initial,
         "source_content_contract": SOURCE_CONTENT_CONTRACT}, "clean.rule_base")
     _same(replay.value("clean.rule_base"), {"documents": base}, "clean.rule_base")
@@ -785,7 +1191,54 @@ def _verify_acquisition(replay):
     return registry, archive, bundle, frontier, plan, snapshots, phases, market
 
 
+def _verify_snapshot_only(archive, bundle, plan, snapshots, phases):
+    """Rebuild the no-dispatch record from imported raw versions and events."""
+    expected_usage = {"requests": 0, "fetches": 0, "bytes": 0, "unreconciled_attempts": 0}
+    imported = {version["id"] for receipt in bundle["baseline_refs"] for version in receipt["versions"]}
+    if (not imported or bundle["attempts"] or bundle["usage"] != expected_usage
+            or any({document["id"] for document in phase} != imported for phase in phases)):
+        _fail("intelligence.freeze")
+    events = [event for event in archive.events(bundle["job_id"])
+              if event["sequence"] <= bundle["event_head"]["sequence"]]
+    collections = [event for event in events if event["kind"] == "snapshot_collection_completed"]
+    if len(collections) != 1:
+        _fail("search.collect")
+    collection = collections[0]
+    payload = collection["payload"]
+    if (payload.get("state") not in {"partial", "budget_exhausted"}
+            or collection["sequence"] > snapshots[0]["status"]["revision"]):
+        _fail("search.collect")
+    _same(payload, {"mode": "snapshot_only", "document_ids": sorted(imported),
+        "documents_sha256": _hash(phases[0]), "state": payload["state"], "request_count": 0, "bytes_received": 0}, "search.collect")
+    starts = [event for event in events if event["kind"] == "research_started"]
+    unavailable = [event for event in events if event["kind"] == "research_unavailable"]
+    completions = [event for event in events if event["kind"] == "research_completed"]
+    if not len(starts) == len(unavailable) == len(completions) <= plan["limits"]["rounds"] - 1:
+        _fail("clean.llm_semantic")
+    cells = {cell["cell_id"]: cell for cell in plan["coverage_cells"]}
+    for index, (start, denied, complete) in enumerate(zip(starts, unavailable, completions, strict=True)):
+        number = index + 2
+        before = _project_gaps(events[:start["sequence"] - 1])
+        requested = [gap["cell_id"] for gap in before if gap["required"] and gap["status"] != "present"]
+        gaps = [gap for gap in before if gap["cell_id"] in requested]
+        _same(start["payload"], {"round": number, "gap_ids": requested, "gaps": gaps,
+            "replay_key": None, "requested_gap_ids": requested, "query_plan": [], "mode": "snapshot_only"}, "clean.llm_semantic")
+        if not collection["sequence"] < start["sequence"] < denied["sequence"] < complete["sequence"]:
+            _fail("clean.llm_semantic")
+        expired = complete["payload"].get("state") == "budget_exhausted"
+        _same(complete["payload"], {"round": number, "state": "budget_exhausted" if expired else "unavailable",
+            "mode": "snapshot_only"}, "clean.llm_semantic")
+        _same(denied["payload"], {"round": number, "mode": "snapshot_only",
+            "reason": "BUDGET_EXHAUSTED" if expired else "SNAPSHOT_ONLY_NO_LIVE_ACQUISITION",
+            "code": "BUDGET_EXHAUSTED" if expired else "POLICY_DENIED",
+            "gap_ids": [gap["cell_id"] for gap in gaps if cells[gap["cell_id"]]["material_type"] != "connection"],
+            "request_count": 0, "bytes_received": 0}, "clean.llm_semantic")
+
+
 def _verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, phases):
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_proof import verify_clean
+        return verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, phases)
     stage = "clean.llm_semantic"
     calls = [item for item in replay.io(stage) if item[0]["method"] == "model.deepseek.chat"]
     rounds = snapshots[1]["rounds"]
@@ -850,6 +1303,9 @@ def _verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, 
 
 
 def _analysis(replay, stage, docs, targets):
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_proof import verify_analysis_call
+        return verify_analysis_call(replay, stage, docs, targets)
     sources = target_evidence_sources(docs, targets)
     coverage = target_evidence_coverage(docs, targets)
     schema_fn = {"tech.sentiment": sentiment_schema, "tech.risk": risk_schema,
@@ -950,7 +1406,17 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
     calls = list(replay.io(stage))
     if len(calls) != 1:
         _fail(stage)
-    output = replay.chat(stage, *calls[0], payload, schema)
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_proof import verify_decision_call
+        output = verify_decision_call(replay, calls[0][0], payload, schema,
+            numeric_context={"picks": bound["picks"], "watchlist": bound["watchlist"],
+                "market_data": market, "action": bound["action"], "mrs": bound["mrs"],
+                "sectors": bound["sectors"], "rejections": bound["rejections"],
+                "pick_rationale": bound["rationale"],
+                "trade_date": replay.inputs["layer4.risk"]["trade_date"]},
+            account_usd=inputs["account_usd"])
+    else:
+        output = replay.chat(stage, *calls[0], payload, schema)
     rows = output["decisions"]
     if len(rows) != len(symbols) or {row["symbol"] for row in rows} != set(symbols):
         _fail(stage)
@@ -978,6 +1444,10 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
             "valid_for": valid_for, "reference_capital_usd": inputs["account_usd"]})
     value = {"status": "model_required", "triggered": symbols, "evidence": {}, "model_output": output,
         "execution_decisions": instructions, "action_summary": output["action_summary"], "company_evidence": company}
+    if (replay.policy or {}).get("research_work") is not None:
+        from .work_proof import verify_decision_outcome
+        verify_decision_outcome(replay, value, selected_symbols=[symbol for symbol in picks if symbol in buys],
+            pick_rationale={key: item for key, item in bound["rationale"].items() if key in buys})
     _same(replay.value(stage), value, stage)
     raw = result["raw"]
     _same(raw["debate"], value, stage)
@@ -988,9 +1458,241 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
         _fail(stage)
 
 
+def _partial_events(run, contract, *, event_relative="events.jsonl"):
+    """Verify an explicit completed prefix ending in one failed stage."""
+    from .json_observation import SUPPORTED_CONTRACTS, contract_schemas
+
+    policy = read_json(run, "policy.json")
+    observation_contract = policy["model_contract"].get("response_observation_contract", "")
+    if observation_contract not in SUPPORTED_CONTRACTS:
+        _fail()
+    schemas = contract_schemas(observation_contract)
+
+    if event_relative != "events.jsonl":
+        from ..research_work import validate_research_work_policy
+        if (type(event_relative) is not str or re.fullmatch(
+                r"parent-attempts/[0-9]{1,12}/events\.jsonl", event_relative) is None
+                or policy.get("research_work") is None):
+            _fail()
+        validate_research_work_policy(policy["research_work"])
+    raw = read_bytes(run, event_relative, limit=16 * 1024 * 1024)
+    if not raw.endswith(b"\n"):
+        _fail()
+    events = [strict_json(line) for line in raw.splitlines()]
+    if not events or len(events) % 2 or len(events) > 2 * len(contract):
+        _fail()
+    previous, previous_output = None, None
+    fields = {"schema", "run_id", "sequence", "stage_index", "stage", "kind", "status",
+              "input_ref", "output_ref", "previous_stage_ref", "reason", "error_type",
+              "previous_event_sha256", "event_sha256"}
+    for index in range(len(events) // 2):
+        begin, end = events[index * 2:index * 2 + 2]
+        stage = contract[index]["name"]
+        terminal = index == len(events) // 2 - 1
+        for offset, row in enumerate((begin, end)):
+            if (type(row) is not dict or set(row) != fields
+                    or row["schema"] != "tiger.execution-event.v1" or row["run_id"] != run.name
+                    or type(row["sequence"]) is not int or row["sequence"] != 2 * index + offset + 1
+                    or type(row["stage_index"]) is not int or row["stage_index"] != index + 1
+                    or row["stage"] != stage or row["kind"] != ("begin" if offset == 0 else "end")
+                    or row["previous_event_sha256"] != previous
+                    or row["previous_stage_ref"] != previous_output
+                    or row["event_sha256"] != digest(json_bytes({key: value for key, value in row.items()
+                                                               if key != "event_sha256"}))):
+                _fail(stage)
+            previous = row["event_sha256"]
+        invalid_end = ((end["status"] != "failed" or type(end["error_type"]) is not str or not end["error_type"])
+                       if terminal else (end["status"] != "completed" or end["error_type"] is not None))
+        if (begin["status"] != "running" or begin["output_ref"] is not None
+                or begin["reason"] is not None or begin["error_type"] is not None
+                or begin["input_ref"] != end["input_ref"] or end["reason"] is not None
+                or invalid_end):
+            _fail(stage)
+        read_snapshot(run, begin["input_ref"], run_id=run.name, stage=stage, role="input")
+        output = read_snapshot(run, end["output_ref"], run_id=run.name, stage=stage, role="output")
+        if terminal:
+            expected = {"schema", "response_observation_contract", "io_calls"}
+            valid = (type(output) is dict and set(output) == expected
+                and output["schema"] == schemas["failed_stage"]
+                and output["response_observation_contract"] == observation_contract)
+            valid = valid or (type(output) is dict and set(output) == {"schema", "value", "io_calls"}
+                and output["schema"] == "tiger.stage-output.v1")
+        else:
+            valid = (type(output) is dict and set(output) == {"schema", "value", "io_calls"}
+                and output["schema"] == "tiger.stage-output.v1")
+        if not valid or type(output["io_calls"]) is not list:
+            _fail(stage)
+        for number, call in enumerate(output["io_calls"], 1):
+            if (type(call) is not dict or type(call.get("index")) is not int or call["index"] != number
+                    or type(call.get("method")) is not str or not call["method"]
+                    or any(char in call["method"] for char in "\r\n")
+                    or ("output_ref" in call) == ("error_ref" in call)
+                    or set(call) != {"index", "method", "input_ref",
+                                     "error_ref" if "error_ref" in call else "output_ref"}):
+                _fail(stage)
+            read_snapshot(run, call["input_ref"], run_id=run.name, stage=stage, role="input")
+            value = read_snapshot(run, call.get("output_ref", call.get("error_ref")),
+                run_id=run.name, stage=stage, role="output")
+            if "error_ref" in call:
+                base = {"error_type", "message", "outcome_observed"}
+                if (type(value) is not dict or not base.issubset(value)
+                        or set(value) - base - {"diagnostic", "response_observation"}
+                        or type(value["error_type"]) is not str or not value["error_type"]
+                        or value["message"] != "External call failed"
+                        or type(value["outcome_observed"]) is not bool):
+                    _fail(stage)
+                if "diagnostic" in value:
+                    if (call["method"] not in {"model.deepseek.chat", "model.deepseek.search", "model.deepseek.fetch"}
+                            or value["error_type"] != "RequiredModelUnavailable"):
+                        _fail(stage)
+                    validate_model_diagnostic(value["diagnostic"])
+                if "response_observation" in value and (call["method"] != "model.deepseek.chat"
+                        or value["error_type"] != "RequiredModelUnavailable"):
+                    _fail(stage)
+        previous_output = end["output_ref"]
+    return events
+
+
+def _partial_chat_request(request, stage, scene_policy_path, *, counter_contract=None,
+                          rejected_native_contract=None):
+    """Check the journal's entire wire and legal window, without business acceptance."""
+    from .json_observation import SUPPORTED_CONTRACTS, TOOL_CONTRACT, contract_schemas
+
+    observation_contract = request.get("response_observation_contract")
+    if observation_contract not in SUPPORTED_CONTRACTS:
+        _fail(stage)
+    if (request.get("rejected_native_contract") != rejected_native_contract
+            or rejected_native_contract is None and "rejected_native_contract" in request):
+        _fail(stage)
+    schemas = contract_schemas(observation_contract)
+    thinking = scene_config(KERNEL_SCENE_MAP[stage], scene_policy_path)["thinking"]
+    body = request["request"]
+    tool_protocol = request.get("clean_protocol") is not None
+    if tool_protocol:
+        from .clean_keyed_codec import CONTRACT as CLEAN_CONTRACT
+        from .model_budget import clean_tool_request_core
+        if (observation_contract != TOOL_CONTRACT or stage != "clean.llm_semantic"
+                or request["clean_protocol"] != {"contract": CLEAN_CONTRACT}):
+            _fail(stage)
+        prototype = clean_tool_request_core(system="TEST_FIXTURE unused", user="TEST_FIXTURE unused",
+            schema=request["output_schema"], schema_hint={}, thinking_mode=thinking["type"],
+            effort=thinking.get("effort"), temperature=.2, clean_protocol=request["clean_protocol"])
+        if (set(body) != set(prototype) | {"max_tokens"} or body.get("tools") != prototype["tools"]
+                or body.get("tool_choice") != prototype["tool_choice"] or body.get("temperature") != .2
+                or not isinstance(body.get("messages"), list) or len(body["messages"]) != 2
+                or any(not isinstance(message, dict) or set(message) != {"role", "content"}
+                       or message["role"] != role or not isinstance(message["content"], str)
+                       or not message["content"].strip()
+                       for message, role in zip(body["messages"], ("system", "user"), strict=True))):
+            _fail(stage)
+    elif observation_contract == TOOL_CONTRACT and any(key in body for key in ("tools", "tool_choice")):
+        _fail(stage)
+    selected = budget_contract() if counter_contract is None else counter_contract
+    rebuilt, estimate, ceiling = plan_request(
+        {key: value for key, value in body.items() if key != "max_tokens"},
+        counter_id=selected["counter_id"])
+    metadata = {"thinking_mode": thinking["type"], "reasoning_effort": thinking.get("effort"),
+        "input_token_estimate": estimate, "output_ceiling": ceiling,
+        **{key: selected[key] for key in ("policy_version", "registry_version", "tokenizer_sha256")}}
+    if (request["schema"] != schemas["request"]
+            or type(request["call_id"]) is not str or re.fullmatch(r"[0-9a-f]{32}", request["call_id"]) is None
+            or request["stage"] != stage or request["provider"] != "deepseek"
+            or request["method"] != "POST" or request["endpoint"] != (
+                "https://api.deepseek.com/beta/chat/completions" if tool_protocol
+                else "https://api.deepseek.com/chat/completions")
+            or request["release"] != RELEASE or request["scene"] != KERNEL_SCENE_MAP[stage]
+            or request["request_sha256"] != _hash(body) or body != rebuilt
+            or body.get("model") != MODEL or body.get("stream") is not False
+            or ("response_format" in body if tool_protocol else body.get("response_format") != {"type": "json_object"})
+            or body.get("thinking") != {"type": thinking["type"]}
+            or (body.get("reasoning_effort") != thinking.get("effort")
+                if thinking["type"] == "enabled" else "reasoning_effort" in body)
+            or request["schema_sha256"] != _hash(request["output_schema"])
+            or any(request.get(key) != value for key, value in metadata.items())):
+        _fail(stage)
+    return metadata
+
+
+def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None,
+                                      event_relative="events.jsonl"):
+    """Account for explicitly bound failed-run observations; never certify a study."""
+    try:
+        from .json_observation import SUPPORTED_CONTRACTS, TOOL_CONTRACT, contract_schemas
+
+        replay = _Replay(run, admission, scene_policy_path, _partial=True,
+                         _event_relative=event_relative)
+        if replay.observation_contract not in SUPPORTED_CONTRACTS:
+            _fail()
+        schemas = contract_schemas(replay.observation_contract)
+        rows, stopped, other_model_io = [], False, 0
+        for stage in replay.outputs:
+            for call, request, proof in replay.io(stage):
+                if stopped:
+                    _fail(stage)
+                if call["method"] != "model.deepseek.chat":
+                    other_model_io += call["method"] in {"model.deepseek.search", "model.deepseek.fetch"}
+                    continue
+                if stage not in REQUIRED_MODEL_STAGES or request["call_id"] in replay.call_ids:
+                    _fail(stage)
+                replay.call_ids.add(request["call_id"])
+                metadata = _partial_chat_request(request, stage, scene_policy_path,
+                    counter_contract=replay.budget_contract,
+                    rejected_native_contract=((replay.policy or {}).get("research_work") or {}).get("rejected_native_contract"))
+                if "error_ref" in call:
+                    observation = proof.get("response_observation")
+                    if observation is None:
+                        _fail(stage)
+                    attempts = replay._observed_attempts(stage, request, observation)
+                    if attempts[-1][2]["diagnostic"] is None:
+                        _fail(stage)
+                    _same(proof.get("diagnostic"), attempts[-1][2]["diagnostic"], stage)
+                    stopped = True
+                else:
+                    if (proof["schema"] != schemas["call"] or proof["provider"] != "deepseek"
+                            or proof["stage"] != stage or proof["call_id"] != request["call_id"]
+                            or proof["model"] != MODEL or proof["requested_model"] != MODEL
+                            or proof["release"] != RELEASE or proof["finish_reason"] != (
+                                "tool_calls" if request.get("clean_protocol") is not None else "stop")
+                            or proof["scene"] != KERNEL_SCENE_MAP[stage]
+                            or proof["request_sha256"] != request["request_sha256"]
+                            or proof["schema_sha256"] != request["schema_sha256"]
+                            or proof["search_mode"] != NATIVE_SEARCH_MODE
+                            or any(proof.get(key) != value for key, value in metadata.items())):
+                        _fail(stage)
+                    attempts = replay._chat_observation(stage, request, proof)
+                    replay.counts[stage] += 1
+                for reference, native, result in attempts:
+                    usage = result["usage"]
+                    from .rejected_native import response_identity
+                    rows.append({"stage": stage, "call_id": request["call_id"],
+                        "request_sha256": request["request_sha256"], "ordinal": reference["ordinal"],
+                        "observation_ref": reference["observation_ref"],
+                        "response_id": response_identity(native)[0],
+                        "diagnostic": result["diagnostic"], "state": "known_usage" if usage is not None else "usage_unknown",
+                        "usage": usage, "requires_reconciliation": usage is None})
+        summary = {"schema": "tiger.failed-model-accounting/v3" if replay.observation_contract == TOOL_CONTRACT
+                          else "tiger.failed-model-accounting/v2", "run_id": replay.run.name,
+            "response_observation_contract": replay.observation_contract, "business_completed": False,
+            **replay.chat_accounting(other_model_io_count=other_model_io),
+            "all_required_completed": False, "failure_stage": replay.events[-1]["stage"],
+            "event_tail_sha256": replay.events[-1]["event_sha256"],
+            "stage_counts": replay.counts, "observed_attempts": rows,
+            "request_binding": "explicit-stage-IO-and-complete-wire-window",
+            "scope": "Failed-run model observations and accounting only; business evidence is not certified."}
+        if (replay.policy or {}).get("research_work") is not None:
+            from .work_proof import merge_partial_work_accounting
+            return {**merge_partial_work_accounting(replay, summary), "parent_event_relative": event_relative}
+        return summary
+    except EvidenceInvalid:
+        raise
+    except (KeyError, ValueError, TypeError, IndexError, AttributeError, OSError, IntelligenceError,
+            LLMUnavailable, RequiredModelFailed, TokenBudgetError, ExecutionContractError, ScenePolicyError, OverflowError):
+        _fail()
+
+
 def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
         source_content_contract=None, company_evidence_contract=None,
-        event_contract=None, risk_evidence_contract=None):
+        event_contract=None, risk_evidence_contract=None, response_observation_contract=None):
     """Replay the new profile without changing the historical required proof."""
     try:
         for actual, expected in ((source_content_contract, SOURCE_CONTENT_CONTRACT),
@@ -999,12 +1701,17 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
             if actual is not None and actual != expected:
                 _fail()
         replay = _Replay(run, admission, scene_policy_path)
+        if response_observation_contract is not None and response_observation_contract != replay.observation_contract:
+            _fail()
         if (result["raw"].get("paper_execution_version") == "tiger.paper-execution.v1") != replay.authoritative_paper:
             _fail()
         registry, archive, bundle, frontier, plan, snapshots, phases, market = _verify_acquisition(replay)
         cleaned, scored, stats = _verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, phases)
         signals = _verify_analysis(replay, scored)
         _verify_decision(replay, cleaned, frontier, bundle, market, result)
+        if (replay.policy or {}).get("research_work") is not None:
+            from .work_proof import work_proof
+            work_proof(replay).assert_complete()
         if not all(replay.counts.values()):
             _fail()
         summary = {"provider": "deepseek", "model": MODEL, "release": RELEASE, "required": True,
@@ -1027,6 +1734,16 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
                 or result["raw"]["docs_cleaned"] != len(cleaned) or result["raw"]["docs_semantic_degraded"] != 0):
             _fail()
         raw = result["raw"]["intelligence"]
+        if (replay.policy or {}).get("research_work") is not None:
+            from ..research_risk import pending_risk_leads
+            from ..research_followup import pending_candidates
+            from ..research_work import work_manifest
+            from .work_proof import verify_source_index, verify_report_identity
+            verify_report_identity(result["raw"], reported["raw"], admission)
+            verify_source_index(raw, reported["raw"]["intelligence"], cleaned)
+            _same(raw.get("pending_risk"), pending_risk_leads(cleaned, plan))
+            _same(raw.get("pending_candidates"), pending_candidates(frontier,
+                replay.value("layer0.scan")["scan_decisions"], work_manifest(admission)))
         _same(raw["exclusions"], reported["raw"]["intelligence"]["exclusions"], "report.emit")
         _same(raw["bundle"], {key: bundle[key] for key in ("bundle_id", "manifest_sha256", "state",
             "missing_required", "usage", "frozen_at", "frontier_manifest_hash")})
@@ -1049,10 +1766,23 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
                 or raw["gaps"] != disclosed_gaps or raw["source_registry_sha256"] != registry.public_manifest()["sha256"]
                 or raw["holdings_connection"] != ("unknown" if frontier["holdings"] is None else "connected")):
             _fail()
+        packet = validate_input_packet(read_json(replay.run, "intelligence-input.json"))
+        if acquisition_mode(packet["config"]) == "snapshot_only":
+            if raw.get("acquisition_mode") != "snapshot_only":
+                _fail()
+        elif "acquisition_mode" in raw:
+            _fail()
+        if packet["baseline"] and packet["baseline"]["manifest"]["schema"] == "topic_snapshot/v1":
+            manifest = packet["baseline"]["manifest"]
+            _same(raw.get("baseline_snapshot"), {key: manifest[key] for key in
+                ("snapshot_id", "manifest_sha256", "cutoff", "state", "counts", "gaps")})
         # Cheap binding failures reject before the more expensive numerical
         # replay. Every accepted proof still recomputes all eight rule stages.
         from ..intelligence_scoring_proof import verify_intelligence_scoring
         verify_intelligence_scoring(run, replay.ends, admission)
+        if replay.observation_contract:
+            summary = {**summary, "chat_accounting": replay.chat_accounting(
+                other_model_io_count=len(replay.native_searches) + len(replay.native_fetches))}
         return summary
     except EvidenceInvalid:
         raise

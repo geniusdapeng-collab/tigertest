@@ -10,6 +10,7 @@ import re
 
 from . import config
 from .data_models import PipelineResult
+from .research_status import AXIS_LABELS, GATE_LABELS, GATE_STATES, project_research_status, state_label
 
 
 def _market_name(raw: dict) -> str:
@@ -224,20 +225,22 @@ def company_evidence_note(raw: dict) -> str:
     return note
 
 
-def model_instruction_fields(item: dict) -> list[tuple[str, str]]:
+def model_instruction_fields(item: dict, *, exact: bool = False) -> list[tuple[str, str]]:
     """Describe a verified plan without computing new execution values."""
+    def money(value):
+        return format(value, ",") if exact else format(value, ",.2f")
     market = item["market_evidence"][0]
     plan = "仅观察，未提供下单价格或股数。"
     if item["action"] == "buy":
-        plan = (f"入场参考 USD {item['entry_price']:,.2f} · 止损 USD {item['stop_price']:,.2f} · "
+        plan = (f"入场参考 USD {money(item['entry_price'])} · 止损 USD {money(item['stop_price'])} · "
                 f"{item['shares']} 股 · 目标仓位 {item['target_weight']:.1%} · "
-                f"计划风险 USD {item['risk_usd']:,.2f} · "
-                f"资金基准 USD {item['reference_capital_usd']:,.2f}")
+                f"计划风险 USD {money(item['risk_usd'])} · "
+                f"资金基准 USD {money(item['reference_capital_usd'])}")
         if item["time_stop_days"] is not None:
             plan += f" · 时间止损 {item['time_stop_days']} 个交易日"
     return [
         ("为什么关注", item["why_this"]), ("为什么现在", item["why_now"]),
-        ("行情依据", f"{market['symbol']} · {market['as_of']} 日线收盘 USD {market['close']:,.2f}"),
+        ("行情依据", f"{market['symbol']} · {market['as_of']} 日线收盘 USD {money(market['close'])}"),
         ("纸面计划", plan), ("入场条件", item["entry_condition"]),
         ("失效条件", item["invalidation"]), ("主要风险", item["risk_note"]),
         ("有效至（纽约时间）", item["valid_for"]),
@@ -258,6 +261,91 @@ def model_source_html(source: dict, *, markdown: bool = False) -> str:
     if sanitize_url(url) == url:
         title = f'<a href="{escape(url)}" rel="noreferrer">{title}</a>'
     return f"{title}（{published}）"
+
+
+def report_research_status(raw: dict, action: str | None = None) -> dict | None:
+    """A sealed report is an observation before publication, never a receipt."""
+    if not isinstance(raw.get("intelligence"), dict):
+        return None
+    return project_research_status({**raw, **({"action": action} if action is not None else {})}, report_ready=True)
+
+
+def research_status_notes(status: dict) -> list[str]:
+    counts = status["counts"]["securities"]
+    evidence = status["axes"]["evidence"]
+    return [
+        "这是封存报告；流程结束不等于证据充分，纸面计划也不等于账户已经提交。账户状态以同一任务的核验回执为准。",
+        f"冻结范围内必需问题 {evidence['required']} 项，已取得合格事实 {evidence['present']} 项，待补足 {evidence['missing']} 项。",
+        f"逐证券共 {counts['total']} 只：纸面买入计划 {counts['buy']}、合格观察 {counts['qualified_hold']}、"
+        f"等待证据 {counts['wait_evidence']}、待补查 {counts['pending_research']}、本轮未入选 {counts['not_selected']}、"
+        f"尚未完成判断 {counts['not_assessed']}。",
+        "合格观察只表示该证券的研究依据与判断已满足检查条件，不表示账户持有它。待补查的证券未完成本轮研究，不能计作研究后否决。",
+        "缺口补足后须重新完成相关检查；冻结范围外的候选需要新的明确研究任务、行情与账户检查，不能沿用本报告的交易许可。",
+    ]
+
+
+def research_source_anchor(identity: str) -> str:
+    import hashlib
+    return "research-source-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+
+
+def research_source_html(source: dict, *, markdown: bool = False) -> str:
+    """All original sources, including unused and partial ones, stay navigable."""
+    return model_source_html({"title": source.get("title") or source["id"],
+        "url": source.get("url") or "", "published_at": source.get("published_at")}, markdown=markdown)
+
+
+def research_security_fields(row: dict) -> list[tuple[str, str]]:
+    fields = [("证券身份", row.get("security_id") or "报告未提供"),
+              ("本轮状态", state_label(row["state"])), ("证据状态", state_label(row["evidence_state"]))]
+    if row["state"] == "PENDING_RESEARCH":
+        fields.append(("下一步", "另建明确的补充研究任务，重新取得行情、资料及账户检查；原决定保持不变。"))
+    if row["missing_required"]:
+        fields.append(("待补证据", "；".join(f"{item.get('target_label', item.get('target_id', ''))}："
+            f"{item.get('question', item['cell_id'])}（{_intelligence_gap_reason(item)}）"
+            for item in row["missing_required"])))
+    if row["block_reasons"]:
+        fields.append(("本轮限制记录", "；".join(row["block_reasons"])))
+    item = row["instruction"]
+    if item is not None:
+        fields.append(("原始判断", item["action_summary"]))
+        fields.extend(model_instruction_fields(item, exact=True))
+    else:
+        fields.append(("纸面计划", "未产生单票执行决定；报告不补算价格、股数或风险预算。"))
+    return fields
+
+
+def research_status_markdown(status: dict) -> list[str]:
+    lines = ["## 研究进度与交付状态", "", f"任务：{_markdown_text(status['run_id'] or '原始报告未提供任务编号')}", "",
+             "| 维度 | 本轮记录 |", "|---|---|"]
+    lines.extend(f"| {label} | {state_label(status['axes'][key]['state'])} |" for key, label in AXIS_LABELS.items())
+    lines.extend(["", *["- " + _markdown_text(note) for note in research_status_notes(status)], "",
+                  "## 逐证券证据与决策", ""])
+    if not status["securities"]:
+        lines.extend(["本报告没有逐证券记录；缺少记录不能解释为研究后否决或已经空仓。", ""])
+    for row in status["securities"]:
+        lines.extend([f"### {_markdown_text(row['symbol'])} · {state_label(row['state'])}", ""])
+        for label, value in research_security_fields(row):
+            lines.append(f"- **{label}**：{_markdown_text(value)}")
+        for gate, detail in row["gates"].items():
+            reasons = "；".join(detail["reasons"])
+            lines.append(f"- **{GATE_LABELS.get(gate, gate)}**：{GATE_STATES[detail['status']]}"
+                         + ("（" + _markdown_text(reasons) + "）" if reasons else ""))
+        if row["source_ids"]:
+            lines.append("- **原文导航**：" + "、".join(
+                f"[{_markdown_text(identity)}](#{research_source_anchor(identity)})" for identity in row["source_ids"]))
+        else:
+            lines.append("- **原文导航**：本证券未记录可引用原文。")
+        lines.append("")
+    lines.extend(["## 完整来源目录", "", "目录包含本报告提供的每一份冻结原文与执行引用，部分原文仍可能缺失或不合格。", ""])
+    if not status["sources"]:
+        lines.extend(["本报告未提供来源目录；不能据此认定没有相关信息。", ""])
+    for source in status["sources"]:
+        lines.extend([f'<a id="{research_source_anchor(source["id"])}"></a>', "",
+            f"- **{_markdown_text(source['id'])}**：{research_source_html(source, markdown=True)}",
+            f"  - 提取完整性：{_markdown_text(str(source.get('completeness') or '未知'))}；"
+            f"内容校验：{_markdown_text(str(source.get('content_sha256') or '本报告未提供'))}", ""])
+    return lines
 
 
 def _intelligence_gap_reason(row: dict) -> str:
@@ -341,6 +429,7 @@ def render_markdown(r: PipelineResult) -> str:
     instructions = model_instructions(r.raw)
     mandatory_model = (r.raw.get("model") or {}).get("required") is True
     company_note = company_evidence_note(r.raw) if instructions is not None else ""
+    research_status = report_research_status(r.raw, r.action)
     lines: list[str] = []
     lines.append(f"# AI 短线{_market_name(r.raw)}交易日报 — {r.trade_date}")
     lines.append("")
@@ -365,6 +454,8 @@ def render_markdown(r: PipelineResult) -> str:
     lines.append("")
 
     # ---- 老板版四行看板（白皮书 §2.7）----
+    if research_status is not None:
+        lines.extend(research_status_markdown(research_status))
     lines.append("## 一、四行看板")
     lines.append("")
     if m:
@@ -385,7 +476,7 @@ def render_markdown(r: PipelineResult) -> str:
     lines.extend([f"**系统指令**：`{r.action}` — {overview}", ""])
     if company_note:
         lines.extend([_markdown_text(company_note), ""])
-    if instructions is not None:
+    if instructions is not None and research_status is None:
         lines.extend(["## 模型最终判断与执行条件（纸面研究）", ""])
         if not instructions:
             lines.extend(["本轮没有新增单票指令。", ""])

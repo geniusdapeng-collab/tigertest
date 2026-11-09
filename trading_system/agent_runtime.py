@@ -31,6 +31,9 @@ from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_
                                 INTELLIGENCE_SEARCH_SOURCES)
 from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
 from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
+from .llm.json_observation import (CONTRACT as RESPONSE_OBSERVATION_CONTRACT,
+    SOURCE_PATH as RESPONSE_OBSERVATION_RELATIVE, TOOL_CONTRACT as TOOL_OBSERVATION_CONTRACT,
+    TOOL_SOURCE_PATH, SUPPORTED_CONTRACTS as RESPONSE_OBSERVATION_CONTRACTS)
 
 PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
@@ -40,6 +43,11 @@ POLICY_ID = "tiger.public-paper-policy.v1"
 RUN_RE = re.compile(r"run-[0-9a-f]{32}\Z")
 KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{7,95}\Z")
 DEADLINE_SECONDS = 2400
+MAX_DEADLINE_SECONDS = 7200
+RUNTIME_POLICY_ENV = "TIGER_AGENT_RUNTIME_POLICY_FILE"
+RUNTIME_POLICY_SCHEMA = "tiger.agent-runtime-policy/v1"
+RUNTIME_INPUT_SCHEMA = "tiger.agent-runtime-input/v1"
+MAX_RUNTIME_POLICY_BYTES = 4096
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_ACCOUNT_FILES = frozenset({
     "journal.json", "sim_portfolio.json", "calibration_samples.json",
@@ -62,15 +70,126 @@ PAPER_LEDGER_CONTRACT = "tiger.paper-execution.v1"
 LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
 
 
+def source_observation_contract(files, profile):
+    """Select an observation version only from the actual frozen inventory."""
+    if profile != INTELLIGENCE_PROFILE:
+        return ""
+    paths = {item["path"] for item in files}
+    tool_files = {TOOL_SOURCE_PATH, "trading_system/llm/strict_clean_transport.py"}
+    if paths.intersection(tool_files):
+        if not tool_files.issubset(paths) or RESPONSE_OBSERVATION_RELATIVE not in paths:
+            raise EvidenceInvalid("RESULT_INVALID", "Strict clean frozen source is incomplete")
+        return TOOL_OBSERVATION_CONTRACT
+    return RESPONSE_OBSERVATION_CONTRACT if RESPONSE_OBSERVATION_RELATIVE in paths else ""
+
+
+def source_research_work_policy(files, profile, source_root: Path | None = None):
+    if profile != INTELLIGENCE_PROFILE:
+        return None
+    paths = {item["path"] for item in files}
+    required = {"trading_system/research_work.py", "trading_system/research_snapshot.py",
+                "trading_system/research_sources.py",
+                "trading_system/research_risk.py",
+                "trading_system/research_followup.py",
+                "trading_system/research_relations.py", "trading_system/research_resume.py",
+                "trading_system/research_replay.py", "trading_system/llm/rejected_native.py",
+                "trading_system/llm/work_required.py", "trading_system/llm/work_semantics.py",
+                "trading_system/llm/work_proof.py", "trading_system/tasks/contracts.py",
+                "trading_system/tasks/store.py", "trading_system/tasks/context.py",
+                "trading_system/tasks/scheduler.py", "trading_system/tasks/recovery.py"}
+    if "trading_system/research_work.py" not in paths:
+        return None
+    if not required <= paths:
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen research-work implementation is incomplete")
+    from .research_work import research_work_policy
+    legacy = False
+    if source_root is not None:
+        marker = read_bytes(source_root, "trading_system/research_work.py")
+        legacy = b"SEGMENT_CONTRACT" not in marker or b"segment_contract" not in marker
+    return research_work_policy(legacy=legacy)
+
+
+def validate_runtime_input(value: object, profile: str) -> dict:
+    """Validate the complete frozen extension, never an arbitrary policy flag."""
+    if (profile != INTELLIGENCE_PROFILE or not isinstance(value, dict)
+            or set(value) != {"schema", "profile", "business_deadline_seconds"}
+            or value.get("schema") != RUNTIME_INPUT_SCHEMA or value.get("profile") != profile
+            or type(value.get("business_deadline_seconds")) is not int
+            or not DEADLINE_SECONDS <= value["business_deadline_seconds"] <= MAX_DEADLINE_SECONDS):
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen business runtime input is invalid")
+    return dict(value)
+
+
+def startup_runtime_input(profile: str | None = None) -> dict | None:
+    """Only a trusted startup file can extend the intelligence-paper wall.
+
+    The two-field file contains no path, credential, model, stage or request
+    override. Its path is not persisted or passed to the detached engine.
+    """
+    location = os.environ.get(RUNTIME_POLICY_ENV)
+    if location is None:
+        return None
+    if profile is not None and profile != INTELLIGENCE_PROFILE:
+        raise EvidenceInvalid("INVALID_REQUEST", "Custom business runtime is restricted to the intelligence paper profile")
+    try:
+        if (not isinstance(location, str) or not location or len(location) > 4096
+                or any(ord(char) < 32 for char in location)):
+            raise ValueError
+        path = Path(location)
+        if not path.is_absolute():
+            raise ValueError
+        value = strict_json(read_bytes(path.parent, path.name, limit=MAX_RUNTIME_POLICY_BYTES))
+        if (not isinstance(value, dict) or set(value) != {"schema", "business_deadline_seconds"}
+                or value.get("schema") != RUNTIME_POLICY_SCHEMA):
+            raise ValueError
+        return validate_runtime_input({"schema": RUNTIME_INPUT_SCHEMA, "profile": INTELLIGENCE_PROFILE,
+            "business_deadline_seconds": value["business_deadline_seconds"]}, INTELLIGENCE_PROFILE)
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as exc:
+        raise EvidenceInvalid("RESULT_INVALID", "Trusted business runtime policy is unavailable or invalid") from exc
+
+
+def frozen_runtime_input(run: Path, profile: str) -> dict | None:
+    path = run / "runtime-input.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        content = read_bytes(run, "runtime-input.json", limit=MAX_RUNTIME_POLICY_BYTES)
+        value = validate_runtime_input(strict_json(content), profile)
+        if content != json_bytes(value):
+            raise ValueError
+        return value
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as exc:
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen business runtime input is unavailable or invalid") from exc
+
+
 def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = None,
                     source_content_contract: str = SOURCE_CONTENT_CONTRACT,
                     company_evidence_contract: str = SEC_COMPANY_CONTRACT,
                     event_contract: str = EVENT_EVIDENCE_CONTRACT,
                     risk_evidence_contract: str = RISK_EVIDENCE_CONTRACT,
-                    authoritative_paper: bool = True, intelligence_input: dict | None = None) -> dict:
+                    authoritative_paper: bool = True, intelligence_input: dict | None = None,
+                    runtime_input: dict | None = None,
+                    response_observation_contract: str | None = None,
+                    model_counter_id: str | None = None, research_work: dict | None = None,
+                    research_scope_sha256: str | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile == INTELLIGENCE_PROFILE
+    if research_work is not None:
+        from .research_work import validate_research_work_policy
+        if not intelligence:
+            raise EvidenceInvalid("RESULT_INVALID", "Research work requires the intelligence profile")
+        research_work = validate_research_work_policy(research_work)
+    if research_scope_sha256 is not None:
+        if (not intelligence or research_work is None or not isinstance(research_scope_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", research_scope_sha256) is None):
+            raise EvidenceInvalid("RESULT_INVALID", "Research scope requires admitted intelligence work")
+    if response_observation_contract is None:
+        response_observation_contract = TOOL_OBSERVATION_CONTRACT if intelligence else ""
+    if (type(response_observation_contract) is not str
+            or response_observation_contract not in {"", *RESPONSE_OBSERVATION_CONTRACTS}
+            or response_observation_contract and not intelligence):
+        raise EvidenceInvalid("RESULT_INVALID", "Unknown model response observation contract")
     required = profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}
     active = profile == ACTIVE_PROFILE
     policy_id = (INTELLIGENCE_POLICY_ID if intelligence else REQUIRED_POLICY_ID if required
@@ -82,7 +201,9 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         "schema": "tiger.policy.v1", "profile": profile,
         "paper_account": ACCOUNT, "execution_mode": "paper",
         "initial_cash_usd": 100000.0, "market": "us",
-        "universe": "extended", "strategy": "evidence-complete-active-v1" if active else "reviewed_source_defaults",
+        "universe": ("focused" if research_work is not None and runtime_input is not None
+                     else "extended"),
+        "strategy": "evidence-complete-active-v1" if active else "reviewed_source_defaults",
         "use_tuned": False, "real_broker": False,
         "execution": asdict(execution),
         "market_timezone": "America/New_York",
@@ -101,9 +222,23 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "Local cooperative processes; no hostile same-user or external rollback anchoring guarantee.",
         ],
     }
+    if runtime_input is not None:
+        runtime_input = validate_runtime_input(runtime_input, profile)
+        value["business_deadline_seconds"] = runtime_input["business_deadline_seconds"]
+        value["runtime_input_sha256"] = digest(json_bytes(runtime_input))
+    if research_work is not None:
+        value["research_work"] = research_work
+    if research_scope_sha256 is not None:
+        value["research_scope_sha256"] = research_scope_sha256
     if required:
         if authoritative_paper:
             value["paper_ledger_contract"] = PAPER_LEDGER_CONTRACT
+        from .llm.model_budget import (COUNTER_ID, LEGACY_COUNTER_ID, TokenBudgetError,
+                                       budget_contract)
+        try:
+            counter = budget_contract(counter_id=COUNTER_ID if model_counter_id is None else model_counter_id)
+        except TokenBudgetError as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Unknown model input counter contract") from exc
         from yaml import YAMLError
         from .llm.scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config, validate_coverage
         path = scene_policy_path or SOURCE_ROOT / SCENE_POLICY_RELATIVE
@@ -121,13 +256,19 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "thinking_policy": thinking_policy,
             "context_tokens": 1_048_576,
             "max_output_tokens": 393_216,
-            "tokenizer_sha256": "89085f12ef79460ac5f66d1119325ddfc694b4ab209d80bbd81d35f081dc9614",
+            "tokenizer_sha256": counter["tokenizer_sha256"],
             "search_mode": "provider_native_search",
             "release_binding": "official-current-alias-mapping",
             "model_mapping_url": "https://api-docs.deepseek.com/quick_start/pricing/",
             "search_documentation_url": "https://api-docs.deepseek.com/guides/search/",
             "model_mapping_observed_date": "2026-10-26",
         }
+        if counter["counter_id"] != LEGACY_COUNTER_ID:
+            from .llm.provider_prompt import ENCODER_SHA256, SOURCE_REVISION, SOURCE_URL
+            value["model_contract"].update(counter_id=counter["counter_id"],
+                registry_version=counter["registry_version"], budget_policy_version=counter["policy_version"],
+                prompt_formatter_sha256=ENCODER_SHA256,
+                prompt_formatter_source_revision=SOURCE_REVISION, prompt_formatter_source_url=SOURCE_URL)
         if source_content_contract == SOURCE_CONTENT_CONTRACT:
             value["model_contract"]["source_content_contract"] = source_content_contract
         elif source_content_contract != LEGACY_SOURCE_CONTENT_CONTRACT:
@@ -163,6 +304,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                 risk_evidence_contract="tiger.tech-risk-evidence.v2",
                 company_evidence_contract="sec-frozen-typed-original/v3",
                 search_mode="intelligence_source_registry")
+            if response_observation_contract:
+                value["model_contract"]["response_observation_contract"] = response_observation_contract
             value["search_collection_budget_seconds"] = value["intelligence"]["limits"]["deadline_seconds"]
             value["limitations"] += [
                 "Intelligence sources are frozen from trusted startup configuration; unavailable sources and unknown version times remain explicit gaps.",
@@ -182,7 +325,9 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
     return value
 
 
-def frozen_clock(instant: datetime | None = None) -> dict:
+def frozen_clock(instant: datetime | None = None, *, seconds: int = DEADLINE_SECONDS) -> dict:
+    if type(seconds) is not int or not DEADLINE_SECONDS <= seconds <= MAX_DEADLINE_SECONDS:
+        raise EvidenceInvalid("RESULT_INVALID", "Invalid business runtime duration")
     instant = instant or datetime.now().astimezone()
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise EvidenceInvalid("RESULT_INVALID", "Admission requires an aware timestamp")
@@ -194,15 +339,15 @@ def frozen_clock(instant: datetime | None = None) -> dict:
             "market_timezone": "America/New_York",
             "market_timestamp": market.isoformat(), "run_date": market.date().isoformat(),
             "deadline_at_utc": datetime.fromtimestamp(
-                utc.timestamp() + DEADLINE_SECONDS, timezone.utc).isoformat()}
+                utc.timestamp() + seconds, timezone.utc).isoformat()}
 
 
-def validate_clock(clock: dict) -> None:
+def validate_clock(clock: dict, *, expected_seconds: int = DEADLINE_SECONDS) -> None:
     if not isinstance(clock, dict):
         raise EvidenceInvalid("RESULT_INVALID", "Missing admission clock")
     try:
         host = datetime.fromisoformat(clock["host_timestamp"])
-        expected = frozen_clock(host)
+        expected = frozen_clock(host, seconds=expected_seconds)
     except (TypeError, ValueError, KeyError) as exc:
         raise EvidenceInvalid("RESULT_INVALID", "Invalid admission clock") from exc
     if clock != expected:
@@ -302,6 +447,20 @@ def verify_source(run: Path) -> dict:
     return manifest
 
 
+def trusted_model_no_proxy(value: str | None) -> str:
+    """Only trusted startup may add the fixed model host to loopback bypass."""
+    default = "localhost,127.0.0.1,::1"
+    if value is None:
+        return default
+    if type(value) is not str:
+        raise EvidenceInvalid("RESULT_INVALID", "Trusted model proxy bypass is invalid")
+    values = value.split(",")
+    base = {"localhost", "127.0.0.1", "::1"}
+    if (len(values) != len(set(values)) or set(values) not in (base, base | {"api.deepseek.com"})):
+        raise EvidenceInvalid("RESULT_INVALID", "Trusted model proxy bypass is invalid")
+    return default + (",api.deepseek.com" if "api.deepseek.com" in values else "")
+
+
 def run_environment(work: Path, *, model_required: bool = False) -> dict[str, str]:
     checked_root(work / "tmp", create=True)
     checked_root(work / "cache", create=True)
@@ -313,6 +472,8 @@ def run_environment(work: Path, *, model_required: bool = False) -> dict[str, st
         "TMPDIR": str(work / "tmp"), "XDG_CACHE_HOME": str(work / "cache"),
         "NETRC": os.devnull, "NO_PROXY": "localhost,127.0.0.1,::1",
     }
+    if model_required:
+        env["NO_PROXY"] = trusted_model_no_proxy(os.environ.get("NO_PROXY"))
     # Keep HOME unchanged; do not redirect the user's home to an artificial
     # directory. Application configuration comes only from the fixed policy.
     if "HOME" in os.environ:
@@ -492,13 +653,23 @@ def materialize_version(state: Path, run: Path, admission: dict) -> dict:
     version_root = _account_root(state) / "versions" / run.name
     checked_root(version_root, create=True)
     for ref in files:
-        atomic_bytes(version_root, ref["path"],
-                     verify_ref(run / "work" / "reports", ref), exclusive=True)
+        content = verify_ref(run / "work" / "reports", ref)
+        target = safe_path(version_root, ref["path"], must_exist=False)
+        if target.exists():
+            if read_bytes(version_root, ref["path"]) != content:
+                raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing account version differs")
+        else:
+            atomic_bytes(version_root, ref["path"], content, exclusive=True)
     version = {"schema": "tiger.account-version.v1", "account": ACCOUNT,
                "run_id": run.name, "parent": admission["parent"],
                "run_date": admission["clock"]["run_date"], "files": files}
-    atomic_json(version_root, "version.json", version, exclusive=True)
-    atomic_json(run, "account-version.json", version, exclusive=True)
+    for root, relative in ((version_root, "version.json"), (run, "account-version.json")):
+        target = safe_path(root, relative, must_exist=False)
+        if target.exists():
+            if read_bytes(root, relative) != json_bytes(version):
+                raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing account version metadata differs")
+        else:
+            atomic_json(root, relative, version, exclusive=True)
     return version
 
 
@@ -524,12 +695,14 @@ def stage_calendar(run: Path) -> dict:
     return record
 
 
-def validate_admission(run: Path) -> tuple[dict, dict, dict]:
+def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> tuple[dict, dict, dict]:
     admission = read_json(run, "admission.json")
     request = read_json(run, "request.json")
     policy = read_json(run, "policy.json")
-    if (not isinstance(admission, dict) or set(admission) != {
-            "schema", "run_id", "clock", "parent", "request_sha256", "policy_sha256", "source_sha256"}
+    base_fields = {"schema", "run_id", "clock", "parent", "request_sha256", "policy_sha256", "source_sha256"}
+    optional_fields = {"runtime_input_sha256", "research_scope_sha256"}
+    if (not isinstance(admission, dict) or not base_fields <= set(admission)
+            or set(admission) - base_fields - optional_fields
             or not isinstance(request, dict) or not isinstance(policy, dict)
             or admission.get("schema") != "tiger.admission.v1"
             or admission.get("run_id") != run.name or not RUN_RE.fullmatch(run.name)
@@ -543,7 +716,35 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     if (request != expected or not isinstance(request.get("idempotency_key"), str)
             or not KEY_RE.fullmatch(request["idempotency_key"])):
         raise EvidenceInvalid("RESULT_INVALID", "Stored request differs from fixed profile")
-    validate_clock(admission["clock"])
+    runtime_input = frozen_runtime_input(run, request["profile"])
+    if (("runtime_input_sha256" in admission) != (runtime_input is not None)
+            or runtime_input is not None and admission["runtime_input_sha256"] != digest(json_bytes(runtime_input))):
+        raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission runtime input binding differs")
+    research_scope_sha256 = admission.get("research_scope_sha256")
+    if research_scope_sha256 is not None:
+        if request["profile"] != INTELLIGENCE_PROFILE:
+            raise EvidenceInvalid("RESULT_INVALID", "Only intelligence-paper research admits a supplement scope")
+        from .research_followup import validate_scope, _time
+        try:
+            research_scope = validate_scope(read_json(run, "research-scope.json"))
+        except (ValueError, KeyError, TypeError) as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Frozen supplement scope is invalid") from exc
+        if (research_scope["manifest_sha256"] != research_scope_sha256
+                or _time(research_scope["requested_at"]) > _time(admission["clock"]["admitted_at_utc"])):
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Supplement scope admission binding differs")
+        parent = verify_run(run.parent.parent, research_scope["parent_run_id"], current_source=None)
+        if parent["pointer"]["receipt_sha256"] != research_scope["parent_receipt_sha256"]:
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Supplement parent receipt differs")
+        parent_intelligence = (parent["summary"].get("disclosures") or {}).get("intelligence") or {}
+        if parent_intelligence.get("pending_candidates") != research_scope["parent_candidate_manifest"]:
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH",
+                                  "Supplement candidate manifest differs from its verified parent")
+    if research_scope_sha256 is not None and policy.get("research_scope_sha256") != research_scope_sha256:
+        raise EvidenceInvalid("RESULT_INVALID", "Admission scope is absent from the frozen policy")
+    if research_scope_sha256 is None and policy.get("research_scope_sha256") is not None:
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen policy scope is absent from admission")
+    validate_clock(admission["clock"], expected_seconds=(runtime_input["business_deadline_seconds"]
+                                                       if runtime_input else DEADLINE_SECONDS))
     source = verify_source(run)
     if admission.get("source_sha256") != digest(read_bytes(run, "source-manifest.json")):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission source identity differs")
@@ -561,19 +762,34 @@ def validate_admission(run: Path) -> tuple[dict, dict, dict]:
     if request["profile"] == INTELLIGENCE_PROFILE:
         from .intelligence_workflow import validate_input_packet
         intelligence_input = validate_input_packet(read_json(run, "intelligence-input.json"))
+    model_counter_id = None
+    if request["profile"] in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
+        from .llm.model_budget import TokenBudgetError, frozen_budget_contract
+        try:
+            model_counter_id = frozen_budget_contract(read_bytes(
+                run, "source/trading_system/llm/model_budget.py"))["counter_id"]
+        except TokenBudgetError as exc:
+            raise EvidenceInvalid("RESULT_INVALID", "Frozen model input counter is unknown") from exc
     expected_policy = policy_manifest(request["profile"], source_content_contract=source_content_contract,
+                                      research_work=source_research_work_policy(
+                                          source["files"], request["profile"], run / "source"),
+                                      research_scope_sha256=research_scope_sha256,
                                       event_contract=event_contract,
                                       risk_evidence_contract=RISK_EVIDENCE_CONTRACT
                                       if RISK_EVIDENCE_RELATIVE in frozen_files else "",
                                       company_evidence_contract=company_evidence_contract,
                                       authoritative_paper=any(ref["path"] == PAPER_LEDGER_RELATIVE for ref in source["files"]),
                                       scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
-                                      intelligence_input=intelligence_input)
+                                      intelligence_input=intelligence_input,
+                                      runtime_input=runtime_input,
+                                      model_counter_id=model_counter_id,
+                                      response_observation_contract=source_observation_contract(
+                                          source["files"], request["profile"]))
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
     if (read_json(run, "calendar-input.json") != calendar_record
-            or read_bytes(run, calendar_record["work_path"]) != calendar_content):
+            or validate_working_calendar and read_bytes(run, calendar_record["work_path"]) != calendar_content):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Calendar input differs from its frozen source")
     if admission["parent"] is not None:
         validate_pointer(admission["parent"])
@@ -782,7 +998,9 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
             source_content_contract=model_contract.get("source_content_contract", LEGACY_SOURCE_CONTENT_CONTRACT),
             company_evidence_contract=model_contract.get("company_evidence_contract", ""),
             event_contract=model_contract.get("event_contract", ""),
-            risk_evidence_contract=model_contract.get("risk_evidence_contract", ""))
+            risk_evidence_contract=model_contract.get("risk_evidence_contract", ""),
+            **({"response_observation_contract": model_contract.get("response_observation_contract", "")}
+               if profile == INTELLIGENCE_PROFILE else {}))
         if model_contract.get("company_evidence_contract"):
             summary["disclosures"]["company_evidence"] = raw["debate"]["company_evidence"]
         summary["action_summary"] = raw["action_summary"]
@@ -824,6 +1042,21 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
         "process_exit": "process-exit.json", "log_summary": "log-summary.json",
         "engine_log": "engine.log",
     }
+    configured_runtime = "runtime_input_sha256" in policy
+    if ("runtime_input" in receipt) != configured_runtime:
+        raise EvidenceInvalid("RESULT_INVALID", "Receipt runtime input binding differs")
+    if configured_runtime:
+        verify_ref(run, receipt["runtime_input"], schema=RUNTIME_INPUT_SCHEMA)
+        expected_paths["runtime_input"] = "runtime-input.json"
+    research_history = None
+    if policy.get("research_work") is not None:
+        research_history = receipt.get("research_parent_history")
+        if research_history is None:
+            raise EvidenceInvalid("RESULT_INVALID", "Research receipt lacks parent history")
+        verify_ref(run, research_history, schema="tiger.parent-history/v1")
+        expected_paths["research_parent_history"] = "research-parent-history.json"
+    elif "research_parent_history" in receipt:
+        raise EvidenceInvalid("RESULT_INVALID", "Historical receipt acquired a research-parent history")
     if any(receipt[key]["path"] != path for key, path in expected_paths.items()):
         raise EvidenceInvalid("RESULT_INVALID", "Receipt references unexpected artifacts")
     engine = read_json(run, "engine-result.json")
@@ -907,6 +1140,9 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
     for ref in version["files"]:
         verify_ref(run / "work" / "reports", ref)
     summary = business_summary(run, admission, receipt["artifacts"])
+    if research_history is not None:
+        from .research_resume import verify_parent_history
+        verify_parent_history(run, admission, policy, research_history)
     if receipt["artifacts"] != engine.get("artifacts") or receipt.get("summary") != summary:
         raise EvidenceInvalid("RESULT_INVALID", "Receipt and actual business artifacts differ")
     if require_committed and committed_pointer(state, run_id) != pointer:
@@ -952,22 +1188,67 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
 
 def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -> dict:
     admission, policy, _ = validate_admission(run)
+
     def before_publish():
         if ((deadline is not None and time.monotonic() >= deadline)
                 or datetime.now(timezone.utc) >= datetime.fromisoformat(admission["clock"]["deadline_at_utc"])):
             raise TimeoutError("Business deadline elapsed before account publication")
+
     def check_account_parent():
         if pointer_read(state) != admission["parent"]:
             code = "ACCOUNT_VERSION_CONFLICT" if policy.get("paper_ledger_contract") else "RESULT_INVALID"
             raise EvidenceInvalid(code, "Account parent changed before publication")
 
+    def publish_pointer(pointer):
+        before_publish()
+        durable = True
+        try:
+            atomic_json(_account_root(state), "current.json", pointer,
+                        before_publish=before_publish)
+        except OSError:
+            # Replace can succeed before directory fsync fails. A visible
+            # pointer may already be committed; never create a second mutation.
+            if pointer_read(state) != pointer:
+                raise
+            durable = False
+        if pointer_read(state) != pointer:
+            raise EvidenceInvalid("RESULT_INVALID", "Account pointer readback differs")
+        try:
+            atomic_json(run, "publication-durability.json", {
+                "schema": "tiger.publication-durability.v1", "run_id": run.name,
+                "pointer": pointer, "directory_fsync_confirmed": durable,
+            }, exclusive=True)
+        except FileExistsError:
+            durability = read_json(run, "publication-durability.json")
+            if durability.get("pointer") != pointer:
+                raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Publication durability identity differs")
+        except OSError:
+            # Publication already happened. A read-only verifier explicitly
+            # reports missing durability instead of inventing a rollback.
+            pass
+
     before_publish()
     check_account_parent()
+    receipt_path = safe_path(run, "receipt.json", must_exist=False)
+    version_path = safe_path(run, "account-version.json", must_exist=False)
+    if receipt_path.exists() and version_path.exists():
+        prepared = verify_run(state, run.name, require_committed=False, current_source=None)
+        current = pointer_read(state)
+        if current == prepared["pointer"]:
+            return verify_run(state, run.name, current_source=None)
+        if current != admission["parent"]:
+            raise EvidenceInvalid("ACCOUNT_VERSION_CONFLICT", "Account parent changed before closeout")
+        publish_pointer(prepared["pointer"])
+        return verify_run(state, run.name, current_source=None)
     engine = read_json(run, "engine-result.json")
     if engine.get("run_id") != run.name or engine.get("success") is not True:
         raise EvidenceInvalid("RUN_INCOMPLETE", "Engine result is not successful")
     stages = verify_events(run, run.name, policy["stages"])
     summary = business_summary(run, admission, engine["artifacts"])
+    research_history = None
+    if policy.get("research_work") is not None:
+        from .research_resume import publish_parent_completion
+        research_history = publish_parent_completion(run, admission, policy)
     materialize_version(state, run, admission)
     receipt = {
         "schema": "tiger.receipt.v1", "run_id": run.name, "profile": policy["profile"],
@@ -979,6 +1260,8 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         "event_tail_sha256": stages["last_event_sha256"],
         "summary": summary, "artifacts": engine["artifacts"],
     }
+    if research_history is not None:
+        receipt["research_parent_history"] = research_history
     for name, path, schema in (
         ("admission", "admission.json", "tiger.admission.v1"),
         ("request", "request.json", "tiger.agent-request/v1"),
@@ -994,29 +1277,14 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         ("engine_log", "engine.log", "text/plain"),
     ):
         receipt[name] = file_ref(run, path, schema)
-    atomic_json(run, "receipt.json", receipt, exclusive=True)
+    if "runtime_input_sha256" in policy:
+        receipt["runtime_input"] = file_ref(run, "runtime-input.json", RUNTIME_INPUT_SCHEMA)
+    if receipt_path.exists():
+        if read_bytes(run, "receipt.json") != json_bytes(receipt):
+            raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing receipt differs")
+    else:
+        atomic_json(run, "receipt.json", receipt, exclusive=True)
     prepared = verify_run(state, run.name, require_committed=False, current_source=None)
     check_account_parent()
-    before_publish()
-    durable = True
-    try:
-        atomic_json(_account_root(state), "current.json", prepared["pointer"],
-                    before_publish=before_publish)
-    except OSError:
-        # Replace can succeed before directory fsync fails. A visible pointer
-        # may already be committed; never create a second business mutation.
-        if pointer_read(state) != prepared["pointer"]:
-            raise
-        durable = False
-    if pointer_read(state) != prepared["pointer"]:
-        raise EvidenceInvalid("RESULT_INVALID", "Account pointer readback differs")
-    try:
-        atomic_json(run, "publication-durability.json", {
-            "schema": "tiger.publication-durability.v1", "run_id": run.name,
-            "pointer": prepared["pointer"], "directory_fsync_confirmed": durable,
-        }, exclusive=True)
-    except OSError:
-        # Publication already happened. A read-only verifier explicitly reports
-        # missing durability confirmation instead of inventing a rollback.
-        pass
+    publish_pointer(prepared["pointer"])
     return verify_run(state, run.name, current_source=None)

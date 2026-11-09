@@ -6,6 +6,8 @@
 
 **当前阶段：仅模拟盘（paper trading）。不构成投资建议，不承诺收益。**
 
+新 AI 研究的正式入口是 `scripts/tiger-agent.mjs` / `tiger-agent-mcp.mjs` 的 `us-public-intelligence-paper-v2`，不是直接调用 `main.py --demo`。正式入口分别记录流程、证据、决策和账户四轴，支持同 run resume 与已审定候选 supplement；只有冻结源码、完整原件、五阶段模型、数值风险、账户 CAS 和独立 receipt/verify 同时成立才报告完成。
+
 ## 一、项目缘起：从财神爷到老虎全球资产管理
 
 项目起点是[财神爷 AI 炒股系统](CAISHEN_README.md)：一个严格遵循

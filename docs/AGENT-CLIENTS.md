@@ -77,7 +77,7 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
 
 ## 2. CLI：提交一次，持续查询同一个身份
 
-六个操作为 `doctor`、`describe`、`run`、`status`、`receipt`、`verify`。业务输入使用 `--input-file path.json` 或 `--input-file -`；stdin 必须是一个 UTF-8 JSON 对象，最大 64 KiB。重复键、未知字段、非有限数值、任意命令和路径覆写都会被拒绝。
+八个操作为 `doctor`、`describe`、`run`、`resume`、`supplement`、`status`、`receipt`、`verify`。业务输入使用 `--input-file path.json` 或 `--input-file -`；stdin 必须是一个 UTF-8 JSON 对象，最大 64 KiB。重复键、未知字段、非有限数值、任意命令和路径覆写都会被拒绝。`resume` 只接收原 `run_id`；`supplement` 只接收父 run、已审定 pending symbols 和新幂等键。
 
 请求文件只含以下四个字段；为一次逻辑任务分配一个持久、可恢复的幂等键：
 
@@ -116,7 +116,16 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 查询可以保持 readonly，但必须使用提交时同一个 state-root。`receipt` 独立验证证据和账户提交后才提供选股、持仓、挂单、现金、权益、日期及数据/模型限制；`verify` 提供验证结果而不重复业务动作。CLI 每次仅输出一个 JSON envelope；所有返回字段的契约在 `bundles/trading/agent-workflow.schema.json`。
 
-需要持续等待时，原 `run` 命令可加 `--wait`，可选 `--wait-timeout-seconds 1..3600`。默认观察窗口 2460 秒；Python 业务 deadline 独立为 2400 秒。Node 单次提交/查询上限 60 秒，等待循环只轮询已有 `run_id`，不会重新提交。
+需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，可选 `--wait-timeout-seconds 1..3600`。默认观察窗口 2460 秒；Python 业务 deadline 默认独立为 2400 秒。Node 单次提交/查询上限 60 秒，等待循环只轮询已有 `run_id`，不会重新提交。
+
+仅对 `us-public-intelligence-paper-v2`，可信启动环境可设置 `TIGER_AGENT_RUNTIME_POLICY_FILE`，
+指向 `{"schema":"tiger.agent-runtime-policy/v1","business_deadline_seconds":5400}` 形式的本地文件。
+只接受这两个字段与 2400–7200 的整数秒数；[示例](../config/agent-clients/paper-runtime-5400.json.example)不自动加载。
+doctor/describe 可只读检查有效值。新运行把脱敏、无凭据的内容冻结为 `runtime-input.json`，
+其哈希同时进入 policy、admission 与 receipt；来源准备、锁等待和启动均从原接单时刻计入总截止。
+验真和同键恢复只使用已冻结的原合同，不依赖当前配置文件或环境。
+未配置文件时保留原 policy/admission 字段布局和 2400 秒规则，其他 profile 不接受该扩展。
+时限不改变五个真实语义阶段、完整上下文、合法输出上限或数值风控；观察窗口结束时继续查原身份。
 
 | 场景 | 正确行为 |
 |---|---|
@@ -124,11 +133,13 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 | 提交响应丢失，未拿到 run_id | 用完全相同的四字段请求及原幂等键恢复身份；不得自动换新键 |
 | 同一键已有 completed/completed_degraded | run 返回原身份及 `data.observed_status`，仍需 receipt 验证 |
 | 同一键已有 failed/blocked/interrupted | 返回原失败，不重跑内部阶段 |
+| 原 worker 已停止且尚未过期，要求继续 | `resume` 原 run_id；不换请求、key、source、账户基线或 deadline |
+| 原任务已有 unknown/in-flight 外部调用 | 先对账；保持原预留，不发同请求探测 |
 | 新请求遇到 ACCOUNT_BUSY | 新键尚未被消费；之后可重试同一个请求和键 |
 | status 调用成功但 status=failed | 只证明查询成功，不证明业务成功 |
 | receipt/verify 发现证据缺失或损坏 | 返回失败，不读取未验证摘要，不补写或重跑阶段 |
 
-退出码：0 表示当前操作成功；2 输入无效；3 访问拒绝；5 幂等冲突/账户占用；6 数据拒绝；7 runner/证据/持久化错误；8 阶段失败或未完整完成；9 超时/中断；130 取消。退出 0、JSON 合法、存在文件或状态为 accepted 均不能单独证明完整业务交付。
+退出码：0 表示当前操作成功；2 输入无效或补研范围不合法；3 访问拒绝；5 幂等/账户/父 attempt/unknown 对账冲突；6 数据或父候选不可用；7 runner/证据/持久化错误；8 恢复合同不支持、阶段失败或未完整完成；9 超时/中断；130 取消。退出 0、JSON 合法、存在文件或状态为 accepted 均不能单独证明完整业务交付。
 
 ## 3. 独立 Tiger MCP
 
@@ -139,11 +150,15 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 | `tiger_doctor` | 检查解释器、依赖和运行条件 | 是 |
 | `tiger_workflow_describe` | 返回固定 profile 和阶段契约 | 是 |
 | `tiger_workflow_run` | 提交完整公开美股 paper 流程 | 否，直接调用也在启动 Python 前拒绝 |
+| `tiger_workflow_resume` | 在可信 paper 模式恢复 stopped intelligence run | 否 |
+| `tiger_research_supplement` | 从已核验 pending candidate 新建完整补研 run | 否 |
 | `tiger_workflow_status` | 读取既有运行状态 | 是 |
 | `tiger_workflow_receipt` | 独立校验证据后读取完成摘要 | 是 |
 | `tiger_workflow_verify` | 独立校验证据和账户提交 | 是 |
 
 工具结果同时包含相同 envelope 的 `structuredContent` 和 JSON 文本；`isError` 表示操作失败。未知工具为 JSON-RPC 参数错误。MCP 取消只停止对应提交/查询的观察，不是业务撤销 API。帧最大 128 KiB，业务输入仍为 64 KiB；最多四个并发请求，重复在途 ID、畸形 JSON、过量输出和断开的流均有有界退出路径。
+
+`status` 的 `data.research_status` 提供四轴状态、稳定计数、逐证券原因和恢复条件。其 `basis` 明确区分 observed records 与完整 `verified_run`；只有后者可把账户轴标为 committed。`receipt` 和 `verify` 仍独立重建冻结源码、事件、模型原生回执、研究快照与账户提交，不用状态投影代替验真。
 
 初始化行为和工具结果遵循已核实的 [MCP 生命周期规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 与 [工具规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)。本服务不要求 task-based execution 扩展。
 
@@ -169,7 +184,7 @@ node scripts/tiger-agent-config.mjs --client codex \
 
 提交到仓库的是 `config/agent-clients/codex.toml.example` 可移植模板；带有本机绝对路径的实际配置留在本地并被 Git 忽略。
 
-显式 paper 配置包含 `env_vars`，名称来自共享 `MODEL_ENV_NAMES`：必需模型配置及已支持的来源凭据、registry/archive 路径。只保存变量名；值由可信宿主启动环境提供，切回 readonly 时移除该业务名单。生成器不读取受保护凭据文件、不复制环境值，始终返回 `credentials_verified=false`；paper 回执中的 `environment_requirements` 只列所需名称和验证边界。配置语法及 Python 版本通过，不代表模型登录或调用已验证。Codex 环境转发字段依据 [官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
+显式 paper 配置包含 `env_vars`，名称来自共享 `MODEL_ENV_NAMES`：必需模型配置及已支持的来源凭据、registry/archive 路径和可选的 `TIGER_AGENT_RUNTIME_POLICY_FILE`。只保存变量名；值由可信宿主启动环境提供，切回 readonly 时移除该业务名单。生成器不读取受保护凭据文件、不复制环境值，始终返回 `credentials_verified=false`；paper 回执中的 `environment_requirements` 只列所需名称和验证边界。配置语法及 Python 版本通过，不代表模型登录或调用已验证。Codex 环境转发字段依据 [官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
 
 Codex 支持项目 `.codex/config.toml`、STDIO 的 command/args/cwd、启动与工具超时配置；项目配置受客户端信任机制约束，详见已核实的 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。生成配置成功不表示当前会话已加载。请在可信项目的新连接或显式刷新后的实际宿主中验证工具列表和 doctor；交付证据应分别记录“文件校验”“协议调用”“原生宿主挂载”。生成器始终返回 `host_attached=false`。
 
@@ -265,3 +280,11 @@ TIGER_TEST_PYTHON=/absolute/path/to/python node --test \
 五类是明确标记的 synthetic_fixture，不能冒充人工金融 gold 或真实供应商比较。
 请求示例、来源条件、预算、失败码与真实评测准备流程见
 [INTELLIGENCE-ACQUISITION.md](INTELLIGENCE-ACQUISITION.md)。
+
+## 9. 独立主题研究与持续来源监控
+
+新增 [INTELLIGENCE-TOPICS.md](INTELLIGENCE-TOPICS.md) 定义不写账户的 topic 命名空间。CLI 为 `scripts/tiger-topic.mjs`，STDIO MCP 为 `scripts/tiger-topic-mcp.mjs`；两者调用同一 Python 状态、固定快照和独立报告验证。它们使用自己的 readonly/acquire/research 可信模式，不改变 paper 八操作及四字段创建合同。
+
+用户仍只需对话。Agent 负责把问题和审定主体转为 topic、提交一次 research、保存原 job_id 并持续查询，最后调用 report 验真。只读宿主可以查询已有证据；需要采集或付费研究时，权限和模型环境必须由已授权的可信部署提供，不能放进工具参数。
+
+可选独立服务器条目见 [topic-mcp.json.example](../config/agent-clients/topic-mcp.json.example)。原 `tiger-agent-config.mjs` 继续只管理 paper workflow 条目，不会自动添加 topic research 权限。具备本地执行能力的 Codex/Qoder Agent 可通过同权限 CLI 完成主题任务；实际宿主挂载、原始协议验证和真实研究回执仍分别报告。

@@ -36,6 +36,7 @@ from .model_budget import (
     chat_request_core,
     plan_request,
     tokenizer_receipt,
+    verify_request_budget,
 )
 from .scene_policy import (
     KERNEL_SCENE_MAP,
@@ -478,6 +479,14 @@ class DeepSeekRequiredClient:
         self._chat_schema_retry_used = False
         self._observed_response_ids: set[str] = set()
         self._native_io_limits = None
+        self._response_observation_contract = getattr(execution, "response_observation_contract", "")
+        if self._response_observation_contract:
+            from .json_observation import SUPPORTED_CONTRACTS
+            if (self._response_observation_contract not in SUPPORTED_CONTRACTS
+                    or not callable(getattr(execution, "model_attempt_snapshot", None))
+                    or not callable(getattr(execution, "claim_model_format_retry", None))):
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
+        self._last_chat_transport = None
 
     @contextmanager
     def native_io_budget(self, *, max_bytes: int, deadline: float):
@@ -530,10 +539,28 @@ class DeepSeekRequiredClient:
     def _clean(self, value: object, depth: int = 0) -> object:
         return sanitize_model_value(value, self._api_key, depth)
 
-    def _post_json(self, path: str, request: dict) -> tuple[dict, str]:
-        if path not in ("/chat/completions", "/v1/tools/search", "/v1/tools/fetch"):
+    def _post_json(self, path: str, request: dict, *, _transport_observation=None,
+                   _chat_read_timeout=None) -> tuple[dict, str]:
+        from .json_observation import TOOL_CONTRACT
+        strict_chat = path == "/beta/chat/completions"
+        if (path not in ("/chat/completions", "/beta/chat/completions", "/v1/tools/search", "/v1/tools/fetch")
+                or strict_chat and (self._response_observation_contract != TOOL_CONTRACT
+                                    or self._stage() != "clean.llm_semantic")):
             _fail("ENDPOINT_NOT_ALLOWED")
-        chat = path == "/chat/completions"
+        chat = path in {"/chat/completions", "/beta/chat/completions"}
+        if (_transport_observation is not None and (not chat or type(_transport_observation) is not dict)
+                or _chat_read_timeout is not None and (not chat or type(_chat_read_timeout) not in {int, float}
+                    or not math.isfinite(_chat_read_timeout) or not 0 < _chat_read_timeout <= CHAT_RESPONSE_DEADLINE)):
+            _fail("INVALID_CHAT_REQUEST")
+        observed_chat = chat and (bool(self._response_observation_contract) or _transport_observation is not None)
+        observed_digest = hashlib.sha256()
+        if observed_chat:
+            self._last_chat_transport = {"http_status": None, "body_sha256": None,
+                "body_bytes": 0, "body_whitespace_only": True, "body_complete": False}
+            if self._response_observation_contract == TOOL_CONTRACT:
+                self._last_chat_transport.update(final_response_url=None, redirected=None)
+        if _transport_observation is not None:
+            _transport_observation.update(phase="awaiting_headers", transport=self._last_chat_transport)
         wire = _canonical(request)
         # Chat admission is governed by the pinned tokenizer and model window.
         # The Search/Fetch byte envelope is a separate endpoint constraint.
@@ -560,16 +587,44 @@ class DeepSeekRequiredClient:
             remaining = max(0.001, deadline - time.monotonic()) if tool_limits is not None else None
             if tool_limits is not None:
                 meter["request_count"] += 1
+            dispatch = getattr(self.execution, "model_transport_dispatch", None) if chat else None
+            if dispatch is not None:
+                if not callable(dispatch):
+                    _fail("TRUSTED_CONFIGURATION_MISMATCH")
+                dispatch(request)
             response = requests.post(
                 BASE_URL + path, data=wire,
                 headers={"Content-Type": "application/json", "Accept": "application/json",
                          "Accept-Encoding": "identity", "Authorization": "Bearer " + self._api_key},
                 timeout=((min(CONNECT_TIMEOUT, remaining / 2), min(READ_TIMEOUT, remaining / 2))
                          if tool_limits is not None else
-                         (CONNECT_TIMEOUT, CHAT_READ_TIMEOUT if chat else READ_TIMEOUT)),
+                         (CONNECT_TIMEOUT, (_chat_read_timeout if _chat_read_timeout is not None else CHAT_READ_TIMEOUT)
+                            if chat else READ_TIMEOUT)),
                 allow_redirects=False, verify=True, stream=True)
             status = response.status_code
+            if observed_chat and self._response_observation_contract == TOOL_CONTRACT:
+                final_url, redirected = response.url, bool(response.history)
+                self._last_chat_transport["redirected"] = redirected
+                if final_url != BASE_URL + path or redirected:
+                    _fail("ENDPOINT_NOT_ALLOWED")
+                self._last_chat_transport["final_response_url"] = final_url
+            if _transport_observation is not None:
+                _transport_observation["phase"] = "response_headers"
+            if observed_chat and type(status) is int and 100 <= status <= 599:
+                self._last_chat_transport["http_status"] = status
             if type(status) is not int or status != 200:
+                if type(status) is int and 100 <= status <= 599:
+                    from .http_observation import MAX_ERROR_BYTES, observe_http_error
+                    error_body = observe_http_error(response, status=status, deadline=deadline,
+                        max_bytes=min(MAX_ERROR_BYTES, remaining_bytes) if tool_limits is not None else MAX_ERROR_BYTES)
+                    if observed_chat:
+                        self._last_chat_transport.update({name: error_body[name] for name in
+                            ("body_sha256", "body_bytes", "body_whitespace_only", "body_complete")})
+                        self._last_chat_transport["http_error"] = error_body
+                    if tool_limits is not None:
+                        meter["bytes_received"] += error_body["body_bytes"]
+                    if _transport_observation is not None:
+                        _transport_observation["phase"] = "http_envelope"
                 _fail(f"HTTP_{status}" if type(status) is int and 100 <= status <= 599 else "HTTP_INVALID")
             encoding = response.headers.get("Content-Encoding", "identity").lower()
             if encoding not in ("", "identity"):
@@ -583,6 +638,8 @@ class DeepSeekRequiredClient:
                 _fail("RESPONSE_TOO_LARGE")
             chunks: list[bytes] = []
             size = 0
+            if _transport_observation is not None:
+                _transport_observation["phase"] = "response_body"
             while True:
                 if time.monotonic() > deadline:
                     if tool_limits is not None:
@@ -608,21 +665,37 @@ class DeepSeekRequiredClient:
                 if not isinstance(chunk, bytes):
                     _fail("INVALID_RESPONSE_BYTES")
                 size += len(chunk)
+                if observed_chat:
+                    observed_digest.update(chunk)
+                    self._last_chat_transport.update(body_bytes=size,
+                        body_sha256=observed_digest.hexdigest(),
+                        body_whitespace_only=self._last_chat_transport["body_whitespace_only"] and not bool(chunk.strip()))
                 if size > response_limit:
                     _fail("RESPONSE_TOO_LARGE")
                 chunks.append(chunk)
                 if tool_limits is not None and declared is not None and size == int(declared):
                     break
             raw = b"".join(chunks)
+            if observed_chat:
+                self._last_chat_transport.update(body_complete=True, body_bytes=len(raw),
+                    body_sha256=hashlib.sha256(raw).hexdigest(), body_whitespace_only=not bool(raw.strip()))
+            if _transport_observation is not None:
+                _transport_observation["phase"] = "http_envelope"
             obj = _json_loads(raw)
             if not isinstance(obj, dict):
                 _fail("RESPONSE_NOT_OBJECT")
             return obj, hashlib.sha256(raw).hexdigest()
         except LLMUnavailable:
             raise
-        except requests.Timeout:
+        except requests.Timeout as error:
+            if _transport_observation is not None:
+                _transport_observation["transport_error"] = (
+                    "connect_timeout" if isinstance(error, requests.ConnectTimeout) else
+                    "read_timeout" if isinstance(error, requests.ReadTimeout) else "timeout")
             _fail("NETWORK_TIMEOUT")
         except Exception:
+            if _transport_observation is not None:
+                _transport_observation["transport_error"] = "transport_failure"
             _fail("TRANSPORT_FAILURE")
         finally:
             if response is not None:
@@ -680,7 +753,8 @@ class DeepSeekRequiredClient:
         return result
 
     def plan_chat(self, *, system: str, user: str, schema_hint: dict, schema: dict,
-                  temperature: float = 0.2, public_payload: dict | None = None) -> tuple[dict, int, int]:
+                  temperature: float = 0.2, public_payload: dict | None = None,
+                  clean_protocol: dict | None = None) -> tuple[dict, int, int]:
         """Plan the exact sanitized wire without transport or acceptance-budget side effects."""
         stage = self._stage()
         if stage not in self._scene_policies:
@@ -695,6 +769,10 @@ class DeepSeekRequiredClient:
                 or not 0 <= temperature <= 2):
             _fail("INVALID_CHAT_REQUEST")
         thinking = self._scene_policies[stage]["thinking"]
+        if clean_protocol is not None:
+            from .json_observation import TOOL_CONTRACT
+            if stage != "clean.llm_semantic" or self._response_observation_contract != TOOL_CONTRACT:
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
         user_text = self._text(user)
         if public_payload is not None:
             # Redact data values before JSON escaping: escaped delimiters must
@@ -702,11 +780,20 @@ class DeepSeekRequiredClient:
             user_text += "\n" + _canonical(self._clean(public_payload)).decode("utf-8")
         return plan_request(chat_request_core(system=self._text(system), user=user_text,
             schema=schema, schema_hint=self._clean(schema_hint), thinking_mode=thinking["type"],
-            effort=thinking.get("effort"), temperature=temperature))
+            effort=thinking.get("effort"), temperature=temperature,
+            **({"clean_protocol": clean_protocol} if clean_protocol is not None else {})))
 
     def complete_json(self, *, system: str, user: str, schema_hint: dict,
                       max_tokens: int | None = None, temperature: float = 0.2, schema: dict,
-                      public_payload: dict | None = None) -> dict:
+                      public_payload: dict | None = None, clean_protocol: dict | None = None) -> dict:
+        if clean_protocol is not None:
+            from .strict_clean_transport import complete_tool_json
+            return complete_tool_json(self, system=system, user=user, schema_hint=schema_hint,
+                max_tokens=max_tokens, temperature=temperature, schema=schema,
+                public_payload=public_payload, clean_protocol=clean_protocol)
+        if self._response_observation_contract:
+            return self._observed_complete_json(system=system, user=user, schema_hint=schema_hint,
+                max_tokens=max_tokens, temperature=temperature, schema=schema, public_payload=public_payload)
         if max_tokens is not None:
             _fail("CALLER_OUTPUT_CAP_FORBIDDEN")
         stage = self._stage()
@@ -732,6 +819,12 @@ class DeepSeekRequiredClient:
         def invoke_once():
             nonlocal observed_attempt
             observed_attempt = None
+            try:
+                verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
+                    input_tokens=inputs["input_token_estimate"], output_ceiling=inputs["output_ceiling"],
+                    registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
+            except TokenBudgetError as error:
+                _fail(error.code)
             response, body_hash = self._post_json("/chat/completions", request)
             if response.get("model") != MODEL:
                 _fail("RESPONSE_MODEL_MISMATCH")
@@ -810,6 +903,208 @@ class DeepSeekRequiredClient:
 
         proof = self.execution.call_io("model.deepseek.chat", inputs, invoke)
         self.receipts.append({k: v for k, v in proof.items() if k not in ("schema", "parsed", "response")})
+        return proof["parsed"]
+
+    def _safe_native_content(self, text):
+        if not isinstance(text, str):
+            return None, False
+        safe = self._text(text)
+        # A malformed reply cannot be parsed before its first durable record.
+        # Inspect bounded decoded variants for encoded credentials instead of
+        # persisting them or changing malformed JSON into an accepted answer.
+        decoded = text
+        for _ in range(8):
+            following = html.unescape(unquote(re.sub(r"\\u([0-9a-fA-F]{4})",
+                lambda match: chr(int(match.group(1), 16)), decoded)))
+            if following == decoded:
+                break
+            decoded = following
+        else:
+            return "[REDACTED_MODEL_CONTENT]", True
+        if decoded != text and self._text(decoded) != decoded:
+            return "[REDACTED_MODEL_CONTENT]", True
+        return safe, safe != text
+
+    @staticmethod
+    def _observation_failure(diagnostic, observation):
+        return RequiredModelUnavailable(diagnostic["code"],
+            http_status=diagnostic.get("http_status"), schema_path=diagnostic.get("schema_path"),
+            schema_keyword=diagnostic.get("schema_keyword"), json_stage=diagnostic["json_stage"],
+            transport=diagnostic.get("transport"), observation=observation)
+
+    def _observed_complete_json(self, *, system, user, schema_hint, max_tokens,
+                               temperature, schema, public_payload):
+        from .json_observation import (ATTEMPT_SCHEMA, CALL_SCHEMA, CONTRACT, REQUEST_SCHEMA,
+            contract_schemas, replay_attempt, staged_diagnostic, validate_reference_observation, validate_transport,
+            TOOL_CONTRACT)
+        contract = self._response_observation_contract
+        schemas = contract_schemas(contract)
+        if max_tokens is not None:
+            _fail("CALLER_OUTPUT_CAP_FORBIDDEN")
+        stage = self._stage()
+        try:
+            request, input_tokens, ceiling = self.plan_chat(system=system, user=user,
+                schema_hint=schema_hint, schema=schema, temperature=temperature, public_payload=public_payload)
+        except TokenBudgetError as error:
+            _fail(error.code)
+        call_id = uuid.uuid4().hex
+        mode, effort = request["thinking"]["type"], request.get("reasoning_effort")
+        identity = getattr(self.execution, "model_call_id", None)
+        if identity is not None:
+            if not callable(identity):
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
+            call_id = self._identifier(identity(call_id))
+        inputs = {"schema": schemas["request"], "response_observation_contract": contract,
+            "call_id": call_id, "stage": stage, "provider": "deepseek", "method": "POST",
+            "endpoint": BASE_URL + "/chat/completions", "request": request, "request_sha256": _hash(request),
+            "output_schema": schema, "schema_sha256": _hash(schema), "release": RELEASE,
+            "scene": KERNEL_SCENE_MAP[stage], "thinking_mode": mode, "reasoning_effort": effort,
+            "input_token_estimate": input_tokens, "output_ceiling": ceiling,
+            "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
+            "tokenizer_sha256": TOKENIZER_SHA256}
+        rejected_contract = getattr(self.execution, "rejected_native_contract", None)
+        if rejected_contract is not None:
+            from .rejected_native import CONTRACT as REJECTED_NATIVE_CONTRACT
+            if rejected_contract != REJECTED_NATIVE_CONTRACT:
+                _fail("TRUSTED_CONFIGURATION_MISMATCH")
+            inputs["rejected_native_contract"] = rejected_contract
+        observation = {"schema": contract, "call_id": call_id, "request_sha256": inputs["request_sha256"],
+                       "attempts": [], "retry_used": False}
+
+        def record(ordinal, *, native=None, body_hash=None, error=None, rejected_native=None):
+            transport = self._last_chat_transport
+            if native is not None and transport is None:
+                # Test adapters may provide a complete decoded native object;
+                # an unknown byte count remains unknown, never a fabricated 0.
+                transport = {"http_status": 200, "body_sha256": body_hash, "body_bytes": None,
+                    "body_whitespace_only": None, "body_complete": True}
+            if transport is None:
+                transport = {"http_status": None, "body_sha256": None, "body_bytes": None,
+                    "body_whitespace_only": None, "body_complete": False}
+            if contract == TOOL_CONTRACT and "final_response_url" not in transport:
+                transport = {**transport, "final_response_url": None, "redirected": None}
+            transport = validate_transport(transport)
+            diagnostic = staged_diagnostic(error, "http_envelope", transport) if error is not None else None
+            attempt = {"schema": schemas["attempt"], "call_id": call_id, "ordinal": ordinal,
+                "request_sha256": inputs["request_sha256"], "transport": transport,
+                "response": None, "response_sha256": None, "content_redacted": None,
+                "reasoning_state": None, "fingerprint_valid": None, "transport_diagnostic": diagnostic}
+            if rejected_native is not None:
+                attempt["rejected_native"] = rejected_native
+            if native is not None:
+                content = native["choices"][0]["message"].get("content")
+                safe_content, redacted = self._safe_native_content(content)
+                reasoning = native["choices"][0]["message"].get("reasoning_content")
+                reasoning_state = ("absent" if reasoning is None else "invalid" if not isinstance(reasoning, str)
+                                   else "present" if reasoning.strip() else "empty")
+                fingerprint, fingerprint_valid = native.get("system_fingerprint"), True
+                if fingerprint is not None:
+                    try:
+                        fingerprint = self._identifier(fingerprint)
+                        if self._api_key in fingerprint:
+                            _fail("UNSAFE_RESPONSE_FINGERPRINT")
+                    except RequiredModelUnavailable:
+                        fingerprint, fingerprint_valid = None, False
+                safe_response = {"id": native["id"], "object": "chat.completion", "model": MODEL,
+                    "system_fingerprint": fingerprint, "choices": [{"index": 0, "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": safe_content}}],
+                    "usage": self._usage(native.get("usage"), "enabled")}
+                attempt.update(response=safe_response, response_sha256=_hash(safe_response),
+                    content_redacted=redacted, reasoning_state=reasoning_state, fingerprint_valid=fingerprint_valid)
+            # Fail closed on an evidence-write error, before parsing or another
+            # provider send. The final call/error links this exact immutable ref.
+            ref = self.execution.model_attempt_snapshot(attempt)
+            entry = {"ordinal": ordinal, "observation_ref": ref, "diagnostic": diagnostic}
+            observation["attempts"].append(entry)
+            observation["retry_used"] = len(observation["attempts"]) == 2
+            return attempt, entry
+
+        def invoke():
+            for ordinal in (1, 2):
+                from .resume_native import cached_attempt
+                cached = cached_attempt(self.execution, ordinal, inputs, observation)
+                if cached is None:
+                    self._last_chat_transport = None
+                    native, body_hash = None, None
+                    try:
+                        try:
+                            verify_request_budget(request, expected_request_sha256=inputs["request_sha256"],
+                                input_tokens=inputs["input_token_estimate"], output_ceiling=inputs["output_ceiling"],
+                                registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
+                        except TokenBudgetError as error:
+                            _fail(error.code)
+                        native, body_hash = self._post_json("/chat/completions", request)
+                        if native.get("model") != MODEL:
+                            _fail("RESPONSE_MODEL_MISMATCH")
+                        if native.get("object") != "chat.completion":
+                            _fail("RESPONSE_OBJECT_MISMATCH")
+                        response_id = self._identifier(native.get("id"))
+                        if self._api_key in response_id or response_id in self._observed_response_ids:
+                            _fail("RESPONSE_IDENTITY_REUSED_OR_UNSAFE")
+                        choices = native.get("choices")
+                        if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+                            _fail("INVALID_CHOICES")
+                        choice, message = choices[0], choices[0].get("message")
+                        if choice.get("finish_reason") == "length":
+                            _fail("MODEL_OUTPUT_TRUNCATED")
+                        if (type(choice.get("index")) is not int or choice["index"] != 0
+                                or choice.get("finish_reason") != "stop" or not isinstance(message, dict)
+                                or message.get("role") != "assistant" or message.get("tool_calls") or message.get("function_call")):
+                            _fail("INCOMPLETE_MODEL_RESPONSE")
+                        self._usage(native.get("usage"), "enabled")
+                        self._observed_response_ids.add(response_id)
+                    except RequiredModelUnavailable as error:
+                        from .rejected_native import capture
+                        rejected = capture(native, inputs, ordinal=ordinal, body_hash=body_hash,
+                            code=error.diagnostic["code"], secret=self._api_key,
+                            sanitize_identifier=self._safe_native_content)
+                        _, entry = record(ordinal, error=error, rejected_native=rejected)
+                        raise self._observation_failure(entry["diagnostic"], observation) from None
+                    attempt, entry = record(ordinal, native=native, body_hash=body_hash)
+                else:
+                    attempt, entry = cached
+                    response = attempt["response"]
+                    response_id = None if response is None else response["id"]
+                    body_hash = attempt["transport"]["body_sha256"]
+                    message = {} if response is None else response["choices"][0]["message"]
+                verdict = replay_attempt(attempt, inputs)
+                # Redaction must never turn invalid original JSON into an
+                # accepted result or authorize a second billable request.
+                if cached is not None and attempt["content_redacted"]:
+                    _fail("RESPONSE_OBJECT_MISMATCH")
+                if attempt["content_redacted"]:
+                    try:
+                        original = _json_loads(message["content"])
+                        if not isinstance(original, dict) or not original:
+                            _fail("EMPTY_OR_NONOBJECT_MODEL_OUTPUT")
+                        original = self._clean(original)
+                        validate_schema(original, schema)
+                        if verdict["diagnostic"] is not None or _hash(original) != _hash(verdict["parsed"]):
+                            _fail("RESPONSE_OBJECT_MISMATCH")
+                    except RequiredModelUnavailable as error:
+                        verdict.update(parsed=None, diagnostic=staged_diagnostic(error, "assistant_content"), retry_eligible=False)
+                entry["diagnostic"] = verdict["diagnostic"]
+                if verdict["diagnostic"] is not None:
+                    if ordinal == 1 and verdict["retry_eligible"] and self.execution.claim_model_format_retry():
+                        continue
+                    raise self._observation_failure(verdict["diagnostic"], observation) from None
+                parsed = verdict["parsed"]
+                safe_response = {**attempt["response"], "choices": [{"index": 0, "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": _canonical(parsed).decode("utf-8")}}]}
+                return {"schema": schemas["call"], "response_observation_contract": contract, "call_id": call_id,
+                    "stage": stage, "provider": "deepseek", "requested_model": MODEL, "response_id": response_id,
+                    "model": MODEL, "release": RELEASE, "usage": verdict["usage"], "scene": KERNEL_SCENE_MAP[stage],
+                    "thinking_mode": mode, "reasoning_effort": effort, "input_token_estimate": input_tokens,
+                    "output_ceiling": ceiling, "policy_version": POLICY_VERSION, "registry_version": REGISTRY_VERSION,
+                    "tokenizer_sha256": TOKENIZER_SHA256, "finish_reason": "stop", "request_sha256": inputs["request_sha256"],
+                    "response_sha256": _hash(safe_response), "transport_response_sha256": body_hash,
+                    "schema_sha256": inputs["schema_sha256"], "response": safe_response,
+                    "system_fingerprint": safe_response["system_fingerprint"], "search_mode": SEARCH_MODE,
+                    "parsed": parsed, "response_observation": validate_reference_observation(observation)}
+            raise AssertionError("Native format retry exceeded its closed bound")
+
+        proof = self.execution.call_io("model.deepseek.chat", inputs, invoke)
+        self.receipts.append({key: value for key, value in proof.items() if key not in ("schema", "parsed", "response")})
         return proof["parsed"]
 
     def _source_title(self, title: str) -> str:

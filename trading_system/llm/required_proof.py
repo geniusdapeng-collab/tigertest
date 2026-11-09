@@ -33,9 +33,8 @@ from .deepseek_required import (
 from .model_budget import (
     CONTEXT_TOKENS,
     POLICY_VERSION,
-    REGISTRY_VERSION,
-    TOKENIZER_SHA256,
     TokenBudgetError,
+    frozen_budget_contract,
     chat_request_core,
     plan_request,
 )
@@ -150,6 +149,8 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
     if (type(run_date) is not str or date.fromisoformat(run_date).isoformat() != run_date
             or type(market_timezone) is not str or market_timezone != "America/New_York"):
         _fail()
+    counter_contract = frozen_budget_contract(read_bytes(
+        run, "source/trading_system/llm/model_budget.py"))
     assessment = {"run_date": run_date, "market_timezone": market_timezone}
     events = [strict_json(line) for line in read_bytes(run, "events.jsonl").splitlines()]
     by_stage = {row["stage"]: row for row in events if row["kind"] == "end"}
@@ -249,7 +250,8 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                         sanitize_model_value(args["public_payload"]), ensure_ascii=False,
                         sort_keys=True, separators=(",", ":"), allow_nan=False)
                 return plan_request(chat_request_core(system=system, user=user, schema=schema,
-                    schema_hint={}, thinking_mode=thinking_mode, effort=reasoning_effort, temperature=0.2))
+                    schema_hint={}, thinking_mode=thinking_mode, effort=reasoning_effort, temperature=0.2),
+                    counter_id=counter_contract["counter_id"])
 
         if stage == "clean.llm_semantic":
             if legacy:
@@ -427,8 +429,8 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                     or request.get("input_token_estimate") != input_token_estimate
                     or request.get("output_ceiling") != output_ceiling
                     or request.get("policy_version") != POLICY_VERSION
-                    or request.get("registry_version") != REGISTRY_VERSION
-                    or request.get("tokenizer_sha256") != TOKENIZER_SHA256
+                    or request.get("registry_version") != counter_contract["registry_version"]
+                    or request.get("tokenizer_sha256") != counter_contract["tokenizer_sha256"]
                     or body["thinking"] != {"type": thinking_mode}
                     or ("reasoning_effort" in body) != (thinking_mode == "enabled")
                     or body.get("reasoning_effort") not in (None, reasoning_effort)
@@ -438,8 +440,8 @@ def _verify(run, result, admission, *, scene_policy_path=None, source_content_co
                     or proof.get("input_token_estimate") != input_token_estimate
                     or proof.get("output_ceiling") != output_ceiling
                     or proof.get("policy_version") != POLICY_VERSION
-                    or proof.get("registry_version") != REGISTRY_VERSION
-                    or proof.get("tokenizer_sha256") != TOKENIZER_SHA256
+                    or proof.get("registry_version") != counter_contract["registry_version"]
+                    or proof.get("tokenizer_sha256") != counter_contract["tokenizer_sha256"]
                     or request["output_schema"] != expected_schema
                     or request["schema_sha256"] != _hash(expected_schema)
                     or proof["schema_sha256"] != request["schema_sha256"]

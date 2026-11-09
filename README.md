@@ -7,7 +7,7 @@
 **No prediction. Process, discipline, audit.（别人预测市场，我们执行纪律。）**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-9A7B2D)](LICENSE)
-[![GitHub](https://img.shields.io/badge/repo-workroom--tiger-1B2A4E)](https://github.com/workloom-ai/workroom-tiger)
+[![GitHub](https://img.shields.io/badge/repo-workroom--tiger-1B2A4E)](https://github.com/geniusdapeng-collab/workroom-tiger)
 
 </div>
 
@@ -288,7 +288,8 @@ Agent 会先检查环境，再按固定 CLI/MCP 提交与查询同一个任务�
 bash scripts/setup.sh                # 一键安装+自检（或 pip install -r requirements.txt）
 python3 -m pytest tests/ -q          # 交易内核测试（本机实测 327 passed，2026-09-19）
 python3 main.py --demo               # 离线演示（合成数据，端到端 21 环节）
-python3 main.py --universe full --top 30 --picks 8   # 生产模式（每日全市场）
+python3 main.py --universe focused --top 30 --picks 8 # 受控 v2 默认：120 只核心扫描
+python3 main.py --universe full --top 30 --picks 8    # 旧通用入口的全市场实验
 bash scripts/stack_setup.sh          # 全栈：+ WorkLoom 治理底座（Node≥24/Docker）
 
 # S6 复盘闭环与审批流
@@ -298,6 +299,15 @@ python3 main.py --review-reject <id> --reason "..."      # 驳回（原因必填
 ```
 
 普通非受控旧入口保留离线演示与透传语义，详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。新的 AI 研究和官网更新必须显式使用受控 CLI/MCP 和 `us-public-intelligence-paper-v2`，按 [Agent 操作指南](docs/AGENT-CLIENTS.md) 加载仓库外受保护环境文件；模板见 [`.env.example`](.env.example)。新配置先冻结独立数值候选，再按研究问题采集登记来源、原文与附件，逐目标验证实体、事件、时间和用途并冻结证据包。缺资料的目标保留 `null` 与缺口；搜索成功不会自动获得评分或行动资格。原 `us-public-model-required-paper-v1` 和更早 profile 保留历史回放。
+
+受控 v2 默认用 `focused` 扫描池：120 只内嵌核心高流动性标的。它是稳定的广覆盖起点，
+不是美股全量，也不等于最终研究范围；运行时仍按价格、20 日成交额、历史和波动率过滤，
+再结合相对强度、均线、波动收缩和接近新高排序。产业链行情会单独并入用于板块与风险
+上下文。需要对照广扫时可用 `extended`（480 只基础池，加链上补充标的后当前为 505 只），
+需要完整证券目录时用 `full`（Nasdaq Trader 官方清单）。历史 profile 继续按其冻结源码和
+合同读取，不能把今天的池子或结果回写到旧任务。
+
+受控入口提供 `doctor / describe / run / resume / supplement / status / receipt / verify`。`resume` 只恢复同一 stopped run 的原身份、源码、策略、账户 before-state 与 deadline；`supplement` 从已核验 pending candidate 新建完整研究 admission，不复用旧证据快照或交易批准。`status` 的 `data.research_status` 分开显示流程、证据、决策和账户四轴，receipt/verify 仍必须独立通过。
 
 文本语义仍固定 `deepseek-flash` + JSON mode，官方别名于 2026-10-26 观察为 `DeepSeek-V4.1-Flash-1017`，不宣称不可变快照。每次请求使用仓库内固定官方 tokenizer 对完整序列化输入计数，并申请全部合法剩余输出窗口；thinking 由场景策略决定：清洗/舆情非思考，风险/板块叙事 high，最终多空判断 max。工具请求/Fetch/字节/轮次/时限预算与模型窗口分别管理。可选 Brave、Tavily、Exa 仅用于发现资料，不替代文本模型；官方能力见 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)、[Token 用量](https://api-docs.deepseek.com/zh-cn/quick_start/token_usage/) 和 [Search & Fetch](https://api-docs.deepseek.com/guides/search/)。五个模型阶段真实完整且独立校验通过才算完成；disabled、passthrough、规则语义替代或任何失败都不能交付为成功。该配置不启用 active 实验。网站的人读研究包含为什么关注、入场/失效条件、风险及来源；资金和数值为明确标识的模拟参考，富途/老虎真实操作由人执行，实际收益只来自真实成交回报。
 
@@ -373,7 +383,7 @@ Apache-2.0。
 
 ## 桌面 Agent 接入（Codex / Qoder / DeepSeek Harness）
 
-完整后端研究使用 `node scripts/tiger-agent.mjs`（固定六操作 CLI）或
+完整后端研究使用 `node scripts/tiger-agent.mjs`（固定八操作 CLI）或
 `node scripts/tiger-agent-mcp.mjs`（独立 STDIO MCP）。通过
 `node scripts/tiger-agent-config.mjs --client codex` 生成 Codex 本机项目配置，默认只读；
 Qoder CLI 与 DSH 分别选择 `--client qoder` 和 `--client dsh`。

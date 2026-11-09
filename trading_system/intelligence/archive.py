@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
+import time
 import uuid
 
 from .contracts import (BUNDLE_SCHEMA, IntelligenceError, aware, canonical, digest,
@@ -55,6 +56,46 @@ CREATE TABLE IF NOT EXISTS bundles(
 """
 _IMMUTABLE = ("events", "attempts", "attempt_results", "documents", "hits", "assessments", "bundles")
 
+# New records carry this small projection in the existing scoped metadata index.
+# Old projections and their sealed snapshot hashes remain byte-identical. A
+# legacy predecessor may be read once under an explicit metadata size/work cap;
+# there is no startup migration or full-record expression index.
+_REVISION_PATHS = (
+    "canonical_url", "source_id", "source_version", "completeness", "text_kind", "raw_blob.media_type",
+    "normalization.kind", "normalization.operation", "normalization.source_contract_sha256",
+    "extraction_metadata.extractor", "extraction_metadata.extractor_config_sha256",
+    "extraction_metadata.parser", "extraction_metadata.parse_policy",
+)
+_REVISION_POLICY = "tiger.observed-source-version/2026-11-06.1"
+_REVISION_METADATA_LIMIT = 1024 * 1024
+
+
+def _revision_metadata(record):
+    """Comparable complete representations; unknown periods stay explicitly so."""
+    kind = record.get("text_kind")
+    if (record.get("completeness") != "complete" or not isinstance(kind, str) or not kind
+            or kind.startswith("feed") or "snippet" in kind or kind in {"filing_index", "provider_markdown", "attachment"}
+            or not all(isinstance(record.get(key), str) and record[key]
+                       for key in ("canonical_url", "source_id", "source_version"))):
+        return None
+    values = []
+    for path in _REVISION_PATHS:
+        value = record
+        for part in path.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        values.append(canonical(value).decode() if isinstance(value, (dict, list)) else value)
+    metadata = record.get("source_metadata", {})
+    periods = [record.get(field) or metadata.get(field) for field in ("period_start", "period_end")]
+    if all(value is None or value == "" for value in periods):
+        return values + [None, None], "unknown"
+    try:
+        normalized = [date.fromisoformat(value).isoformat() for value in periods]
+    except (TypeError, ValueError):
+        return None
+    if normalized != periods or normalized[0] > normalized[1]:
+        return None
+    return values + normalized, "known"
+
 
 class Archive:
     def __init__(self, root, *, tenant="public", clock=utc_now, readonly=False):
@@ -72,6 +113,8 @@ class Archive:
                 (self.root / "bundles").mkdir(exist_ok=True)
                 with self._session() as connection:
                     connection.executescript(_SCHEMA)
+                    from .snapshots import initialize_schema
+                    initialize_schema(connection, self.tenant)
                     for table in _IMMUTABLE:
                         for verb in ("UPDATE", "DELETE"):
                             connection.execute(f"CREATE TRIGGER IF NOT EXISTS no_{verb.lower()}_{table} BEFORE {verb} ON {table} BEGIN SELECT RAISE(ABORT,'immutable intelligence evidence'); END")
@@ -199,11 +242,27 @@ class Archive:
         received = sum(row.get("result", {}).get("bytes_received", 0) for row in attempts)
         unknown = sum(row.get("result", {}).get("usage", {}).get("requires_reconciliation", False) for row in attempts)
         bundle = connection.execute("SELECT bundle_id,manifest_sha256 FROM bundles WHERE job_id=? AND tenant=?", (job_id, self.tenant)).fetchone()
+        reserved = [row for row in attempts if "reserved_bytes" in row["request"]]
+        reservation_usage = {}
+        if reserved:
+            held = [row for row in reserved if row["status"] in {"inflight", "unknown"}]
+            committed = [row for row in attempts if not ("reserved_bytes" in row["request"]
+                and row["status"] in {"inflight", "unknown"})]
+            reservation_usage = {"reserved_bytes": sum(row["request"]["reserved_bytes"] for row in held),
+                "committed_bytes": sum(row.get("result", {}).get("bytes_received", 0) for row in committed),
+                "reserved_requests": sum(row["request"]["reserved_requests"] for row in held),
+                "committed_requests": sum(row.get("result", {}).get("request_count",
+                    row["request"].get("reserved_requests", 1)) for row in committed)}
+        runtime = connection.execute("SELECT payload_json FROM events WHERE tenant=? AND job_id=? "
+            "AND kind='source_runtime_finished' ORDER BY sequence DESC LIMIT 1", (self.tenant, job_id)).fetchone()
+        runtime = json.loads(runtime[0]) if runtime else None
         return {"job_id": job_id, "run_id": job["run_id"], "state": job["state"], "revision": job["revision"], "created_at": job["created_at"],
                 "plan_hash": job["plan_hash"], "gaps": gaps, "attempts": attempts,
                 "inflight_attempts": [r["attempt_id"] for r in attempts if r["status"] == "inflight"],
                 "usage": {"requests": requests, "fetches": fetches, "bytes": received,
-                          "unreconciled_attempts": unknown}, "effective_concurrency": 1,
+                          "unreconciled_attempts": unknown, **reservation_usage},
+                "effective_concurrency": runtime["peak_source_operations"] if runtime else 1,
+                **({"source_runtime": runtime} if runtime else {}),
                 "bundle": dict(bundle) if bundle else None}
 
     def status(self, job_id):
@@ -218,13 +277,32 @@ class Archive:
             connection.execute("UPDATE jobs SET state=? WHERE job_id=? AND tenant=?", (state, job_id, self.tenant))
             self._event(connection, job_id, "job_state", {"state": state})
 
-    def begin_attempt(self, job_id, source_id, operation, request, *, ordinal=0):
+    def begin_attempt(self, job_id, source_id, operation, request, *, ordinal=0, reserve_bytes=None):
         if operation not in {"search", "fetch"}:
             raise IntelligenceError("CONTRACT_INVALID", "Unsupported acquisition operation")
+        if "reserved_bytes" in request:
+            raise IntelligenceError("CONTRACT_INVALID", "Byte reservations are allocated only by the archive")
         with self.transaction() as connection:
             job = self._ensure_open(connection, job_id)
             status = self._status(connection, job_id)
             limits = json.loads(job["plan_json"])["limits"]
+            if reserve_bytes is not None:
+                if (type(reserve_bytes) is not int or reserve_bytes <= 0
+                        or type(request.get("reserved_requests")) is not int or request["reserved_requests"] <= 0):
+                    raise IntelligenceError("CONTRACT_INVALID", "Invalid source resource reservation")
+                if any(row["status"] in {"inflight", "unknown"} and "reserved_bytes" not in row["request"]
+                        for row in status["attempts"]):
+                    raise IntelligenceError("RECONCILIATION_REQUIRED", "Legacy dispatch has no byte reservation")
+                available_requests = limits["requests"] - status["usage"].get("committed_requests", status["usage"]["requests"]) - status["usage"].get("reserved_requests", 0)
+                available_bytes = limits["bytes"] - status["usage"].get("committed_bytes", status["usage"]["bytes"]) - status["usage"].get("reserved_bytes", 0)
+                if available_requests <= 0 or available_bytes <= 0:
+                    if any(row["status"] == "unknown" and "reserved_bytes" in row["request"] for row in status["attempts"]):
+                        raise IntelligenceError("RECONCILIATION_REQUIRED", "Unknown source attempt retains its reservation")
+                    if status["inflight_attempts"]:
+                        raise IntelligenceError("RESOURCE_BUSY", "Concurrent source attempts retain the available quota")
+                    raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition tool quota exhausted")
+                request = {**request, "reserved_requests": min(request["reserved_requests"], available_requests),
+                    "reserved_bytes": min(reserve_bytes, available_bytes)}
             if (status["usage"]["requests"] + request.get("reserved_requests", 1) > limits["requests"] or operation == "fetch" and status["usage"]["fetches"] >= limits["fetches"]
                     or status["usage"]["bytes"] >= limits["bytes"]):
                 raise IntelligenceError("BUDGET_EXHAUSTED", "Acquisition tool quota exhausted")
@@ -251,6 +329,11 @@ class Archive:
                 self._event(connection, job_id, "late_attempt_receipt", {"attempt_id": attempt_id,
                     "status": status, "result": result, "excluded_from_frozen_bundle": True})
                 return {"settled": False, "duplicate": False, "late": True}
+            reservation = json.loads(attempt["request_json"])
+            if "reserved_bytes" in reservation and any(type(result.get(key)) is not int or result[key] < 0
+                    or result[key] > reservation[limit] for key, limit in
+                    (("bytes_received", "reserved_bytes"), ("request_count", "reserved_requests"))):
+                raise IntelligenceError("CONTRACT_INVALID", "Source receipt exceeds its admitted reservation")
             connection.execute("INSERT INTO attempt_results VALUES(?,?,?,?)", (attempt_id, status, timestamp(self.clock()), canonical(result).decode()))
             self._event(connection, job_id, "attempt_settled", {"attempt_id": attempt_id, "status": status, "result": result})
             return {"settled": True, "duplicate": False, "late": False}
@@ -278,20 +361,32 @@ class Archive:
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.parent.resolve().is_relative_to(self.root):
                 raise IntelligenceError("ACCESS_DENIED", "Blob directory escapes archive")
-            if path.exists():
+            if path.exists() or path.is_symlink():
                 if path.is_symlink() or path.read_bytes() != data:
                     raise IntelligenceError("HASH_MISMATCH", "Existing content-addressed blob differs")
             else:
+                pending = path.parent / ("." + uuid.uuid4().hex + ".pending")
                 try:
-                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                except FileExistsError:
-                    if path.read_bytes() != data:
-                        raise IntelligenceError("HASH_MISMATCH", "Concurrent blob write differs")
-                else:
+                    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     with os.fdopen(descriptor, "wb") as stream:
                         stream.write(data)
                         stream.flush()
                         os.fsync(stream.fileno())
+                    # Publish only complete bytes, atomically and without ever
+                    # replacing an existing immutable name. Racing writers can
+                    # read a complete winner while our private staging remains.
+                    try:
+                        os.link(pending, path)
+                    except FileExistsError:
+                        if path.is_symlink() or path.read_bytes() != data:
+                            raise IntelligenceError("HASH_MISMATCH", "Concurrent blob write differs")
+                    directory = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    pending.unlink(missing_ok=True)
         except OSError:
             raise IntelligenceError("ARCHIVE_UNAVAILABLE", "Cannot persist source bytes") from None
         return {"sha256": sha, "bytes": len(data), "path": relative, "media_type": media_type}
@@ -305,14 +400,101 @@ class Archive:
         try:
             if path.is_symlink() or not path.resolve().is_relative_to(self.root):
                 raise IntelligenceError("ACCESS_DENIED", "Blob path escapes archive")
-            data = path.read_bytes()
+            expected = ref.get("bytes")
+            if type(expected) is not int or expected < 0 or path.stat().st_size != expected:
+                raise IntelligenceError("HASH_MISMATCH", "Source blob size differs from its reference")
+            with path.open("rb") as stream:
+                data = stream.read(expected + 1)
         except OSError:
             raise IntelligenceError("EVIDENCE_NOT_FOUND", "Source blob is missing") from None
         if len(data) != ref.get("bytes") or hashlib.sha256(data).hexdigest() != sha:
             raise IntelligenceError("HASH_MISMATCH", "Source bytes differ from frozen hash")
         return data
 
-    def put_document(self, job_id, record, *, attempt_id, rank=0, targets=(), entities=(), hit=None):
+    def _observed_replacement(self, connection, record):
+        comparable = _revision_metadata(record)
+        if comparable is None:
+            return record
+        values, period_basis = comparable
+        projection = {"policy": _REVISION_POLICY, "representation_sha256": digest(values),
+                      "period_basis": period_basis, "period_start": values[-2], "period_end": values[-1]}
+        stored = {**record, "source_revision": projection}
+        if record.get("supersedes"):
+            return stored
+        # The existing doc_id index bounds lookup to this one rolling URL. SQL
+        # work and elapsed time are bounded even when that URL has many versions.
+        budget = {"steps": 0, "exhausted": False}
+        deadline = time.monotonic() + .1
+        def guard():
+            budget["steps"] += 1000
+            budget["exhausted"] = budget["steps"] > 100000 or time.monotonic() >= deadline
+            return int(budget["exhausted"])
+        connection.set_progress_handler(guard, 1000)
+        try:
+            previous = connection.execute(
+                "SELECT document_id,event_sequence,event_at,CASE WHEN length(CAST(metadata_json AS BLOB))<=65536 THEN metadata_json END AS metadata_json,metadata_sha256 FROM snapshot_document_index "
+                "WHERE tenant=? AND doc_id=? AND first_seen_at<=? "
+                "AND json_extract(metadata_json,'$.source_id')=? AND json_extract(metadata_json,'$.source_version')=? "
+                "AND json_extract(metadata_json,'$.period_start') IS ? AND json_extract(metadata_json,'$.period_end') IS ? "
+                "ORDER BY first_seen_at DESC,event_sequence DESC LIMIT 1",
+                (self.tenant, record["doc_id"], record["times"]["first_seen"]["value"],
+                 record["source_id"], record["source_version"], values[-2], values[-1])).fetchone()
+            incomplete_index = previous is None and connection.execute(
+                "SELECT 1 FROM documents d WHERE d.tenant=? AND d.doc_id=? AND NOT EXISTS(SELECT 1 "
+                "FROM snapshot_document_index i WHERE i.tenant=d.tenant AND i.document_id=d.id) LIMIT 1",
+                (self.tenant, record["doc_id"])).fetchone() is not None
+        except sqlite3.OperationalError:
+            if budget["exhausted"]:
+                projection.update(status="unverifiable", reason="SOURCE_REVISION_LOOKUP_WORK_LIMIT")
+                return stored
+            raise IntelligenceError("ARCHIVE_UNAVAILABLE", "Cannot inspect previous source-version metadata") from None
+        finally:
+            connection.set_progress_handler(None, 0)
+        if previous is None:
+            if incomplete_index:
+                projection.update(status="unverifiable", reason="SOURCE_REVISION_INDEX_INCOMPLETE")
+            return stored
+        if previous["metadata_json"] is None:
+            projection.update(status="unverifiable", reason="SOURCE_REVISION_METADATA_LIMIT")
+            return stored
+        metadata = json.loads(previous["metadata_json"])
+        if digest(metadata) != previous["metadata_sha256"]:
+            raise IntelligenceError("HASH_MISMATCH", "Previous source-version metadata differs")
+        from .snapshots import _event
+        receipt = _event(connection, previous["event_sequence"], self.tenant, kind="document_version")
+        if (receipt["at"] != previous["event_at"] or receipt["payload"].get("document_id") != previous["document_id"]
+                or receipt["payload"].get("document_sha256") != metadata["document_sha256"]):
+            raise IntelligenceError("HASH_MISMATCH", "Previous source-version projection is not bound to its receipt")
+        prior_projection = metadata.get("source_revision")
+        projection_hash = receipt["payload"].get("source_revision_sha256")
+        if projection_hash is not None and (prior_projection is None or projection_hash != digest(prior_projection)):
+            raise IntelligenceError("HASH_MISMATCH", "Previous source-version representation differs from its receipt")
+        if prior_projection is None or projection_hash is None:
+            # A pre-policy archive need not be reindexed. Read at most one small
+            # predecessor record, never any source blob or unrelated history.
+            if metadata["text_blob"]["bytes"] > _REVISION_METADATA_LIMIT:
+                projection.update(status="unverifiable", reason="SOURCE_REVISION_METADATA_LIMIT")
+                return stored
+            legacy = connection.execute("SELECT record_sha256,CASE WHEN length(CAST(record_json AS BLOB))<=? THEN record_json END AS record_json "
+                "FROM documents WHERE tenant=? AND id=?", (_REVISION_METADATA_LIMIT, self.tenant, previous["document_id"])).fetchone()
+            if legacy is None or legacy["record_json"] is None:
+                projection.update(status="unverifiable", reason="SOURCE_REVISION_METADATA_LIMIT")
+                return stored
+            prior_record = json.loads(legacy["record_json"])
+            if digest(prior_record) != legacy["record_sha256"] or legacy["record_sha256"] != metadata["document_sha256"]:
+                raise IntelligenceError("HASH_MISMATCH", "Previous source-version original differs")
+            prior = _revision_metadata(prior_record)
+            prior_projection = {"policy": _REVISION_POLICY, "representation_sha256": digest(prior[0])} if prior else {}
+        if (prior_projection.get("policy") != _REVISION_POLICY
+                or prior_projection.get("representation_sha256") != projection["representation_sha256"]):
+            return stored
+        return {**stored, "supersedes": previous["document_id"], "supersession": {
+            "basis": "observed_source_version", "period_basis": period_basis,
+            "previous_document_sha256": metadata["document_sha256"], "previous_version": metadata["version"],
+            "representation_sha256": digest(values)}}
+
+    def put_document(self, job_id, record, *, attempt_id, rank=0, targets=(), entities=(), hit=None,
+                     preserve_record=False):
         with self.transaction() as connection:
             self._ensure_open(connection, job_id)
             existing = connection.execute("SELECT * FROM documents WHERE tenant=? AND id=?", (self.tenant, record["id"])).fetchone()
@@ -321,18 +503,25 @@ class Archive:
                 if stored["version"] != record["version"] or stored["text_blob"]["sha256"] != record["text_blob"]["sha256"]:
                     raise IntelligenceError("HASH_MISMATCH", "Existing document version differs")
             else:
-                stored = record
+                stored = record if preserve_record else self._observed_replacement(connection, record)
                 connection.execute("INSERT INTO documents VALUES(?,?,?,?,?,?,?)", (self.tenant, stored["id"], stored["doc_id"],
                     stored["version"], canonical(stored).decode(), digest(stored), stored["times"]["first_seen"]["value"]))
-                self._event(connection, job_id, "document_version", {"document_id": stored["id"],
+                payload = {"document_id": stored["id"],
                     "document_sha256": digest(stored), "raw_blob": stored["raw_blob"], "text_blob": stored["text_blob"],
-                    "first_seen_at": stored["times"]["first_seen"]["value"]})
+                    "first_seen_at": stored["times"]["first_seen"]["value"]}
+                if "source_revision" in stored:
+                    payload["source_revision_sha256"] = digest(stored["source_revision"])
+                event = self._event(connection, job_id, "document_version", payload)
+                from .snapshots import index_document
+                index_document(connection, self.tenant, stored, event["sequence"])
             hit_id = "hit_" + digest({"attempt": attempt_id, "rank": rank, "document": stored["id"],
                                       "targets": list(targets), "entities": list(entities)})[:32]
             connection.execute("INSERT OR IGNORE INTO hits VALUES(?,?,?,?,?,?,?,?,?)", (hit_id, self.tenant, job_id, attempt_id,
                 stored["id"], rank, canonical(list(targets)).decode(), canonical(list(entities)).decode(), canonical(hit or {}).decode()))
-            self._event(connection, job_id, "query_hit", {"hit_id": hit_id, "attempt_id": attempt_id,
+            event = self._event(connection, job_id, "query_hit", {"hit_id": hit_id, "attempt_id": attempt_id,
                 "document_id": stored["id"], "rank": rank, "targets": list(targets), "entities": list(entities)})
+            from .snapshots import index_hit
+            index_hit(connection, self.tenant, stored["id"], event["sequence"], targets, entities)
             return stored
 
     def document(self, document_id):
@@ -354,7 +543,7 @@ class Archive:
         targets = [cell["target_id"] for cell in plan["coverage_cells"] if cell.get("entity_id") in entities
                    or cell["target_id"].startswith(("chain:", "sector:", "global:"))]
         return self.put_document(job_id, record, attempt_id="baseline:" + manifest["manifest_sha256"],
-            targets=targets, entities=entities,
+            targets=targets, entities=entities, preserve_record=True,
             hit={"baseline_archive_id": manifest["archive_id"], "baseline_manifest_sha256": manifest["manifest_sha256"]})
 
     def documents(self, job_id):
@@ -546,6 +735,20 @@ class Archive:
         result = {"schema": "tiger.intelligence-baseline/v1", "tenant": self.tenant, "archive_id": archive_id,
                   "as_of": cutoff, "versions": versions, "event_head": chain}
         return {**result, "manifest_sha256": digest(result)}
+
+    def create_snapshot(self, as_of, *, scope, limits=None, topic_ref=None, registry_hash=""):
+        """Seal a bounded selection without reading unrelated source bytes."""
+        from .snapshots import create_snapshot
+        return create_snapshot(self, as_of, scope=scope, limits=limits,
+                               topic_ref=topic_ref, registry_hash=registry_hash)
+
+    def snapshot(self, snapshot_id):
+        from .snapshots import read_snapshot
+        return read_snapshot(self, snapshot_id)
+
+    def snapshot_documents(self, snapshot_id):
+        from .snapshots import read_snapshot
+        return read_snapshot(self, snapshot_id, documents=True)[1]
 
 
 def verify_bundle(root, bundle_id, *, tenant="public"):

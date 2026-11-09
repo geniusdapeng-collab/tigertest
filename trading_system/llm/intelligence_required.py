@@ -15,6 +15,7 @@ from ..agent_evidence import normalize, read_json
 from ..cleaning.pipeline import rule_base_clean
 from ..intelligence_workflow import (ACQUISITION_CONTRACT, SOURCE_CONTENT_CONTRACT,
     SEARCH_MODE, TOOL_LIMITS, entity_registry, validate_input_packet, value_hash)
+from ..intelligence_workflow import baseline_version_ids
 from ..redline import LLMUnavailable
 from ..redline.execution import REQUIRED_MODEL_STAGES
 from ..search.credibility import evidence_for
@@ -25,6 +26,7 @@ from ..tech_chain.agents import RiskAlert, StructuredSentimentRow
 from ..tech_chain.risk_evidence import risk_coverage
 from ..tech_chain.universe import TECH_SUBCHAINS
 from . import required as legacy
+from .clean_keyed_codec import document_ids as keyed_document_ids
 from .deepseek_required import MODEL, RELEASE, validate_schema
 from .model_budget import TokenBudgetError
 from .required_schemas import (clean_schema, sentiment_schema, risk_schema,
@@ -77,6 +79,74 @@ TASKS = {**legacy.TASKS,
         "evidence明确缺口，不从其他板块或全局非空语料推定本板块已经覆盖。"),
 }
 
+# Keep the historical task byte-for-byte replayable. This extension guides
+# model formatting; it never truncates source data or edits a model answer.
+LEGACY_CLEAN_FORMAT_CONTRACT = "typed-clean-legacy/v1"
+SUMMARY_CLEAN_FORMAT_CONTRACT = "typed-clean-summary-characters/v1"
+IDENTIFIERS_CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
+COMPLETE_CLEAN_FORMAT_CONTRACT = "typed-clean-complete-format/v1"
+CLEAN_FORMAT_CONTRACT = "typed-clean-keyed-inline/v1"
+LEGACY_CLEAN_TASK = (
+    "逐篇完成实体消歧、情感、事件与中文摘要。每个输入id恰好返回一次。"
+    "每篇tickers最多8个，先去重，再按文章主题只保留直接相关且能从文档核实的股票代码。"
+    "正文提到超过8个时，只返回最相关的8个。代码必须大写，以字母或数字开头，"
+    "只含字母、数字、点或连字符，最多15字符（例如AAPL、005930.KS）。"
+    "没有足够依据时tickers=[]，不要从简称猜代码。"
+    "events最多6个，只用schema枚举且去重，无对应事件可返回空数组。"
+    "sentiment_score在-1到1之间，relevance在0到1之间，summary_zh最长600字。"
+    "同时提取subjects、evidence_spans和event_records。quote必须逐字来自content，"
+    "start/end用Python字符位置且end不含末字符；不确定位置可用null但quote须在正文唯一出现。"
+    "主体、标识、期间、事件/生效时点都绑定自己的span_ids；source_span_ids须包含它们。"
+    "不要从URL/标题/检索问题伪造正文证据。未知时点用value=null,precision=unknown,span_ids=[]。"
+    "一页可含多个事件和期间；主报告事件is_primary=true，历史对照false。"
+    "按宏观、政策、公司、行业或行情类型提取；海外主体不必伪造美股代码。"
+    "企业展望标forward_guidance，已披露事实issuer_disclosure，媒体观察reported_fact，"
+    "分析analysis，传言rumor；不得把展望变成已实现事实。"
+    "每条可核事实另列claims并关联event_id与source_span_ids，predicate用稳定的事实名称，"
+    "value/unit/currency保留原文字面，不换算、不翻译数字单位或猜币种；没有值用null。"
+    "relation标supports/refutes/mentions；冲突或修订保留conflict_group/supersedes_claim_id。"
+    "target_ids仅选实际涉及且给定的产业链/ETF，不因检索标签而默认关联。"
+    "正文没有可核事实可返回空subjects/event_records，仍完成中文摘要；零输入返回documents=[]。"
+)
+SUMMARY_CLEAN_TASK = LEGACY_CLEAN_TASK + (
+    "输出前逐篇检查summary_zh：schema的maxLength=600按Unicode字符数计（不是token或字节），"
+    "建议每篇160–300字符，绝不超过600字符；摘要不要重复全文、证据引文或其他字段。"
+    "每个输入id必须恰好返回一次；tickers、events、subjects、evidence_spans、event_records、claims"
+    "各数组的项数、枚举和字符串长度逐项遵守给定schema，不多填、不漏项。"
+    "quote保留完整必要原文，不能为满足摘要长度去裁切原文证据或改写引用。"
+)
+IDENTIFIERS_CLEAN_TASK = SUMMARY_CLEAN_TASK + (
+    "清洗标识使用独立命名空间：event_records[].target_ids只能从本次顶层输入target_ids"
+    "原样选取给定的裸产业链ID或ETF代码，例如memory、XLK；不能复制source_metadata里的采集目标。"
+    "global:、chain:、sector:、security:、account:前缀的采集标识都不能放进事件target_ids。"
+    "宏观或政策属性用event_type=macro或policy表达；不涉及给定产业链/ETF时target_ids=[]。"
+    "每个event_records[].subject_ids必须非空，且只引用本篇subjects[].id；"
+    "被引用主体的名称、标识与span_ids必须能从本篇content逐字核验，不能借用其他文章的主体。"
+    "宏观系列、行业、监管机构和境外主体可用各自subject type表达，不必伪造美股代码。"
+    "无法从本篇原文确证主体时，不构造该typed event及依赖它的claim；仍保留该document和完整原文，"
+    "照常完成中文摘要，在摘要明确相关事实或反证及主体未能确证的未解决缺口。"
+    "能以原文span确证的主体、事件和claims必须如实提取，尤其保留负面事实和relation=refutes的反证；"
+    "不能为通过schema而清空已有依据的结构化结果、删除文档或隐藏反证，也不能把未解决缺口写成没有风险。"
+)
+COMPLETE_CLEAN_TASK = IDENTIFIERS_CLEAN_TASK + (
+    "summary_zh等schema要求纯文本的说明字段不能含字符<或>、HTML或控制字符；"
+    "比较和排序写成中文，例如优于、低于，不要把原文的排序符号复制进说明。"
+    "这不允许改写content、evidence_spans[].quote或claims的value/unit/currency；"
+    "原文和quote逐字保留，字面值继续遵守原schema和原文绑定，不能为格式通过而替换、转义、裁切或猜造。"
+    "每个输入文档行都必须保留，包括无关、证据不足或无法确证主体的行，仍按原规则说明缺口和反证。"
+    "同URL、同故事或相同正文的不同来源/版本仍按各自输入id独立输出，不合并、不去重、不按相关性过滤。"
+    "id逐字复制，绝不添加_dup等后缀、重命名或自造id。"
+)
+TASKS["clean.llm_semantic"] = COMPLETE_CLEAN_TASK.replace(
+    "零输入返回documents=[]。", "零输入使用本协议要求的空文档容器。") + (
+    "本版通过指定工具返回清洗结果：顶层documents必须是对象，不是数组。"
+    "documents的每个键逐字等于一个输入文档id，所有给定键都必须出现且只能出现一次；"
+    "每个键的值只能包含id和annotation，id必须逐字等于该键及对应输入id。"
+    "annotation逐项完整返回该文档的全部语义字段，不含id，不能省略nullable字段或用默认值代填。"
+    "即使相同URL、故事、正文或缺少可核事实，每个键仍独立完成；零输入返回documents={}。"
+    "工具schema固定每个输入id的传输容器；原有摘要、主体、引文、事件、claims、反证和风险要求仍逐项适用。"
+)
+
 
 def acquisition_topics(topics):
     """Bind the reviewed broad questions to the actual scored sector targets."""
@@ -99,15 +169,50 @@ def _docs(docs, *, project_annotations=False, allow_empty=True):
     return result
 
 
-def chat_arguments(stage, inputs, schema, assessment):
+def chat_arguments(stage, inputs, schema, assessment, *, clean_format_contract=CLEAN_FORMAT_CONTRACT):
     if "assessment" in inputs:
         _fail("V2 assessment must come from frozen admission")
     task = TASKS[stage]
+    clean_protocol = None
+    if stage == "clean.llm_semantic":
+        if clean_format_contract == LEGACY_CLEAN_FORMAT_CONTRACT:
+            task = LEGACY_CLEAN_TASK
+        elif clean_format_contract == SUMMARY_CLEAN_FORMAT_CONTRACT:
+            task = SUMMARY_CLEAN_TASK
+        elif clean_format_contract == IDENTIFIERS_CLEAN_FORMAT_CONTRACT:
+            task = IDENTIFIERS_CLEAN_TASK
+        elif clean_format_contract == COMPLETE_CLEAN_FORMAT_CONTRACT:
+            documents = inputs.get("documents")
+            if not isinstance(documents, list):
+                _fail("Mandatory clean request requires an explicit document row list")
+            task = COMPLETE_CLEAN_TASK + (
+                f"本批输入documents恰好{len(documents)}行，输出documents也必须恰好{len(documents)}行。"
+                "按输入原顺序逐行输出，第i行id必须逐字等于第i个输入id；"
+                "输出前逐行核对id、顺序、总数和schema，不能漏行、重复行或额外添行。")
+        elif clean_format_contract != CLEAN_FORMAT_CONTRACT:
+            _fail("Unknown clean-format prompt contract")
+        else:
+            documents = inputs.get("documents")
+            if not isinstance(documents, list):
+                _fail("Mandatory clean request requires an explicit document row list")
+            try:
+                identifiers = keyed_document_ids(schema)
+            except (ValueError, TypeError, KeyError):
+                _fail("Mandatory keyed clean request requires the full final schema")
+            if any(not isinstance(row, dict) for row in documents) or [
+                    row.get("id") for row in documents] != identifiers:
+                _fail("Mandatory keyed clean source identities differ from the final schema")
+            task += (f"本批输入documents恰好{len(documents)}行，输出documents对象必须恰好"
+                     f"包含schema要求的{len(documents)}个输入id键；逐一完成每个键的完整annotation。")
+            clean_protocol = {"contract": CLEAN_FORMAT_CONTRACT}
     if stage == "decision.debate":
         task += ("company_evidence来自评分前冻结的SEC原文；只有该证券自己的source_ids可用作下单新闻。"
                  "本阶段不再联网补资料。partial必需覆盖或无action资格的证券只能watch；不得把行业资料代作公司证据。")
-    return {"system": SYSTEM, "user": task, "schema_hint": {}, "schema": schema,
-            "public_payload": normalize({"assessment": assessment, **inputs})}
+    arguments = {"system": SYSTEM, "user": task, "schema_hint": {}, "schema": schema,
+                 "public_payload": normalize({"assessment": assessment, **inputs})}
+    if clean_protocol is not None:
+        arguments["clean_protocol"] = clean_protocol
+    return arguments
 
 
 def _stage_plan(llm, stage):
@@ -236,13 +341,22 @@ def assessment_rows(docs, plan):
 class Acquisition:
     def __init__(self, llm, frontier, topics):
         from ..intelligence import IntelligenceService, default_registry, build_plan
+        from ..intelligence.registry import acquisition_mode
 
         self.llm, self.frontier = llm, frontier
         self.packet = validate_input_packet(read_json(llm.execution.store.root, "intelligence-input.json"))
+        self.acquisition_mode = acquisition_mode(self.packet["config"])
         self.registry = default_registry(self.packet["config"])
         self.archive = llm.execution.store.root / "intelligence"
         self.service = IntelligenceService(self.archive, self.registry,
-            self.registry.build_adapters(deepseek_client=llm), observe_io=llm.execution.call_io)
+            {} if self.acquisition_mode == "snapshot_only" else self.registry.build_adapters(deepseek_client=llm),
+            observe_io=llm.execution.call_io)
+        # New scoped/archive and additional-source admissions share the same
+        # actual-hop/robots gate as topic monitoring. Historical frozen inputs
+        # retain their original request identities and accounting semantics.
+        scoped_baseline = self.packet["baseline"] and self.packet["baseline"]["manifest"]["schema"] == "topic_snapshot/v1"
+        if self.acquisition_mode != "snapshot_only" and (scoped_baseline or self.packet["config"].get("registered_sources")):
+            self.service.use_host_limits(self.archive)
         self.entities = entity_registry(frontier)
         self.baseline = self.packet["baseline"]
         self.plan = build_plan({"run_id": llm.execution.run_id, "as_of": llm.execution.admitted_at.isoformat(),
@@ -252,15 +366,22 @@ class Acquisition:
             "pending": frontier["pending"],
             "watchlist": frontier["watchlist"], "topics": acquisition_topics(topics),
             "baseline_refs": ([{"manifest_sha256": self.baseline["manifest"]["manifest_sha256"]}]
-                              if self.baseline else []), "limits": dict(TOOL_LIMITS)}, self.registry)
+                              if self.baseline else []), "limits": dict(TOOL_LIMITS),
+            **({"acquisition_mode": "snapshot_only"} if self.acquisition_mode == "snapshot_only" else {})}, self.registry)
         self.job = self.service.create_job(self.plan, "daily:" + llm.execution.run_id)
         self.rounds = []
         self.bundle = None
         self.documents = []
         if self.baseline is not None:
+            manifest = self.baseline["manifest"]
+            selected = baseline_version_ids(manifest,
+                entity_ids=[frontier["security_ids"][symbol] for symbol in frontier["symbols"]],
+                target_ids=[cell["target_id"] for cell in self.plan["coverage_cells"] if not cell["target_id"].startswith("security:")])
+            if self.acquisition_mode == "snapshot_only" and not selected:
+                _fail("Snapshot-only acquisition has no admitted originals for the frozen research frontier")
             self.service.import_baseline(self.job["job_id"], self.baseline["archive_root"],
-                version_ids=[row["id"] for row in self.baseline["manifest"]["versions"]],
-                expected_manifest_hash=self.baseline["manifest"]["manifest_sha256"])
+                version_ids=selected, expected_manifest_hash=manifest["manifest_sha256"],
+                **({"snapshot_id": manifest["snapshot_id"]} if manifest["schema"] == "topic_snapshot/v1" else {}))
 
     def _project(self, acquired):
         from ..intelligence import project_to_rawdocuments
@@ -315,13 +436,20 @@ class Acquisition:
                        for symbol in self.plan.get("unavailable_holdings", [])})
         labels.update({"account:pending:" + symbol: symbol + " 待成交（不在审定池）"
                        for symbol in self.plan.get("unavailable_pending", [])})
-        return {"contract": ACQUISITION_CONTRACT, "job_id": self.job["job_id"],
+        result = {"contract": ACQUISITION_CONTRACT, "job_id": self.job["job_id"],
             "state": status["state"], "usage": status["usage"],
             "gaps": [{**row, "question": cells[row["cell_id"]]["question"],
                        "material_type": cells[row["cell_id"]]["material_type"],
                        "target_label": labels.get(row["target_id"], row["target_id"])} for row in status["gaps"]],
             "holdings_connection": "unknown" if self.frontier["holdings"] is None else "connected",
             "source_registry_sha256": self.registry.public_manifest()["sha256"]}
+        if self.baseline and self.baseline["manifest"].get("schema") == "topic_snapshot/v1":
+            manifest = self.baseline["manifest"]
+            result["baseline_snapshot"] = {key: manifest[key] for key in
+                ("snapshot_id", "manifest_sha256", "cutoff", "state", "counts", "gaps")}
+        if self.acquisition_mode == "snapshot_only":
+            result["acquisition_mode"] = "snapshot_only"
+        return result
 
 
 def clean(llm, docs, *, acquisition):

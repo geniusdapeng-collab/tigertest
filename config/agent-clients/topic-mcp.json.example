@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "tiger-intelligence-topic": {
+      "type": "stdio",
+      "command": "/absolute/path/to/node",
+      "args": [
+        "/absolute/path/to/workroom-tiger/scripts/tiger-topic-mcp.mjs",
+        "--python", "/absolute/path/to/python",
+        "--state-root", "/absolute/path/to/topic-state",
+        "--archive-root", "/absolute/path/to/intelligence-archive",
+        "--mode", "readonly"
+      ],
+      "cwd": "/absolute/path/to/workroom-tiger",
+      "timeout": 185000
+    }
+  }
+}

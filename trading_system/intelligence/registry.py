@@ -28,7 +28,7 @@ class SourceSpec:
     def __post_init__(self):
         identifier(self.source_id, "source id")
         identifier(self.version, "source version")
-        if (self.kind not in {"search", "web_fetch", "feed", "issuer_rss", "sec_directory", "sec_submissions", "fred", "cboe_csv", "bls_calendar"}
+        if (self.kind not in {"search", "web_fetch", "page", "feed", "issuer_rss", "sec_directory", "sec_submissions", "fred", "cboe_csv", "bls_calendar"}
                 or type(self.enabled) is not bool or self.minimum_interval_seconds < 0
                 or type(self.max_retries) is not int or not 0 <= self.max_retries <= 5):
             raise IntelligenceError("CONTRACT_INVALID", "Invalid source policy")
@@ -88,9 +88,10 @@ class SourceRegistry:
     def verify_manifest(cls, manifest):
         return cls.from_manifest(manifest).public_manifest()
 
-    def build_adapters(self, *, deepseek_client=None, transport=None, environment=None):
+    def build_adapters(self, *, deepseek_client=None, transport=None, environment=None, parser_policy=None):
         from .adapters import BraveAdapter, DeepSeekAdapter, DeepSeekBridge, ExaAdapter, TavilyAdapter, WebFetch
-        from .direct import BlsCalendarSource, CboeSource, FeedSource, FredSource, SecDirectorySource, SecSubmissionsSource
+        from .direct import (BlsCalendarSource, CboeSource, FeedSource, FredSource,
+                             RegisteredPageSource, SecDirectorySource, SecSubmissionsSource)
         from .transport import HttpTransport
 
         transport = transport or HttpTransport()
@@ -100,6 +101,8 @@ class SourceRegistry:
             if not spec.enabled:
                 continue
             credential = env.get(spec.credential_env, "") if spec.credential_env else None
+            if spec.credential_env and spec.kind not in {"search", "page", "feed", "issuer_rss", "fred"}:
+                raise IntelligenceError("POLICY_DENIED", "This source adapter has no credential transport contract")
             if spec.kind == "search":
                 if source_id == "deepseek":
                     adapter = DeepSeekBridge(deepseek_client) if deepseek_client is not None else DeepSeekAdapter(transport, credential, endpoint=spec.endpoint)
@@ -110,6 +113,9 @@ class SourceRegistry:
                     adapter = cls(transport, credential, endpoint=spec.endpoint)
             elif spec.kind == "web_fetch":
                 adapter = WebFetch(transport)
+            elif spec.kind == "page":
+                adapter = RegisteredPageSource(spec, transport, credential=credential,
+                    user_agent=env.get("TIGER_INTEL_SEC_USER_AGENT"))
             elif spec.kind == "fred":
                 adapter = FredSource(spec, transport, credential=credential)
             elif spec.kind == "sec_submissions":
@@ -121,13 +127,31 @@ class SourceRegistry:
             elif spec.kind == "bls_calendar":
                 adapter = BlsCalendarSource(spec, transport)
             else:
-                adapter = FeedSource(spec, transport, user_agent=env.get("TIGER_INTEL_SEC_USER_AGENT") if source_id.startswith("sec_") else None)
+                adapter = FeedSource(spec, transport, credential=credential,
+                    user_agent=env.get("TIGER_INTEL_SEC_USER_AGENT") if source_id.startswith("sec_") else None)
+            chosen_parser = spec.options.get("extractor", parser_policy)
+            if chosen_parser is not None and spec.kind in {"web_fetch", "page", "feed", "issuer_rss", "sec_submissions", "sec_directory"}:
+                from .parse_limits import ParsePolicy
+                adapter.parse_policy = ParsePolicy.from_value(chosen_parser)
             adapters[source_id] = adapter
         return adapters
 
 
+def acquisition_mode(config: dict | None = None) -> str:
+    """A trusted startup choice; it does not alter source permissions."""
+    if config is None:
+        return "live"
+    if not isinstance(config, dict):
+        raise IntelligenceError("CONTRACT_INVALID", "Trusted acquisition configuration must be an object")
+    mode = config.get("acquisition_mode", "live")
+    if not isinstance(mode, str) or mode not in {"live", "snapshot_only"}:
+        raise IntelligenceError("CONTRACT_INVALID", "Unknown trusted acquisition mode")
+    return mode
+
+
 def default_registry(config: dict | None = None) -> SourceRegistry:
     """Only trusted startup config can enable providers, endpoints or IR identities."""
+    acquisition_mode(config)
     config = config or {}
     definitions = {
         "web_page": dict(kind="web_fetch", endpoint="", capabilities=("fetch", "attachments"),
@@ -174,5 +198,15 @@ def default_registry(config: dict | None = None) -> SourceRegistry:
         specs.append(SourceSpec(source_id=ir.get("source_id", "ir_" + ir["issuer_id"].replace(":", "_")),
             kind="issuer_rss", endpoint=ir["url"], allowed_hosts=tuple(ir.get("allowed_hosts", [host])),
             authority_scopes=("issuer_ir",), capabilities=("discover", "fetch", "attachments"),
-            date_semantics="issuer_feed", options={"issuer_id": ir["issuer_id"]}))
+            date_semantics="issuer_feed", options={**ir.get("options", {}), "issuer_id": ir["issuer_id"]}))
+    registered = config.get("registered_sources", [])
+    if not isinstance(registered, list):
+        raise IntelligenceError("CONTRACT_INVALID", "Trusted registered sources must be a list")
+    for value in registered:
+        if not isinstance(value, dict) or value.get("kind") == "search":
+            raise IntelligenceError("POLICY_DENIED", "Additional sources cannot replace a model/search adapter")
+        spec = SourceSpec(**value)
+        if not spec.endpoint or not spec.allowed_hosts:
+            raise IntelligenceError("POLICY_DENIED", "Additional sources need an explicit origin allowlist")
+        specs.append(spec)
     return SourceRegistry(specs, policy_version=config.get("policy_version", "intelligence/v1"))

@@ -1,0 +1,30 @@
+{
+  "schema": "tiger.transcribed-tool-test-receipts/v1",
+  "not_a_new_test_run": true,
+  "receipts": [
+    {
+      "command": "python -B -m pytest tests/test_research_parent_resume.py -q --tb=short",
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "result": "15 passed in 0.62s",
+      "exit_code": 0,
+      "tool_chunk_id": "5549f4",
+      "limitation": "Low-level local filesystem/SQLite/provider-replay tests only. No public resume/supplement, process-resume, complete business/receipt proof, or paid/provider calls."
+    },
+    {
+      "command": "python -B -m pytest tests/test_deepseek_json_observation.py::test_new_frozen_source_rejects_coherently_rehashed_missing_contract tests/test_agent_runtime_policy.py::test_frozen_contract_reads_without_current_configuration_or_new_directories -q --tb=short",
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "result": "2 passed in 1.47s",
+      "exit_code": 0,
+      "tool_chunk_id": "779152",
+      "limitation": "Existing prepared fixture corrected to derive research_work from actual frozen source; validation not relaxed."
+    },
+    {
+      "command": "python -B -m pytest tests/test_research_parent_resume.py -q --tb=short --junitxml=.../work-units/parent-lowlevel-initial.xml",
+      "cwd": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+      "result": "4 failed, 11 passed in 0.62s",
+      "exit_code": 1,
+      "tool_chunk_id": "1c9000",
+      "limitation": "Historical first run. Factory policy keyword collision fixed subsequently; retained XML is RED and is not the final 15-pass result."
+    }
+  ]
+}

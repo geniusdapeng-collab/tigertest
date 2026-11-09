@@ -8,7 +8,7 @@ export const ENGINE_ROOT = resolve(import.meta.dirname, "../../..");
 export const PROFILE = "us-public-paper-v1";
 export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
 export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
-export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "status", "receipt", "verify"]);
+export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
   frameBytes: 131072, requestMs: 60000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
   terminateMs: 250, cleanupMs: 2000 });
@@ -21,7 +21,7 @@ const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR",
 export const MODEL_ENV_NAMES = Object.freeze(["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
   "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
   "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
-  "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT"]);
+  "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT", "TIGER_AGENT_RUNTIME_POLICY_FILE"]);
 const EXIT_CODES = new Map([
   ...["INVALID_REQUEST", "INPUT_TOO_LARGE"].map((s) => [s, 2]),
   ...["READ_ONLY", "LIVE_FORBIDDEN", "UNAUTHORIZED"].map((s) => [s, 3]),
@@ -29,6 +29,10 @@ const EXIT_CODES = new Map([
   ...["DATA_UNAVAILABLE", "DATA_STALE", "SOURCE_SYNTHETIC", "CURRENCY_BLOCKED"].map((s) => [s, 6]),
   ...["RUNNER_FAILED", "RESULT_INVALID", "EVIDENCE_MISSING", "EVIDENCE_HASH_MISMATCH", "ARTIFACT_WRITE_FAILED", "RUN_NOT_FOUND"].map((s) => [s, 7]),
   ...["STEP_ORDER_VIOLATION", "STEP_FAILED", "RUN_INCOMPLETE", "MODEL_REQUIRED_FAILED"].map((s) => [s, 8]),
+  ...["RECONCILIATION_REQUIRED", "PARENT_ATTEMPT_FENCED"].map((s) => [s, 5]),
+  ...["RESUME_UNSUPPORTED", "RESUME_NOT_RETRYABLE", "RESEARCH_UNITS_INCOMPLETE"].map((s) => [s, 8]),
+  ...["SUPPLEMENT_UNAVAILABLE"].map((s) => [s, 6]),
+  ...["SUPPLEMENT_SCOPE_INVALID", "CONTRACT_INVALID", "SEGMENTS_INVALID"].map((s) => [s, 2]),
   ["TIMEOUT", 9], ["INTERRUPTED", 9], ["CANCELLED", 130],
 ]);
 
@@ -128,7 +132,8 @@ export function parseJson(source, maxBytes = LIMITS.inputBytes) {
 }
 
 const SCHEMA_KEYS = new Set(["$schema", "$id", "$defs", "title", "description", "type", "properties", "required",
-  "additionalProperties", "items", "enum", "const", "pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"]);
+  "additionalProperties", "items", "enum", "const", "pattern", "minLength", "maxLength", "minimum", "maximum",
+  "minItems", "maxItems", "uniqueItems"]);
 const TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 /** Fail closed if a reviewed schema adds a keyword this validator does not implement. */
 export function validateSchemaDefinition(schema, depth = 0) {
@@ -150,6 +155,7 @@ export function validateSchemaDefinition(schema, depth = 0) {
     || new Set(schema.required).size !== schema.required.length)) throw invalid("Invalid schema required list.");
   if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== "boolean") throw invalid("Unsupported additionalProperties schema.");
   if (schema.items !== undefined) validateSchemaDefinition(schema.items, depth + 1);
+  if (schema.uniqueItems !== undefined && typeof schema.uniqueItems !== "boolean") throw invalid("Invalid schema uniqueness flag.");
   if (schema.enum !== undefined && (!Array.isArray(schema.enum) || !schema.enum.length
     || schema.enum.some((v) => v !== null && !["string", "boolean", "number"].includes(typeof v)))) throw invalid("Invalid scalar enum.");
   if ("const" in schema && schema.const !== null && !["string", "boolean", "number"].includes(typeof schema.const)) throw invalid("Unsupported non-scalar const.");
@@ -180,6 +186,7 @@ function validateValue(value, schema) {
     || (schema.pattern !== undefined && !new RegExp(schema.pattern, "u").test(value)))) throw invalid();
   if (Array.isArray(value)) {
     if ((schema.minItems !== undefined && value.length < schema.minItems) || (schema.maxItems !== undefined && value.length > schema.maxItems)) throw invalid();
+    if (schema.uniqueItems === true && new Set(value.map((item) => JSON.stringify(item))).size !== value.length) throw invalid();
     if (schema.items) for (const item of value) validateValue(item, schema.items);
   } else if (plain(value)) {
     for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) throw invalid();
@@ -257,10 +264,13 @@ export function validateEnvelope(envelope, operation, input = {}) {
     if (envelope.error && envelope.error.run_id !== envelope.run_id) throw invalid();
     if (envelope.error?.details_ref !== null && envelope.error?.details_ref !== undefined && !safeEvidencePath(envelope.error.details_ref)) throw invalid();
     for (const ref of envelope.evidence_refs) if (!safeEvidencePath(ref.path)) throw invalid();
-    if (["run", "status", "doctor", "describe"].includes(operation)
+    if (["run", "resume", "supplement", "status", "doctor", "describe"].includes(operation)
       && (envelope.summary !== null || envelope.verification !== null)) throw invalid();
-    if (operation === "run" && envelope.operation_ok
+    if (["run", "supplement"].includes(operation) && envelope.operation_ok
       && (!["accepted", "running"].includes(envelope.status) || !envelope.run_id || envelope.execution_mode !== "paper")) throw invalid();
+    if (operation === "resume" && envelope.operation_ok
+      && (!["accepted", "running", "completed", "completed_degraded"].includes(envelope.status)
+        || !envelope.run_id || envelope.execution_mode !== "paper")) throw invalid();
     if (envelope.summary !== null && (operation !== "receipt" || !envelope.operation_ok
       || !TERMINAL_OK.has(envelope.status) || envelope.verification?.ok !== true)) throw invalid();
     if (operation === "receipt" && envelope.operation_ok
@@ -331,6 +341,9 @@ export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_COD
 
 export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
+  // Read-only doctor/describe may inspect this non-secret trusted config;
+  // model credentials still cross only the explicit required-model boundary.
+  if (typeof env.TIGER_AGENT_RUNTIME_POLICY_FILE === "string") result.TIGER_AGENT_RUNTIME_POLICY_FILE = env.TIGER_AGENT_RUNTIME_POLICY_FILE;
   if (modelRequired) for (const key of MODEL_ENV_NAMES) {
     if (typeof env[key] === "string") result[key] = env[key];
   }
@@ -354,7 +367,7 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
   try {
     config = startupOptions(options);
     validateRequest(operation, input);
-    if (operation === "run" && config.mode !== "paper") throw new WorkflowError("READ_ONLY", "Run is unavailable in readonly deployment.");
+    if (["run", "resume", "supplement"].includes(operation) && config.mode !== "paper") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
     if (signal?.aborted) throw new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id });
   } catch (error) { return failureEnvelope(operation, error, input?.run_id); }
   const args = ["-B", "-m", "trading_system.agent_runner", "--mode", config.mode, "--state-root", config.stateRoot, operation];
@@ -393,7 +406,9 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
         }, LIMITS.cleanupMs);
       }
       function onAbort() { stop(new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id })); }
-      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env, operation === "run" && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE].includes(input.profile)), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
+      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env,
+        operation === "resume" || operation === "supplement" || operation === "run" && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE].includes(input.profile)
+      ), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
       catch (cause) { finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })); return; }
       child.on("error", (cause) => finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })));
       child.stdout.on("data", (chunk) => {
@@ -471,7 +486,7 @@ export function abortableDelay(ms, signal) {
   });
 }
 
-export async function waitForReceipt(runId, options, { signal, waitMs = LIMITS.waitMs, pollMs = LIMITS.pollMs,
+export async function waitForReceipt(runId, options, { operation = "run", signal, waitMs = LIMITS.waitMs, pollMs = LIMITS.pollMs,
   invoke = invokeWorkflow } = {}) {
   const deadline = Date.now() + waitMs;
   try {
@@ -487,12 +502,12 @@ export async function waitForReceipt(runId, options, { signal, waitMs = LIMITS.w
         return receipt;
       }
       if (!["accepted", "running"].includes(current.status)) {
-        const failed = failureEnvelope("run", new WorkflowError("RUN_INCOMPLETE", "The existing run did not complete. Query its status; do not submit a replacement key."), runId);
+        const failed = failureEnvelope(operation, new WorkflowError("RUN_INCOMPLETE", "The existing run did not complete. Query its status; do not submit a replacement key."), runId);
         failed.status = ["failed", "blocked", "interrupted"].includes(current.status) ? current.status : "invalid";
         failed.data = { observed_status: current.status };
         return failed;
       }
       await abortableDelay(Math.min(pollMs, Math.max(1, deadline - Date.now())), signal);
     }
-  } catch (error) { return failureEnvelope("run", error, runId); }
+  } catch (error) { return failureEnvelope(operation, error, runId); }
 }

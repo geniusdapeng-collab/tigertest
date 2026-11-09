@@ -1,0 +1,640 @@
+{
+  "schema": "tiger.capacity-governance-handoff-reading/v1",
+  "source": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source",
+  "scope": "Three owned proof files and explicitly listed new-contract or retained EP02 dependencies. Not a full-repository reading claim. C means current revision partially read after concurrent owner changes; B is byte metadata only.",
+  "total": 41,
+  "counts": {
+    "A": 19,
+    "B": 3,
+    "C": 19,
+    "D": 0
+  },
+  "files": [
+    {
+      "path": "tests/test_research_work_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/tests/test_research_work_proof.py",
+      "sha256": "3ed4d9bbeb41ed84944f262b3475b7e9a0e8c10d7f3622f30ab1b3ba5fa8a508",
+      "bytes": 37628,
+      "lines": 677,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/agent_evidence.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/agent_evidence.py",
+      "sha256": "f37d91824234e421bbc79b33c49c541d988267f5a7b63e2a3e97fb73af2f3643",
+      "bytes": 23422,
+      "lines": 471,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/agent_runtime.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/agent_runtime.py",
+      "sha256": "d250a7b26856ad7423841619fd22ea0b4f908a6009bc39bca562cd6690f1eb4a",
+      "bytes": 69616,
+      "lines": 1199,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/intelligence/archive.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/intelligence/archive.py",
+      "sha256": "a816afe853cc7e5e53d66d89e72d7d622f30f731b5b436c1076396c75998d4a1",
+      "bytes": 48868,
+      "lines": 755,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/intelligence/parse_limits.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/intelligence/parse_limits.py",
+      "sha256": "f528d06340bc29c018d801f9e498cb07b8a46bd958508a85820c738558c114cd",
+      "bytes": 24852,
+      "lines": 453,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/intelligence/parse_manifest.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/intelligence/parse_manifest.py",
+      "sha256": "2024146dfa08994a504807672a6d0c16bc6b6f3b12f0667a6e4b96bd3441717f",
+      "bytes": 15162,
+      "lines": 282,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/intelligence/registry.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/intelligence/registry.py",
+      "sha256": "34070991e8549ddffc8d0ebda622aaf4ce92fd4fe6e0e1743dd7b340a58024b9",
+      "bytes": 13630,
+      "lines": 212,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/intelligence/service.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/intelligence/service.py",
+      "sha256": "78d99dc63ae1ff1775a997d379b42e316da1e582742b737d3fbc5949fbc2d596",
+      "bytes": 87131,
+      "lines": 1295,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/intelligence_workflow.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/intelligence_workflow.py",
+      "sha256": "69b77bfb41d1eba9bb5fe3d64409571f62d0bb6c41a4d919a0b60f0c4baf98c1",
+      "bytes": 22209,
+      "lines": 392,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-LICENSE.txt",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-LICENSE.txt",
+      "sha256": "f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040",
+      "bytes": 1084,
+      "lines": 21,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-encoding.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-encoding.py",
+      "sha256": "13231c592e958fb39e2af6001dae69d90e7a36b265702b9b390236fb387599e2",
+      "bytes": 37962,
+      "lines": 990,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-provenance.json",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-provenance.json",
+      "sha256": "defed385fc535b53f835ff81df398f3d539e51dfa505d3a627d34b226f5f784a",
+      "bytes": 1598,
+      "lines": 39,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-tokenizer.json",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-tokenizer.json",
+      "sha256": "c90dfa01249db1be4245780a052ede752e1361c612ac6d08e2bdada7d599476b",
+      "bytes": 6367257,
+      "lines": 267359,
+      "grade": "B",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/clean_keyed_codec.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/clean_keyed_codec.py",
+      "sha256": "97fc34621fd74273d2dc1d50afc9ea364c9aca9c22e15ddb261a3959c7bbd7af",
+      "bytes": 4918,
+      "lines": 119,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/deepseek_required.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/deepseek_required.py",
+      "sha256": "828b0e19e08c83e73500275adf70b8dd50e466dbb511f3c14d9707f5812aeb4f",
+      "bytes": 66499,
+      "lines": 1226,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/intelligence_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/intelligence_proof.py",
+      "sha256": "9b62f946ae98b0fe62479a889552ebf989078b8e323ef0ce723f19287762967a",
+      "bytes": 113469,
+      "lines": 1777,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/json_observation.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/json_observation.py",
+      "sha256": "75c72cb1194acf257fc1c27cb32d69165714707e7373bec86d85b7c36bce4db6",
+      "bytes": 14447,
+      "lines": 235,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/model_budget.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/model_budget.py",
+      "sha256": "17c466a10dabeb3d63c3df2bf7baf66b4d886ea76c034c0e520609c4dd4ef0b5",
+      "bytes": 12954,
+      "lines": 283,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/provider_prompt.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/provider_prompt.py",
+      "sha256": "813f6a704ad34b2e9789a62f4ead5809d7ff210bce5165c180d31fd1214d76d0",
+      "bytes": 12167,
+      "lines": 223,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/rejected_native.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/rejected_native.py",
+      "sha256": "d8c9405ae88c819ed24a068e17e3702c1fbc737695f1ff4c995c4404b6ea7d86",
+      "bytes": 8334,
+      "lines": 134,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/required_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/required_proof.py",
+      "sha256": "cc6a47b078485efcab20821158db89608dab998a87a381b5b3128ad399982d72",
+      "bytes": 41542,
+      "lines": 663,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/scene_policy.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/scene_policy.py",
+      "sha256": "644ecfce4a93338dd3e2fbe9b55838402fd9934161e3ffd986aa47f2472eee66",
+      "bytes": 4760,
+      "lines": 105,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/work_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/work_proof.py",
+      "sha256": "7d4427e326458d96e566791b71a9e22d2ec2c6e1b5b214e00f0defa346826740",
+      "bytes": 44447,
+      "lines": 766,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/work_required.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/work_required.py",
+      "sha256": "c86bd766309d3aa8a6ee19a3b449c781f108b3e0aeb67de347ca919c104afbf3",
+      "bytes": 30786,
+      "lines": 590,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/work_semantics.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/work_semantics.py",
+      "sha256": "e39c7d203b7e244d0d4e6a5eeab10b129faee8e3a503ec4718aa6649591bab1c",
+      "bytes": 9234,
+      "lines": 191,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/pipeline.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/pipeline.py",
+      "sha256": "c1a149a163a141aa80881316903cb6dcdd086b98c96e4c3eb0125a29a05d4ff1",
+      "bytes": 71119,
+      "lines": 1206,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_followup.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_followup.py",
+      "sha256": "cf3227dec71ebb0defd8054852e421d50e2e4aa4e54410af83d05094d248ca73",
+      "bytes": 10924,
+      "lines": 191,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_relations.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_relations.py",
+      "sha256": "432524da88e0e1d8f59dd322bd57525e552dd7bc114fa67174d20bc3c84d7473",
+      "bytes": 11963,
+      "lines": 216,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_risk.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_risk.py",
+      "sha256": "ef78fa468cc432c2c2e6bdbbbcc4e463c55f798c57ffceddf2418ca1f1bcaa45",
+      "bytes": 6925,
+      "lines": 121,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_snapshot.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_snapshot.py",
+      "sha256": "190fedb7380e29f7fc670627b0e00ef44f979ecb7e29b3a45daad0ffb661d1e9",
+      "bytes": 3392,
+      "lines": 63,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_sources.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_sources.py",
+      "sha256": "10f6b29783acf49ba43e7c9fd80f75e90a9e0fcae969512ad971850d73263055",
+      "bytes": 11476,
+      "lines": 200,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_work.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_work.py",
+      "sha256": "7e35c0b49dabccc82130cf73c583bb7d9efbda35e5ce19699bc3190bb803b12d",
+      "bytes": 4203,
+      "lines": 97,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/search/credibility.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/search/credibility.py",
+      "sha256": "38e1954414428b091e318d4cf3495137a01908f31d62922bf54be6d229075ba4",
+      "bytes": 10058,
+      "lines": 227,
+      "grade": "B",
+      "basis": "Whole-file SHA and byte/line metadata only; not a semantic source read.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/search/event_identity.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/search/event_identity.py",
+      "sha256": "0f3c2aa128dea49f68336b60ddd4fbdbdfc85a5d562c802c66a006f59f68a4dc",
+      "bytes": 59972,
+      "lines": 1118,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/search/models.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/search/models.py",
+      "sha256": "9227bc1868549d13a14adb4c8bee4c23069b805510ba8538833aebc178f1c044",
+      "bytes": 3291,
+      "lines": 83,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/search/ontology.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/search/ontology.py",
+      "sha256": "d6c75716226de6a71856a2b28c924a84d0d6c6f0d4aff9f17c1c44f2e36b6f8a",
+      "bytes": 3832,
+      "lines": 87,
+      "grade": "B",
+      "basis": "Whole-file SHA and byte/line metadata only; not a semantic source read.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/context.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/context.py",
+      "sha256": "adcc3adf3d387d43e879e085c6ec914ffdc2b7b5ba73baf40c526cd7178bde85",
+      "bytes": 23919,
+      "lines": 372,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/contracts.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/contracts.py",
+      "sha256": "117b0416dd5adc1c2614b0c6be4a78a913c064a96cbaf73c15619441e93c5123",
+      "bytes": 7646,
+      "lines": 195,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/recovery.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/recovery.py",
+      "sha256": "d43de1fb1658b0c4fbeb814c0e04944c0c291ec9b830ab69f6ab0839f4747501",
+      "bytes": 3786,
+      "lines": 63,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/scheduler.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/scheduler.py",
+      "sha256": "63b0f9e169d045613fcf03acf3b9cd750a650effa92f9828121b6b90c1337f51",
+      "bytes": 10804,
+      "lines": 214,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/store.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/store.py",
+      "sha256": "a19480451b0df52e4537beba72800684e0ca1591e2d35457e2e20bee6ca1c892",
+      "bytes": 61561,
+      "lines": 1014,
+      "grade": "C",
+      "basis": "Complete older revision and/or relevant current sections were read, but another owner changed the module afterward; no full current-file read is claimed.",
+      "owned": false
+    }
+  ],
+  "unread_semantics": [
+    "trading_system/agent_evidence.py",
+    "trading_system/agent_runtime.py",
+    "trading_system/intelligence/archive.py",
+    "trading_system/intelligence/parse_limits.py",
+    "trading_system/intelligence/parse_manifest.py",
+    "trading_system/intelligence/registry.py",
+    "trading_system/intelligence/service.py",
+    "trading_system/intelligence_workflow.py",
+    "trading_system/llm/assets/deepseek-v41-flash1017-tokenizer.json",
+    "trading_system/llm/deepseek_required.py",
+    "trading_system/llm/json_observation.py",
+    "trading_system/llm/rejected_native.py",
+    "trading_system/llm/work_required.py",
+    "trading_system/pipeline.py",
+    "trading_system/research_followup.py",
+    "trading_system/research_risk.py",
+    "trading_system/research_work.py",
+    "trading_system/search/credibility.py",
+    "trading_system/search/ontology.py",
+    "trading_system/tasks/context.py",
+    "trading_system/tasks/scheduler.py",
+    "trading_system/tasks/store.py"
+  ],
+  "full_read_files": [
+    {
+      "path": "tests/test_research_work_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/tests/test_research_work_proof.py",
+      "sha256": "3ed4d9bbeb41ed84944f262b3475b7e9a0e8c10d7f3622f30ab1b3ba5fa8a508",
+      "bytes": 37628,
+      "lines": 677,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-LICENSE.txt",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-LICENSE.txt",
+      "sha256": "f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040",
+      "bytes": 1084,
+      "lines": 21,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-encoding.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-encoding.py",
+      "sha256": "13231c592e958fb39e2af6001dae69d90e7a36b265702b9b390236fb387599e2",
+      "bytes": 37962,
+      "lines": 990,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/assets/deepseek-v41-flash1017-provenance.json",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/assets/deepseek-v41-flash1017-provenance.json",
+      "sha256": "defed385fc535b53f835ff81df398f3d539e51dfa505d3a627d34b226f5f784a",
+      "bytes": 1598,
+      "lines": 39,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/clean_keyed_codec.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/clean_keyed_codec.py",
+      "sha256": "97fc34621fd74273d2dc1d50afc9ea364c9aca9c22e15ddb261a3959c7bbd7af",
+      "bytes": 4918,
+      "lines": 119,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/intelligence_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/intelligence_proof.py",
+      "sha256": "9b62f946ae98b0fe62479a889552ebf989078b8e323ef0ce723f19287762967a",
+      "bytes": 113469,
+      "lines": 1777,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/model_budget.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/model_budget.py",
+      "sha256": "17c466a10dabeb3d63c3df2bf7baf66b4d886ea76c034c0e520609c4dd4ef0b5",
+      "bytes": 12954,
+      "lines": 283,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/provider_prompt.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/provider_prompt.py",
+      "sha256": "813f6a704ad34b2e9789a62f4ead5809d7ff210bce5165c180d31fd1214d76d0",
+      "bytes": 12167,
+      "lines": 223,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/required_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/required_proof.py",
+      "sha256": "cc6a47b078485efcab20821158db89608dab998a87a381b5b3128ad399982d72",
+      "bytes": 41542,
+      "lines": 663,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/scene_policy.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/scene_policy.py",
+      "sha256": "644ecfce4a93338dd3e2fbe9b55838402fd9934161e3ffd986aa47f2472eee66",
+      "bytes": 4760,
+      "lines": 105,
+      "grade": "A",
+      "basis": "Retained EP02 complete-read/integrity receipt; current bytes exactly match that receipt.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/llm/work_proof.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/work_proof.py",
+      "sha256": "7d4427e326458d96e566791b71a9e22d2ec2c6e1b5b214e00f0defa346826740",
+      "bytes": 44447,
+      "lines": 766,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": true
+    },
+    {
+      "path": "trading_system/llm/work_semantics.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/llm/work_semantics.py",
+      "sha256": "e39c7d203b7e244d0d4e6a5eeab10b129faee8e3a503ec4718aa6649591bab1c",
+      "bytes": 9234,
+      "lines": 191,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_relations.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_relations.py",
+      "sha256": "432524da88e0e1d8f59dd322bd57525e552dd7bc114fa67174d20bc3c84d7473",
+      "bytes": 11963,
+      "lines": 216,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_snapshot.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_snapshot.py",
+      "sha256": "190fedb7380e29f7fc670627b0e00ef44f979ecb7e29b3a45daad0ffb661d1e9",
+      "bytes": 3392,
+      "lines": 63,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/research_sources.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/research_sources.py",
+      "sha256": "10f6b29783acf49ba43e7c9fd80f75e90a9e0fcae969512ad971850d73263055",
+      "bytes": 11476,
+      "lines": 200,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/search/event_identity.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/search/event_identity.py",
+      "sha256": "0f3c2aa128dea49f68336b60ddd4fbdbdfc85a5d562c802c66a006f59f68a4dc",
+      "bytes": 59972,
+      "lines": 1118,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/search/models.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/search/models.py",
+      "sha256": "9227bc1868549d13a14adb4c8bee4c23069b805510ba8538833aebc178f1c044",
+      "bytes": 3291,
+      "lines": 83,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/contracts.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/contracts.py",
+      "sha256": "117b0416dd5adc1c2614b0c6be4a78a913c064a96cbaf73c15619441e93c5123",
+      "bytes": 7646,
+      "lines": 195,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    },
+    {
+      "path": "trading_system/tasks/recovery.py",
+      "absolute_path": "/Users/mac/Documents/Codex/2026-11-04/ni/work/tiger-intel-capacity-implementation-20261106/source/trading_system/tasks/recovery.py",
+      "sha256": "d43de1fb1658b0c4fbeb814c0e04944c0c291ec9b830ab69f6ab0839f4747501",
+      "bytes": 3786,
+      "lines": 63,
+      "grade": "A",
+      "basis": "Complete source read in this task, or complete authored file with final changes owned by this agent.",
+      "owned": false
+    }
+  ]
+}
