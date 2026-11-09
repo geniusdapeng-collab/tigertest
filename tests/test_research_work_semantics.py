@@ -125,6 +125,13 @@ def test_admitted_contract_is_explicit_and_closed():
         validate_research_work_policy({**policy, "format_retry_limit": 2})
 
 
+def test_extract_prompt_keeps_unmapped_subjects_out_of_typed_events():
+    from trading_system.llm.work_required import document_arguments
+    arguments = document_arguments("extract", raw(), ["XLK"], {
+        "run_date": "2026-11-08", "market_timezone": "America/New_York"})
+    assert "人物或无法映射到这些类型的主体不得生成event_records或claims" in arguments["user"]
+
+
 def test_structural_segment_plan_covers_every_original_character_without_truncation():
     from trading_system.llm.work_required import plan_document_segments
     from trading_system.research_work import research_work_policy
