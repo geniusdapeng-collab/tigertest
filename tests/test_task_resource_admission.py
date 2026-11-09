@@ -77,6 +77,22 @@ def test_handler_exception_releases_full_weight_for_next_unit(tmp_path):
         coordinator.close()
 
 
+def test_handler_validation_keeps_only_whitelisted_error_code(tmp_path):
+    store = create(tmp_path, [unit("invalid"), unit("opaque")])
+    coordinator = Coordinator(store, max_workers=1)
+    def handler(context):
+        if context.lease.unit_id == "invalid":
+            raise ValueError("WORK_ANNOTATION_INVALID:TEST_FIXTURE model text must not persist")
+        raise ValueError("TEST_FIXTURE arbitrary implementation detail")
+    try:
+        result = coordinator.run({"extract": handler}, validators={"extract": valid}, timeout=3)
+        assert result["graph_state"] == "failed"
+        assert store.unit("invalid")["error_code"] == "WORK_ANNOTATION_INVALID"
+        assert store.unit("opaque")["error_code"] == "UNIT_HANDLER_FAILED"
+    finally:
+        coordinator.close()
+
+
 def test_transient_store_busy_is_recorded_as_retryable_not_permanent(tmp_path):
     store = create(tmp_path, [unit("busy")])
     coordinator = Coordinator(store, max_workers=1)

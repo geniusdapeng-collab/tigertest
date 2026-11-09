@@ -78,14 +78,17 @@ def test_wrong_literal_never_becomes_reviewed_document(observed, monkeypatch):
     assert store.status()["format_reanswers"] == 0
 
 
-def test_semantic_review_failure_does_not_spend_format_retry(observed, monkeypatch):
+def test_semantic_review_failure_is_an_unverifiable_terminal_without_format_retry(observed, monkeypatch):
     store, acquisition, client = prepare(observed)
     calls = transport(monkeypatch, review_mutation=lambda value: value.update(omissions=["遗漏负面指引"]))
-    with pytest.raises(WorkUnitError):
-        with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "review failure"}):
-            clean_round(client, [raw()], acquisition=acquisition)
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "review failure"}) as scope:
+        result = clean_round(client, [raw()], acquisition=acquisition)
+        scope.output({"documents": len(result)})
+    assert result == []
     assert len(calls) == 2
-    assert store.document_dispositions()["terminal"] == 0
+    dispositions = store.document_dispositions()
+    assert dispositions["terminal"] == 1 and dispositions["unverifiable"] == 1
+    assert store.status()["graph_state"] == "completed"
     assert store.status()["settled_attempts"] == 2
     assert store.status()["format_reanswers"] == 0
 

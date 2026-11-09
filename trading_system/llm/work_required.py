@@ -26,8 +26,8 @@ from .deepseek_required import DeepSeekRequiredClient, validate_schema
 from .model_budget import TokenBudgetError
 from .work_semantics import (annotation_payload, digest, extraction_schema, merge_segment_annotations,
     namespace_segment_annotation, normalize_annotation, review_schema, source_payload,
-    summary_schema, task_evidence_view, text_digest, validate_annotation,
-    validate_document_review, validate_raw_documents, WORK_MAX_DOCUMENT_TICKERS)
+    inspect_document_review, summary_schema, task_evidence_view, text_digest,
+    validate_annotation, validate_raw_documents, WORK_MAX_DOCUMENT_TICKERS)
 
 assessment_context = legacy.assessment_context
 SOURCE_CONTENT_CONTRACT = legacy.SOURCE_CONTENT_CONTRACT
@@ -335,6 +335,8 @@ def _run(llm, handlers, *, workers, resource_cost, unit_ids):
                                                       for kind in handlers})
     finally:
         coordinator.close()
+    if status["cancel_requested"]:
+        raise WorkUnitError("TASK_CANCELLED", "Research scheduling was explicitly cancelled")
     if status["scope_state"] != "completed":
         raise WorkUnitError("RESEARCH_UNITS_INCOMPLETE", "Research units are incomplete; inspect original ledger")
 
@@ -412,26 +414,32 @@ def clean_round(llm, docs, *, acquisition):
                 validate_schema(native, summary_schema())
                 reviews = [store.read_result(unit_id)["value"]["output"]["review"]
                            for unit_id in spec.dependencies]
-                if (len(reviews) != len(manifest["segments"])
-                        or any(row.get("complete") is not True for row in reviews)):
+                if len(reviews) != len(manifest["segments"]):
                     raise WorkUnitError("DOCUMENT_SEGMENT_REVIEW_INCOMPLETE",
-                                        "Not every source-bound segment passed independent review")
+                                        "Every source-bound segment requires an independent review")
+                segment_reviews_accepted = all(row.get("review_accepted") is True for row in reviews)
                 global_review = {"schema": "tiger.document-global-review/v1",
                     "contract": policy["segment_contract"], "document_id": raw.doc_id,
                     "source_sha256": text_digest(raw.content),
                     "manifest_sha256": digest(manifest),
                     "segment_review_sha256": [row["review_sha256"] for row in reviews],
-                    "summary_sha256": digest(native["summary_zh"]), "complete": True,
+                    "summary_sha256": digest(native["summary_zh"]),
+                    "complete": segment_reviews_accepted,
                     "checks": {key: True for key in (
-                        "whole_original_coverage", "segment_reviews", "metadata_synthesis")}}
+                        "whole_original_coverage", "metadata_synthesis")}
+                              | {"segment_reviews": segment_reviews_accepted}}
                 output = {"phase": "metadata_synthesis", "document_id": raw.doc_id,
                           "native": native, "summary_zh": native["summary_zh"],
                           "global_review": global_review}
                 stage.output(output)
             value = {"child_seal_ref": client.execution.seal(), "output": output}
-            disposition = "eligible" if raw.meta.get("completeness") == "complete" else "unverifiable"
+            source_complete = raw.meta.get("completeness") == "complete"
+            disposition = ("eligible" if segment_reviews_accepted and source_complete
+                           else "unverifiable")
             return UnitResult(value, {raw.doc_id: {"state": disposition,
-                "reason": "all_segments_reviewed_source_qualification_separate"}})
+                "reason": ("all_segments_reviewed_source_qualification_separate"
+                           if disposition == "eligible"
+                           else "independent_review_or_source_qualification_incomplete")}})
         phase = spec.contract["phase"]
         source = entry.get("segment_raw", raw)
         args = arguments(spec)
@@ -448,7 +456,7 @@ def clean_round(llm, docs, *, acquisition):
             else:
                 document = normalize_annotation(source, args["public_payload"]["annotation"], TARGET_IDS)
                 validation = validate_annotation(document, llm.execution.admitted_at, **validation_context)
-                review = validate_document_review(document, native)
+                review = inspect_document_review(document, native)
                 output = {"phase": phase, "document_id": raw.doc_id,
                           "segment_id": entry["segment"]["id"] if entry["segment"] else None,
                           "native": native,
@@ -457,9 +465,13 @@ def clean_round(llm, docs, *, acquisition):
         value = {"child_seal_ref": client.execution.seal(), "output": output}
         if phase == "document_review" and entry["segment"] is None:
             # Semantic completion and source qualification are distinct axes.
-            disposition = "eligible" if raw.meta.get("completeness") == "complete" else "unverifiable"
+            source_complete = raw.meta.get("completeness") == "complete"
+            disposition = ("eligible" if review["review_accepted"] and source_complete
+                           else "unverifiable")
             return UnitResult(value, {raw.doc_id: {"state": disposition,
-                "reason": "semantic_review_complete_source_qualification_separate"}})
+                "reason": ("semantic_review_complete_source_qualification_separate"
+                           if disposition == "eligible"
+                           else "independent_review_or_source_qualification_incomplete")}})
         return value
 
     _run(llm, {"document.extract": handler, "document.document_review": handler,
@@ -474,28 +486,36 @@ def clean_round(llm, docs, *, acquisition):
             reviewed = _join(llm, units["reviews"][0])
             document = normalize_annotation(raw, reviewed["annotation"], TARGET_IDS)
             validate_annotation(document, llm.execution.admitted_at, **validation_context)
-            validate_document_review(document, reviewed["native"])
+            review = inspect_document_review(document, reviewed["native"])
+            terminal = store.read_result(units["reviews"][0])["dispositions"][raw.doc_id]
+            if review["review_accepted"] is not True or terminal["state"] != "eligible":
+                continue
         else:
             manifest, segments = plans[raw.doc_id]
             annotations = []
+            segment_reviews_accepted = True
             for number, unit_id in enumerate(units["reviews"], 1):
                 _join(llm, units["extracts"][number - 1])
                 reviewed = _join(llm, unit_id)
-                validate_document_review(
-                    normalize_annotation(segments[number - 1], reviewed["annotation"], TARGET_IDS),
-                    reviewed["native"])
+                local = normalize_annotation(
+                    segments[number - 1], reviewed["annotation"], TARGET_IDS)
+                review = inspect_document_review(local, reviewed["native"])
+                segment_reviews_accepted = segment_reviews_accepted and review["review_accepted"]
                 annotations.append(namespace_segment_annotation(
                     reviewed["annotation"], number, manifest["segments"][number - 1]["start"]))
             synthesis = _join(llm, units["summary"])
             summary = synthesis["summary_zh"]
             global_review = synthesis["global_review"]
             if (global_review["manifest_sha256"] != digest(manifest)
-                    or global_review["complete"] is not True):
+                    or global_review["complete"] is not segment_reviews_accepted):
                 raise ValueError("DOCUMENT_GLOBAL_REVIEW_MISMATCH")
             document = merge_segment_annotations(
                 raw, annotations, summary_zh=summary,
                 limits=merged_annotation_limits(len(segments)), target_ids=TARGET_IDS)
             validate_annotation(document, llm.execution.admitted_at, **validation_context)
+            terminal = store.read_result(units["summary"])["dispositions"][raw.doc_id]
+            if segment_reviews_accepted is not True or terminal["state"] != "eligible":
+                continue
         cleaned.append(document)
     return cleaned
 

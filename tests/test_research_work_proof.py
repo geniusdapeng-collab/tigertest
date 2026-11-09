@@ -74,7 +74,7 @@ def prepare_proof_context(context):
     return admission, policy, acquisition, DeepSeekRequiredClient(context)
 
 
-def synthetic_transport(monkeypatch):
+def synthetic_transport(monkeypatch, *, review_value=None):
     wires, lock = [], Lock()
     def post(url, **kwargs):
         wire = json.loads(kwargs["data"])
@@ -85,7 +85,7 @@ def synthetic_transport(monkeypatch):
         elif payload["phase"] == "empty":
             value = {"documents": []}
         else:
-            value = review()
+            value = review() if review_value is None else deepcopy(review_value)
         with lock:
             wires.append(wire)
             identifier = "proof-fixture-" + str(len(wires))
@@ -164,6 +164,24 @@ def segmented_completed(observed, monkeypatch):
         originals=[original], joins=joins, replay=replay, wires=wires)
 
 
+@pytest.fixture
+def unreviewable(observed, monkeypatch):
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    rejected = review()
+    rejected.update(complete=False, omissions=["TEST_FIXTURE source limitation"])
+    wires = synthetic_transport(monkeypatch, review_value=rejected)
+    original = raw()
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "incomplete proof review"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output(documents)
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=[original], joins=joins, replay=replay, wires=wires)
+
+
 def validation_context(fixture):
     return {"security_ids": fixture.acquisition.frontier["security_ids"],
         "entity_registry": fixture.acquisition.entities,
@@ -200,6 +218,22 @@ def test_segmented_document_proof_rebuilds_every_core_range_and_review(segmented
     summary = verifier.assert_complete()
     assert summary["document_count"] == 1 and summary["verified_units"] == consumed
     assert verifier.store.document_dispositions()["documents"][fixture.originals[0].doc_id]["state"] == "eligible"
+
+
+def test_negative_review_is_verified_as_an_unverifiable_terminal(unreviewable):
+    fixture = unreviewable
+    assert fixture.documents == []
+    verifier = ResearchWorkProof(fixture.replay)
+    assert verifier.verify_document(
+        fixture.originals[0], fixture.joins[0], fixture.joins[1],
+        validation_context=validation_context(fixture)) is None
+    disposition = verifier.store.document_dispositions()["documents"][fixture.originals[0].doc_id]
+    assert disposition == {
+        "state": "unverifiable",
+        "reason": "independent_review_or_source_qualification_incomplete",
+    }
+    summary = verifier.assert_complete()
+    assert summary["verified_units"] == 2 and summary["document_count"] == 1
 
 
 @pytest.mark.parametrize("mutation", ["wrong_join", "changed_value", "missing_parent_copy", "different_original"])
