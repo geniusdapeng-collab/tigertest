@@ -26,6 +26,12 @@
 3. 新增固定 `cancel` 操作：只接原 `run_id`，持久化调度取消；
    不撤销 unknown external attempt，显式取消后不可 resume。
 
+本地定向证据（B）：
+
+- 真实 runner、公开恢复、资源准入、work execution 与语义组合：`74 passed`。
+- 独立 `ResearchWorkProof`：`63 passed`，包含负向 review 的 `unverifiable` 终态重建。
+- CLI / MCP / workflow schema：`56 passed`。
+
 ## 剩余非代码门禁
 
 - 最终真实 237 必须在新合同冻结后重新运行，并生成逐原件终态、
