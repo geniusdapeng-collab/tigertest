@@ -143,6 +143,20 @@ def test_extract_prompt_keeps_unmapped_subjects_out_of_typed_events():
     assert "人物或无法映射到这些类型的主体不得生成event_records或claims" in arguments["user"]
     assert "start/end固定填null" in arguments["user"]
     assert "正文只出现公司名而未出现ticker/CIK/LEI时，identifiers必须为空" in arguments["user"]
+    assert "宁可少出typed facts" in arguments["user"]
+
+
+def test_review_schema_completion_is_scoped_to_provided_source_text():
+    from trading_system.llm.work_required import document_arguments
+    from trading_system.llm.work_semantics import annotation_payload, normalize_annotation
+
+    document = normalize_annotation(raw(), annotation(), ["XLK"])
+    arguments = document_arguments(
+        "document_review", raw(), ["XLK"],
+        {"run_date": "2026-11-08", "market_timezone": "America/New_York"},
+        annotation=annotation_payload(document))
+    assert "不判断外部世界或来源全集是否完整" in arguments["user"]
+    assert "partial来源即使只能看到摘要/片段" in arguments["user"]
 
 
 def test_structural_segment_plan_covers_every_original_character_without_truncation():
