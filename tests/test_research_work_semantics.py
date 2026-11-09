@@ -87,6 +87,17 @@ def test_ambiguous_quote_cannot_bind_arbitrary_occurrence():
         normalize_annotation(raw(content=raw().content * 2), annotation(), ["XLK"])
 
 
+def test_model_offsets_are_ignored_and_program_binds_the_unique_quote():
+    from trading_system.llm.work_semantics import normalize_annotation
+    native = annotation()
+    native["evidence_spans"][0].update(start=1, end=6)
+    original = deepcopy(native)
+    result = normalize_annotation(raw(), native, ["XLK"])
+    assert native == original
+    assert result.evidence_spans[0]["start"] == 0
+    assert result.evidence_spans[0]["end"] == len(raw().content)
+
+
 def test_review_binds_extract_and_omissions_block_completion():
     from trading_system.llm.work_semantics import normalize_annotation, validate_document_review
     document = normalize_annotation(raw(), annotation(), ["XLK"])
@@ -130,6 +141,7 @@ def test_extract_prompt_keeps_unmapped_subjects_out_of_typed_events():
     arguments = document_arguments("extract", raw(), ["XLK"], {
         "run_date": "2026-11-08", "market_timezone": "America/New_York"})
     assert "人物或无法映射到这些类型的主体不得生成event_records或claims" in arguments["user"]
+    assert "start/end固定填null" in arguments["user"]
 
 
 def test_structural_segment_plan_covers_every_original_character_without_truncation():

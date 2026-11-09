@@ -119,6 +119,12 @@ def normalize_annotation(raw, native, target_ids, *, limits=None) -> StructuredD
             raise
         raise ValueError("WORK_OUTPUT_SCHEMA_MISMATCH") from error
     document = StructuredDocument(raw=raw, evidence=evidence_for(raw), **deepcopy(native))
+    # Character offsets are model-supplied data, not semantic authority. The
+    # provider is unreliable at counting Python characters (observed in the
+    # real 237-original run), so bind every span from its unique exact quote.
+    # A quote that is missing or ambiguous still fails closed below.
+    for span in document.evidence_spans:
+        span["start"] = span["end"] = None
     spans, errors = _resolve_spans(document)
     if errors:
         raise ValueError("WORK_SPAN_BINDING_INVALID:" + ",".join(sorted(set(errors.values()))))
