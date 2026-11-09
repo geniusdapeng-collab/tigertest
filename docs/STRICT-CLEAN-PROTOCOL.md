@@ -7,6 +7,27 @@ selection from the frozen source inventory. A partial new-module set is an
 admission error. Historical inventories retain their original v2 observation
 contract or their original content-only protocol.
 
+For the opt-in research-work graph, a complete provider reply may still fail
+closed schema or semantic validation. Only the closed schema rejection,
+annotation, span and segment binding errors become a per-original
+`unverifiable` terminal. A schema rejection qualifies only after the shared
+format reanswer was used or its single parent-run slot was already consumed.
+Closed known-usage format diagnostics for duplicate keys, invalid JSON,
+empty/non-object output and schema mismatch also qualify; the failed model I/O
+is sealed in the child evidence. The model child keeps its original response
+observation; its saved output and dependency-only terminal contain hashes and
+stable error codes, never arbitrary exception text or model values. A small
+original binds its terminal to the failed extract or review; a segmented
+original first accounts for every segment, then binds one summary terminal to
+the exact failed segment results. A failed final segment merge follows the same
+terminal path. Transport, unknown accounting, unsafe identity, response
+protocol, storage and internal graph errors are not converted into a business
+disposition and remain run-level failures.
+
+Independent verification replays every child that exists and validates every
+dependency-only terminal against both upstream result hashes and semantic
+failure outputs. It does not invent a review child or a synthetic model reply.
+
 Only `clean.llm_semantic` uses the new data container. Its fixed function is
 `submit_clean_document_rows`, requested at
 `https://api.deepseek.com/beta/chat/completions` with `strict: true`, disabled

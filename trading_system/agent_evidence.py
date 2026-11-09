@@ -448,8 +448,17 @@ def verify_events(root: Path, run_id: str, specs: list[dict], *, event_relative:
                                           role="input" if name == "input_ref" else "output")
                     if name == "error_ref":
                         base_fields = {"error_type", "message", "outcome_observed"}
+                        allowed_error_fields = {
+                            frozenset(base_fields),
+                            frozenset(base_fields | {"diagnostic"}),
+                            frozenset(base_fields | {"response_observation"}),
+                            frozenset(base_fields | {
+                                "diagnostic", "response_observation"}),
+                        }
                         if (not isinstance(value, dict)
-                                or set(value) not in (base_fields, base_fields | {"diagnostic"})
+                                or frozenset(value) not in allowed_error_fields
+                                or "response_observation" in value
+                                and "diagnostic" not in value
                                 or not isinstance(value["error_type"], str) or not value["error_type"]
                                 or value["message"] != "External call failed"
                                 or not isinstance(value["outcome_observed"], bool)):
@@ -464,6 +473,24 @@ def verify_events(root: Path, run_id: str, specs: list[dict], *, event_relative:
                             except ValueError as exc:
                                 raise EvidenceInvalid("RESULT_INVALID", "I/O error diagnostic differs",
                                                       stage=stage) from exc
+                        if "response_observation" in value:
+                            try:
+                                from .llm.json_observation import validate_reference_observation
+                                if (call["method"] not in MODEL_IO_METHODS
+                                        or value["error_type"] != "RequiredModelUnavailable"):
+                                    raise ValueError("Untrusted model observation metadata")
+                                observation = validate_reference_observation(
+                                    value["response_observation"])
+                                for attempt in observation["attempts"]:
+                                    ref = attempt["observation_ref"]
+                                    read_snapshot(root, ref, run_id=run_id, stage=stage,
+                                                  role="output")
+                                    refs[ref["path"]] = ref
+                            except ValueError as exc:
+                                raise EvidenceInvalid(
+                                    "RESULT_INVALID",
+                                    "I/O error observation differs",
+                                    stage=stage) from exc
                     refs[call[name]["path"]] = call[name]
         previous_output = end["output_ref"]
     return {"event_count": len(events), "stage_count": len(specs),

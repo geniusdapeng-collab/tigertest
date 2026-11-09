@@ -12,6 +12,16 @@ from ..redline.execution import (ExecutionContext, REQUIRED_MODEL_STAGES, Runtim
 from .contracts import WorkUnitError, detached, value_hash
 
 CHILD_SEAL_SCHEMA = "tiger.work-unit-child-seal/v1"
+_DOCUMENT_FORMAT_FAILURES = {
+    "DUPLICATE_RESPONSE_JSON_KEY": "WORK_OUTPUT_JSON_INVALID",
+    "EMPTY_MODEL_OUTPUT": "WORK_OUTPUT_JSON_INVALID",
+    "EMPTY_OR_NONOBJECT_MODEL_OUTPUT": "WORK_OUTPUT_JSON_INVALID",
+    "INVALID_JSON_OBJECT_KEY": "WORK_OUTPUT_JSON_INVALID",
+    "INVALID_JSON_VALUE": "WORK_OUTPUT_JSON_INVALID",
+    "INVALID_RESPONSE_JSON": "WORK_OUTPUT_JSON_INVALID",
+    "NONFINITE_RESPONSE_JSON": "WORK_OUTPUT_JSON_INVALID",
+    "OUTPUT_SCHEMA_MISMATCH": "WORK_OUTPUT_SCHEMA_MISMATCH",
+}
 
 
 class UnitContext:
@@ -357,11 +367,38 @@ def verify_child_seal(work_store, ref):
         raise WorkUnitError("CHILD_SEAL_INVALID", "Child requires exactly one admitted logical model call")
     call = output["io_calls"][0]
     request = read_snapshot(root, call["input_ref"], run_id=value["run_id"], stage=value["stage"]["name"], role="input")
-    call_output = read_snapshot(root, call["output_ref"], run_id=value["run_id"], stage=value["stage"]["name"], role="output")
+    if "output_ref" in call:
+        call_output = read_snapshot(
+            root, call["output_ref"], run_id=value["run_id"],
+            stage=value["stage"]["name"], role="output")
+        observations = call_output["response_observation"]["attempts"]
+    else:
+        failure = read_snapshot(
+            root, call["error_ref"], run_id=value["run_id"],
+            stage=value["stage"]["name"], role="output")
+        output_value = output.get("value")
+        diagnostic = (failure.get("diagnostic", {})
+                      if type(failure) is dict else {})
+        expected_code = _DOCUMENT_FORMAT_FAILURES.get(diagnostic.get("code"))
+        if (type(failure) is not dict
+                or set(failure) != {
+                    "error_type", "message", "outcome_observed",
+                    "diagnostic", "response_observation"}
+                or failure["error_type"] != "RequiredModelUnavailable"
+                or failure["message"] != "External call failed"
+                or failure["outcome_observed"] is not True
+                or expected_code is None
+                or type(output_value) is not dict
+                or output_value.get("schema")
+                    != "tiger.document-semantic-failure/v1"
+                or output_value.get("error_code") != expected_code):
+            raise WorkUnitError(
+                "CHILD_SEAL_INVALID",
+                "Failed child model call requires a bound schema failure")
+        observations = failure["response_observation"]["attempts"]
     with work_store._tx() as connection:
         attempts = sorted((row for row in work_store._rows(connection, "attempts")
                            if row["unit_id"] == value["unit_id"]), key=lambda row: row["ordinal"])
-    observations = call_output["response_observation"]["attempts"]
     if len(attempts) != len(observations) or not attempts:
         raise WorkUnitError("CHILD_SEAL_INVALID", "Child model attempt count differs")
     for attempt, observation in zip(attempts, observations):
