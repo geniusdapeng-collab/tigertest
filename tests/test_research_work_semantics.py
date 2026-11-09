@@ -142,6 +142,7 @@ def test_extract_prompt_keeps_unmapped_subjects_out_of_typed_events():
         "run_date": "2026-11-08", "market_timezone": "America/New_York"})
     assert "人物或无法映射到这些类型的主体不得生成event_records或claims" in arguments["user"]
     assert "start/end固定填null" in arguments["user"]
+    assert "正文只出现公司名而未出现ticker/CIK/LEI时，identifiers必须为空" in arguments["user"]
 
 
 def test_structural_segment_plan_covers_every_original_character_without_truncation():

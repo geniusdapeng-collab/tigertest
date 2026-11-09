@@ -56,6 +56,8 @@ _EXTRACT = (
     "主体类型只能使用schema中的issuer、security、macro_series、regulator、industry、product或region；"
     "人物或无法映射到这些类型的主体不得生成event_records或claims，也不要为它们填写unknown主体后继续构造typed event，"
     "应把相关已发生事实、反证和主体未确证缺口保留在summary_zh中。"
+    "identifiers只登记在对应span中逐字出现的值；正文只出现公司名而未出现ticker/CIK/LEI时，identifiers必须为空，"
+    "禁止根据名称、常识或外部知识补标识。"
     f"tickers按正文直接相关去重后最多{WORK_MAX_DOCUMENT_TICKERS}个，不能为满足数量隐藏不同发行人。"
     "所有引用ID数组（subject_ids、span_ids、source_span_ids等）必须去重且顺序稳定。"
     "event_type只能使用schema枚举中的事件类型；analysis是claim_kind，不是event_type，无法归类时用other或unknown。"
