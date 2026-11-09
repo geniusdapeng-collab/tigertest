@@ -554,7 +554,7 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
         try:
             atomic_json(run, "status.json", {
                 "schema": "tiger.status.v1", "run_id": run_id,
-                "status": "blocked" if error["code"] in {
+                "status": "cancelled" if error["code"] == "TASK_CANCELLED" else "blocked" if error["code"] in {
                     "DATA_UNAVAILABLE", "DATA_STALE", "SOURCE_SYNTHETIC", "CURRENCY_BLOCKED"
                 } else "interrupted" if isinstance(exc, (InterruptedError, SupervisorInterrupted)) else "failed",
                 "error": error, "acceptance_was_durable": acknowledged,

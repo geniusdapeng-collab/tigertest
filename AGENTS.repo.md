@@ -5,7 +5,7 @@
 ## 受控执行入口
 
 - 通过对话执行研究前，先读 `docs/TIGER-OPERATOR.md`。外层 Agent 负责配置检查、固定请求、身份恢复和可读汇报；用户不必手写 JSON。MCP 未加载时可在已授权的本地执行环境使用同一 Tiger CLI，不把仓库只读目录或治理壳启动当作业务研究完成。
-- Agent 运行完整业务只使用 `scripts/tiger-agent.mjs` 或独立 `scripts/tiger-agent-mcp.mjs`；它们共同调用 `trading_system.agent_runner`。操作限 doctor/describe/run/resume/supplement/status/receipt/verify；resume 必须沿用原 run_id 与原合同，supplement 必须从已独立核验的 pending candidate 新开完整 admission。
+- Agent 运行完整业务只使用 `scripts/tiger-agent.mjs` 或独立 `scripts/tiger-agent-mcp.mjs`；它们共同调用 `trading_system.agent_runner`。操作限 doctor/describe/run/resume/supplement/cancel/status/receipt/verify；resume 必须沿用原 run_id 与原合同，supplement 必须从已独立核验的 pending candidate 新开完整 admission，cancel 只请求调度取消且不伪装为外部调用撤销。
 - 先 doctor 和 describe。默认 readonly，paper 权限只能由操作者在可信启动配置中显式选定；工具请求不能修改权限、Python、state-root、策略或阶段。
 - 新的 AI 研究与官网更新默认必须显式选择 `us-public-intelligence-paper-v2`、`public-usd` 本地 paper 账户和公开美股数据。`us-public-model-required-paper-v1` 保留历史严格路径；CLI 的兼容函数默认 `us-public-paper-v1` 只保留旧调用/历史语义，不作为新任务完成；`us-public-active-paper-v1` 是另行显式选择的实验配置，不升级为操作默认。各受控配置均执行信号时冻结预算、次日开盘组合限额及 A/B/C 入场模板门禁。不得连接真实券商或真实资金，不得跨 profile 复用账户，也不得复制演示或其他账户冒充迁移；不得注入演示数据掩盖公开源失败。
 - 不开放自由 CLI argv、skip、tune、score、approve、live 或单阶段执行。不得把原通用能力 loader 的 local+execute 限制改成例外，不得绕过 Python 的顺序、锁、幂等和证据校验。

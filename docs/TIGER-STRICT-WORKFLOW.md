@@ -104,6 +104,8 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 
 进程分为提交/查询进程、supervisor、guardian 和 engine。业务进程与客户端观察进程分离；断连或取消观察不会取消已接纳任务。supervisor 负责截止时间、清理与账户发布；guardian 独立监测 supervisor 的生命通道，并约束 engine 所属进程组。清理在回收保留的组首进程前执行，不能仅凭 PID 文件推断任务是否活跃。
 
+`cancel` 是独立的持久调度取消操作，请求只含原 `run_id`。Coordinator 停止领取新单元，尚 prepared 的调用标为未发送；dispatched/observed 的 unknown 外部调用保留预留并先对账。客户端中断观察与调度取消不能混写；显式取消后不得 `resume`。
+
 控制管道关闭也不等于 guardian 已退出。supervisor 先验证完整成功控制记录，再在原业务期限内观察真实退出：Linux 使用保留子进程待回收状态的 WNOWAIT；macOS 读取自有组首进程的 PID、父 PID、组 ID 和僵尸状态。身份不符、查询失败或到期均不能作为成功。观察到退出后仍先清理进程组，最后回收并要求真实退出码为零，才允许发布账户。
 
 状态查询先采样运行锁，再读取状态文件和账户提交链。写者完成最后的状态写入后才释放运行锁，同一个 run 不会重新启动。若采样时锁仍被持有，查询可以保守地多返回一次 running；不得把完成前的状态/指针快照与完成后的无锁状态拼成虚假的 interrupted。已发布的账户提交仍优先于可变状态文件。

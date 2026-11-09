@@ -77,7 +77,15 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
 
 ## 2. CLI：提交一次，持续查询同一个身份
 
-八个操作为 `doctor`、`describe`、`run`、`resume`、`supplement`、`status`、`receipt`、`verify`。业务输入使用 `--input-file path.json` 或 `--input-file -`；stdin 必须是一个 UTF-8 JSON 对象，最大 64 KiB。重复键、未知字段、非有限数值、任意命令和路径覆写都会被拒绝。`resume` 只接收原 `run_id`；`supplement` 只接收父 run、已审定 pending symbols 和新幂等键。
+九个操作为 `doctor`、`describe`、`run`、`resume`、`supplement`、`cancel`、`status`、`receipt`、`verify`。业务输入使用 `--input-file path.json` 或 `--input-file -`；stdin 必须是一个 UTF-8 JSON 对象，最大 64 KiB。重复键、未知字段、非有限数值、任意命令和路径覆写都会被拒绝。`resume` 只接收原 `run_id`；`supplement` 只接收父 run、已审定 pending symbols 和新幂等键；`cancel` 只接收原 `run_id`，持久化调度取消请求，不撤销已发送的未知外部调用。
+
+取消调度请求：
+
+```json
+{"run_id":"run-实际原身份"}
+```
+
+该请求与客户端取消观察不同：观察取消只停止本地轮询，已被接纳的 worker 仍会继续；`cancel` 才写入持久调度取消。若已有 external attempt 为 `unknown`，状态先保持 `cancelling`，原预留不会因取消而释放。
 
 请求文件只含以下四个字段；为一次逻辑任务分配一个持久、可恢复的幂等键：
 

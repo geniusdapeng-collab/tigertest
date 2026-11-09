@@ -4,7 +4,7 @@
 
 ## 对话入口与权限
 
-用户说明目标，外层 Agent 根据可信部署准备请求并调用 CLI 或独立 MCP。用户不必编写 JSON。Node 只做协议和进程传输，Python 负责来源准入、任务身份、预算、快照、模型、检查点与验证。现有 `tiger-agent` 的八个操作和四字段创建请求继续保留；resume 只接原 run_id，supplement 使用独立的新任务请求。
+用户说明目标，外层 Agent 根据可信部署准备请求并调用 CLI 或独立 MCP。用户不必编写 JSON。Node 只做协议和进程传输，Python 负责来源准入、任务身份、预算、快照、模型、检查点与验证。现有 `tiger-agent` 的九个操作和四字段创建请求继续保留；resume 只接原 run_id，supplement 使用独立的新任务请求，cancel 只请求调度取消。
 
 | 可信启动模式 | 可用行为 |
 |---|---|

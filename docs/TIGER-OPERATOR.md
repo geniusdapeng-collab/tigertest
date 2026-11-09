@@ -122,6 +122,8 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 `resume` 只接收该字段，不建新 run、不换幂等键、不刷新 admission/source/policy/账户 before-state/deadline。已验证 WorkStore 成果复用；已收到但未结算的原 native 先复核 usage；任何 in-flight/unknown 外部调用保持预留并返回 `RECONCILIATION_REQUIRED`。永久业务失败不复活，已提交 run 只做幂等读取。
 
+操作者要求停止研究调度时调用 `cancel`，同样只接收 `{"run_id":"run-实际原身份"}`。它不会撤销已发出的未知外部调用；状态可先显示 `cancelling`，待原请求核对后进入 `cancelled`。显式取消的调度任务不能通过 `resume` 复活。
+
 ### 场景三之后：补研已审定候选
 
 receipt 的逐证券卡把范围外候选标成 `PENDING_RESEARCH` 且操作者要求补研时，使用 `supplement`。它始终创建新的完整 run 和新的账户比较交换，不扩写旧快照，也不复用旧交易批准：
