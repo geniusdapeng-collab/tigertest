@@ -32,6 +32,24 @@
 - 独立 `ResearchWorkProof`：`63 passed`，包含负向 review 的 `unverifiable` 终态重建。
 - CLI / MCP / workflow schema：`56 passed`。
 
+## 第三批语义终态（2026-11-10）
+
+1. 模型回复通过 JSON schema 后，若主体、期间、数值或原文 span 的唯一绑定仍
+   失败，只把该原件记为 `unverifiable`；稳定错误码进入受控 work result，
+   不持久化异常正文或模型值。
+2. 小文档的 review 单元以失败 extract 的 result hash 构造依赖终态，不再
+   伪造第二次模型复核；分段文档先为每段保留 extract/review 事实，再由
+   metadata synthesis 单元绑定全部失败段，形成唯一原件终态。
+3. 分段合并后的最终语义校验失败同样进入 `unverifiable`。传输、schema
+   format、未知 usage、存储和内部图不变量错误仍是 run-level failure。
+4. `ResearchWorkProof` 逐个重放真实 child；依赖终态必须与上游 result hash、
+   source hash 和稳定错误码一致，不允许以成功的 validated 行冒充模型复核。
+
+定向证据（B）：
+
+- research work execution/proof：`70 passed`。
+- 语义、执行、独立回执、公开恢复、资源/任务账本与状态组合：`167 passed`。
+
 ## 剩余非代码门禁
 
 - 最终真实 237 必须在新合同冻结后重新运行，并生成逐原件终态、

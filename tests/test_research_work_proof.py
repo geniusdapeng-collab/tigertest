@@ -74,7 +74,7 @@ def prepare_proof_context(context):
     return admission, policy, acquisition, DeepSeekRequiredClient(context)
 
 
-def synthetic_transport(monkeypatch, *, review_value=None):
+def synthetic_transport(monkeypatch, *, review_value=None, extract_mutation=None):
     wires, lock = [], Lock()
     def post(url, **kwargs):
         wire = json.loads(kwargs["data"])
@@ -82,6 +82,8 @@ def synthetic_transport(monkeypatch, *, review_value=None):
         payload = json.loads(user.split("\n", 1)[1])
         if payload["phase"] == "extract":
             value = {"annotation": annotation()}
+            if extract_mutation is not None:
+                extract_mutation(value)
         elif payload["phase"] == "empty":
             value = {"documents": []}
         else:
@@ -96,7 +98,7 @@ def synthetic_transport(monkeypatch, *, review_value=None):
     return wires
 
 
-def segmented_transport(monkeypatch):
+def segmented_transport(monkeypatch, *, extract_mutation=None):
     wires, lock = [], Lock()
     def post(url, **kwargs):
         wire = json.loads(kwargs["data"])
@@ -113,6 +115,8 @@ def segmented_transport(monkeypatch):
                 "subjects": [], "evidence_spans": [{
                     "id": "p1", "start": None, "end": None, "quote": quote}],
                 "event_records": [], "claims": []}}
+            if extract_mutation is not None:
+                extract_mutation(value, payload)
         elif phase == "metadata_synthesis":
             value = {"summary_zh": "分段摘要已按完整原文覆盖并逐段复核。"}
         else:
@@ -165,6 +169,30 @@ def segmented_completed(observed, monkeypatch):
 
 
 @pytest.fixture
+def segmented_semantic_failed(observed, monkeypatch):
+    from trading_system.research_work import _POLICY
+    monkeypatch.setitem(_POLICY, "segment_input_token_limit", 5000)
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    mutation = lambda value, payload: (
+        value["annotation"]["evidence_spans"][0].update(quote="NOT IN THE SEGMENT SOURCE")
+        if "Section 1." in payload["source"]["content"] else None)
+    wires = segmented_transport(monkeypatch, extract_mutation=mutation)
+    content = "\n\n".join(
+        f"Section {number}. Complete issuer disclosure paragraph with revenue "
+        f"and risk evidence number {number}." for number in range(1, 401))
+    original = raw(content=content)
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "segmented semantic terminal"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output(documents)
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=[original], joins=joins, replay=replay, wires=wires)
+
+
+@pytest.fixture
 def unreviewable(observed, monkeypatch):
     admission, policy, acquisition, client = prepare_proof_context(observed)
     rejected = review()
@@ -172,6 +200,24 @@ def unreviewable(observed, monkeypatch):
     wires = synthetic_transport(monkeypatch, review_value=rejected)
     original = raw()
     with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "incomplete proof review"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output(documents)
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=[original], joins=joins, replay=replay, wires=wires)
+
+
+@pytest.fixture
+def semantic_failed(observed, monkeypatch):
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    wires = synthetic_transport(
+        monkeypatch,
+        extract_mutation=lambda value: value["annotation"]["claims"][0].update(value="999"))
+    original = raw()
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "semantic terminal proof"}) as scope:
         documents = clean_round(client, [original], acquisition=acquisition)
         scope.output(documents)
         joins = deepcopy(scope.io_calls)
@@ -234,6 +280,48 @@ def test_negative_review_is_verified_as_an_unverifiable_terminal(unreviewable):
     }
     summary = verifier.assert_complete()
     assert summary["verified_units"] == 2 and summary["document_count"] == 1
+
+
+def test_semantic_extract_failure_is_replayed_and_dependency_terminalized(semantic_failed):
+    fixture = semantic_failed
+    assert fixture.documents == []
+    assert len(fixture.joins) == len(fixture.wires) == 1
+    verifier = ResearchWorkProof(fixture.replay)
+    document, consumed = verifier.verify_document(
+        fixture.originals[0], fixture.joins,
+        validation_context=validation_context(fixture), return_count=True)
+    assert document is None and consumed == 1
+    disposition = verifier.store.document_dispositions()["documents"][fixture.originals[0].doc_id]
+    assert disposition == {
+        "state": "unverifiable",
+        "reason": "upstream_document_semantics_unverifiable",
+    }
+    summary = verifier.assert_complete()
+    assert summary["verified_units"] == 2 and summary["document_count"] == 1
+    assert summary["native_count"] == 1
+    review_result = verifier.store.read_result(
+        next(row["unit_id"] for row in verifier.store.status()["units"]
+             if row["spec"]["kind"] == "document.document_review"))["value"]
+    assert review_result["schema"] == "tiger.document-terminal-result/v1"
+    assert review_result["upstreams"][0]["error_code"] == "WORK_ANNOTATION_INVALID"
+
+
+def test_segment_failure_terminalizes_once_after_every_segment_is_accounted(segmented_semantic_failed):
+    fixture = segmented_semantic_failed
+    assert fixture.documents == []
+    verifier = ResearchWorkProof(fixture.replay)
+    document, consumed = verifier.verify_document(
+        fixture.originals[0], fixture.joins,
+        validation_context=validation_context(fixture), return_count=True)
+    assert document is None and consumed == len(fixture.joins)
+    units = verifier.store.status()["units"]
+    summary = next(row for row in units if row["spec"]["kind"] == "document.metadata_synthesis")
+    terminal = verifier.store.read_result(summary["unit_id"])["value"]
+    assert terminal["schema"] == "tiger.document-terminal-result/v1"
+    assert [row["error_code"] for row in terminal["upstreams"]] == ["WORK_SPAN_BINDING_INVALID"]
+    disposition = verifier.store.document_dispositions()["documents"][fixture.originals[0].doc_id]
+    assert disposition["state"] == "unverifiable"
+    assert verifier.assert_complete()["document_count"] == 1
 
 
 @pytest.mark.parametrize("mutation", ["wrong_join", "changed_value", "missing_parent_copy", "different_original"])

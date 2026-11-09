@@ -14,7 +14,7 @@ from test_task_work_units import BASE, manifest
 from trading_system.llm.deepseek_required import DeepSeekRequiredClient
 from trading_system.llm.work_required import clean_round
 from trading_system.research_work import research_work_policy
-from trading_system.tasks import WorkStore, WorkUnitError
+from trading_system.tasks import WorkStore
 
 
 def review():
@@ -66,14 +66,20 @@ def test_originals_have_isolated_extract_review_and_verified_parent_joins(observ
     assert len({row["response_id"] for row in client.receipts}) == 2 * count
 
 
-def test_wrong_literal_never_becomes_reviewed_document(observed, monkeypatch):
+def test_wrong_literal_becomes_a_dependency_bound_unverifiable_terminal(observed, monkeypatch):
     store, acquisition, client = prepare(observed)
     calls = transport(monkeypatch, extract_mutation=lambda value: value["annotation"]["claims"][0].update(value="999"))
-    with pytest.raises(WorkUnitError):
-        with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "wrong amount"}):
-            clean_round(client, [raw()], acquisition=acquisition)
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "wrong amount"}) as scope:
+        result = clean_round(client, [raw()], acquisition=acquisition)
+        scope.output({"documents": len(result)})
+    assert result == []
     assert len(calls) == 1
-    assert store.document_dispositions()["terminal"] == 0
+    assert [call["method"] for call in scope.io_calls] == ["tasks.child.join"]
+    dispositions = store.document_dispositions()
+    assert dispositions["terminal"] == 1 and dispositions["unverifiable"] == 1
+    terminal = dispositions["documents"][raw().doc_id]
+    assert terminal["reason"] == "upstream_document_semantics_unverifiable"
+    assert store.status()["graph_state"] == "completed"
     assert store.status()["settled_attempts"] == 1
     assert store.status()["format_reanswers"] == 0
 

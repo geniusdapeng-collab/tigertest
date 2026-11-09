@@ -32,6 +32,9 @@ from .scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config
 from .work_semantics import (annotation_payload, digest as semantic_hash, normalize_annotation,
     merge_segment_annotations, namespace_segment_annotation, task_evidence_view,
     inspect_document_review, text_digest, validate_annotation, validate_raw_documents)
+from .work_required import (SEMANTIC_FAILURE_SCHEMA, TERMINAL_REASON,
+    TERMINAL_RESULT_SCHEMA, semantic_failure_code, semantic_failure_value,
+    validate_terminal_result)
 
 JOIN_SCHEMA = "tiger.work-child-join/v1"
 SUMMARY_SCHEMA = "tiger.research-work-proof/v1"
@@ -223,8 +226,9 @@ class ResearchWorkProof:
                 return self.verifier.plan("clean.llm_semantic", arguments)
 
         validate_raw_documents([raw])
-        calls = (extract_call_or_calls if review_call is None
-                 else [extract_call_or_calls, review_call])
+        store = self.store
+        calls = list(extract_call_or_calls if review_call is None
+                     else [extract_call_or_calls, review_call])
         stage = "clean.llm_semantic"
         if raw.doc_id in self.document_hashes:
             _fail(stage)
@@ -234,27 +238,84 @@ class ResearchWorkProof:
         specs, units, _entries = document_unit_specs(raw, plan, legacy.TARGET_IDS,
             self.replay.assessment, validation_context, self.policy)
         by_id = {spec.unit_id: spec for spec in specs}
-        if len(calls) < len(specs):
-            _fail(stage)
-        calls = calls[:len(specs)]
+
+        index = 0
+
+        def consume(spec, arguments=None, stage_input=None):
+            nonlocal index
+            result = store.read_result(spec.unit_id)
+            saved = result["value"]
+            if type(saved) is dict and saved.get("schema") == TERMINAL_RESULT_SCHEMA:
+                validate_terminal_result(store, saved)
+                if saved["terminal_unit_id"] != spec.unit_id:
+                    _fail(stage)
+                self.verified_units.add(spec.unit_id)
+                return saved, None, result
+            if arguments is None or stage_input is None or index >= len(calls):
+                _fail(stage)
+            call = calls[index]
+            index += 1
+            return self.verify_join(stage, call, spec, arguments,
+                                    stage_input=stage_input)
+
+        def expect_semantic_failure(saved, native, source, phase, segment_id):
+            if type(saved) is not dict or saved.get("schema") != SEMANTIC_FAILURE_SCHEMA:
+                _fail(stage)
+            try:
+                if phase == "extract":
+                    document = normalize_annotation(
+                        source, native["annotation"], legacy.TARGET_IDS)
+                    validate_annotation(document, self.replay.cutoff,
+                                        **validation_context)
+                else:
+                    _fail(stage)
+            except EvidenceInvalid:
+                raise
+            except Exception as error:
+                code = semantic_failure_code(error)
+                if code is None:
+                    _fail(stage)
+            else:
+                _fail(stage)
+            expected = semantic_failure_value(
+                phase, source, segment_id, code, document_id=raw.doc_id)
+            _same(saved, expected, stage)
+            return code
+
+        def terminal_disposition(result, reason):
+            _same(result["dispositions"], {
+                raw.doc_id: {"state": "unverifiable", "reason": reason}}, stage)
+
         if plan is None:
             extract_spec = by_id[units["extracts"][0]]
             args = document_arguments("extract", raw, legacy.TARGET_IDS, self.replay.assessment)
-            value, native, result = self.verify_join(stage, calls[0], extract_spec, args,
+            value, native, result = consume(extract_spec, args,
                 stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
                              "unit_id": extract_spec.unit_id, "arguments": args})
+            review_spec = by_id[units["reviews"][0]]
+            if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
+                expect_semantic_failure(value, native, raw, "extract", None)
+                review_value, review_native, review_result = consume(review_spec)
+                if (review_native is not None
+                        or type(review_value) is not dict
+                        or review_value.get("schema") != TERMINAL_RESULT_SCHEMA):
+                    _fail(stage)
+                terminal_disposition(review_result, TERMINAL_REASON)
+                self.document_hashes[raw.doc_id] = text_digest(raw.content)
+                return (None, index) if return_count else None
             document = normalize_annotation(raw, native["annotation"], legacy.TARGET_IDS)
             validation = validate_annotation(document, self.replay.cutoff, **validation_context)
             _same(value, {"phase": "extract", "document_id": raw.doc_id, "segment_id": None,
                 "native": native, "annotation": annotation_payload(document),
                 "validation": validation}, stage)
             _same(result["dispositions"], {}, stage)
-            review_spec = by_id[units["reviews"][0]]
             args = document_arguments("document_review", raw, legacy.TARGET_IDS,
                 self.replay.assessment, annotation=annotation_payload(document))
-            value, native, result = self.verify_join(stage, calls[1], review_spec, args,
+            value, native, result = consume(review_spec, args,
                 stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "document_review",
                              "unit_id": review_spec.unit_id, "arguments": args})
+            if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
+                _fail(stage)
             review = inspect_document_review(document, native)
             _same(value, {"phase": "document_review", "document_id": raw.doc_id,
                 "segment_id": None, "native": native,
@@ -263,30 +324,44 @@ class ResearchWorkProof:
             review_accepted = review["review_accepted"]
         else:
             manifest, segments = plan
-            annotations, review_receipts, index = [], [], 0
+            annotations, review_receipts = [], []
             review_accepted = True
+            semantic_failure = False
             for number, segment in enumerate(segments, 1):
                 extract_spec = by_id[units["extracts"][number - 1]]
                 args = document_arguments("extract", segment, legacy.TARGET_IDS,
                                          self.replay.assessment)
-                value, native, result = self.verify_join(stage, calls[index], extract_spec, args,
+                value, native, result = consume(extract_spec, args,
                     stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
                                  "unit_id": extract_spec.unit_id, "arguments": args})
-                local = normalize_annotation(segment, native["annotation"], legacy.TARGET_IDS)
-                validation = validate_annotation(local, self.replay.cutoff, **validation_context)
                 segment_id = manifest["segments"][number - 1]["id"]
+                review_spec = by_id[units["reviews"][number - 1]]
+                if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
+                    expect_semantic_failure(
+                        value, native, segment, "extract", segment_id)
+                    review_value, review_native, review_result = consume(review_spec)
+                    if (review_native is not None
+                            or type(review_value) is not dict
+                            or review_value.get("schema") != TERMINAL_RESULT_SCHEMA):
+                        _fail(stage)
+                    _same(review_result["dispositions"], {}, stage)
+                    semantic_failure = True
+                    continue
+                local = normalize_annotation(segment, native["annotation"], legacy.TARGET_IDS)
+                validation = validate_annotation(
+                    local, self.replay.cutoff, **validation_context)
                 _same(value, {"phase": "extract", "document_id": raw.doc_id,
                     "segment_id": segment_id, "native": native,
                     "annotation": annotation_payload(local), "validation": validation}, stage)
                 _same(result["dispositions"], {}, stage)
-                index += 1
-                review_spec = by_id[units["reviews"][number - 1]]
                 args = document_arguments("document_review", segment, legacy.TARGET_IDS,
                     self.replay.assessment, annotation=annotation_payload(local))
-                value, native, result = self.verify_join(stage, calls[index], review_spec, args,
+                value, native, result = consume(review_spec, args,
                     stage_input={"contract": WORK_CLEAN_CONTRACT,
                                  "phase": "document_review",
                                  "unit_id": review_spec.unit_id, "arguments": args})
+                if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
+                    _fail(stage)
                 review = inspect_document_review(local, native)
                 _same(value, {"phase": "document_review", "document_id": raw.doc_id,
                     "segment_id": segment_id, "native": native,
@@ -298,16 +373,42 @@ class ResearchWorkProof:
                 annotations.append(namespace_segment_annotation(
                     annotation_payload(local), number,
                     manifest["segments"][number - 1]["start"]))
-                index += 1
             summary_spec = by_id[units["summary"]]
+            if semantic_failure:
+                value, native, result = consume(summary_spec)
+                if (native is not None or type(value) is not dict
+                        or value.get("schema") != TERMINAL_RESULT_SCHEMA):
+                    _fail(stage)
+                terminal_disposition(result, TERMINAL_REASON)
+                self.document_hashes[raw.doc_id] = text_digest(raw.content)
+                return (None, index) if return_count else None
             segment_rows = [{"segment_id": manifest["segments"][number]["id"],
                              "summary_zh": row["summary_zh"]}
                             for number, row in enumerate(annotations)]
             args = segment_summary_arguments(raw, segment_rows, self.replay.assessment)
-            value, native, result = self.verify_join(stage, calls[index], summary_spec, args,
+            value, native, result = consume(summary_spec, args,
                 stage_input={"contract": self.policy["segment_contract"],
                              "phase": "metadata_synthesis",
                              "unit_id": summary_spec.unit_id, "arguments": args})
+            if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
+                try:
+                    merged = merge_segment_annotations(
+                        raw, annotations, summary_zh=native["summary_zh"],
+                        limits=merged_annotation_limits(len(segments)),
+                        target_ids=legacy.TARGET_IDS)
+                    validate_annotation(merged, self.replay.cutoff, **validation_context)
+                except Exception as error:
+                    code = semantic_failure_code(error)
+                    if code is None:
+                        _fail(stage)
+                else:
+                    _fail(stage)
+                expected = semantic_failure_value(
+                    "metadata_synthesis", raw, None, code)
+                _same(value, expected, stage)
+                terminal_disposition(result, TERMINAL_REASON)
+                self.document_hashes[raw.doc_id] = text_digest(raw.content)
+                return (None, index) if return_count else None
             validate_schema(native, summary_schema())
             global_review = {"schema": "tiger.document-global-review/v1",
                 "contract": self.policy["segment_contract"], "document_id": raw.doc_id,
@@ -336,7 +437,7 @@ class ResearchWorkProof:
                        "independent_review_or_source_qualification_incomplete")}}, stage)
         self.document_hashes[raw.doc_id] = text_digest(raw.content)
         eligible = document if disposition == "eligible" else None
-        return (eligible, len(specs)) if return_count else eligible
+        return (eligible, index) if return_count else eligible
 
     @_boundary
     def verify_empty(self, call):
