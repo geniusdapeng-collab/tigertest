@@ -8,16 +8,19 @@ admission error. Historical inventories retain their original v2 observation
 contract or their original content-only protocol.
 
 For the opt-in research-work graph, a complete provider reply may still fail
-closed semantic validation. Only the closed annotation, span and segment
-binding errors become a per-original `unverifiable` terminal. The model child
-keeps its original response observation and known usage; its saved output and
-the dependency-only terminal contain hashes and stable error codes, never
-arbitrary exception text or model values. A small original binds its terminal
-to the failed extract; a segmented original first accounts for every segment,
-then binds one summary terminal to the exact failed segment results. A
-successful schema but failed final segment merge follows the same terminal
-path. Transport, schema-format, accounting, storage and internal graph errors
-are not converted into a business disposition and remain run-level failures.
+closed schema or semantic validation. Only the closed schema rejection,
+annotation, span and segment binding errors become a per-original
+`unverifiable` terminal. A schema rejection qualifies only after the shared
+format reanswer was used or its single parent-run slot was already consumed;
+the reply must have known usage, and the failed model I/O is sealed in the
+child evidence. The model child keeps its original response observation; its
+saved output and dependency-only terminal contain hashes and stable error
+codes, never arbitrary exception text or model values. A small original binds
+its terminal to the failed extract or review; a segmented original first
+accounts for every segment, then binds one summary terminal to the exact failed
+segment results. A failed final segment merge follows the same terminal path.
+Transport, unknown accounting, storage and internal graph errors are not
+converted into a business disposition and remain run-level failures.
 
 Independent verification replays every child that exists and validates every
 dependency-only terminal against both upstream result hashes and semantic

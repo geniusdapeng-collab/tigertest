@@ -74,16 +74,24 @@ def prepare_proof_context(context):
     return admission, policy, acquisition, DeepSeekRequiredClient(context)
 
 
-def synthetic_transport(monkeypatch, *, review_value=None, extract_mutation=None):
-    wires, lock = [], Lock()
+def synthetic_transport(monkeypatch, *, review_value=None, extract_mutation=None,
+                        schema_retry=False):
+    wires, counts, lock = [], {}, Lock()
     def post(url, **kwargs):
         wire = json.loads(kwargs["data"])
         user = wire["messages"][-1]["content"].split("\nJSON schema:\n", 1)[0]
         payload = json.loads(user.split("\n", 1)[1])
         if payload["phase"] == "extract":
-            value = {"annotation": annotation()}
-            if extract_mutation is not None:
-                extract_mutation(value)
+            source_id = payload["source"]["id"]
+            with lock:
+                counts[source_id] = counts.get(source_id, 0) + 1
+                ordinal = counts[source_id]
+            if schema_retry and ordinal == 1:
+                value = {"annotation": {"tickers": []}}
+            else:
+                value = {"annotation": annotation()}
+                if extract_mutation is not None:
+                    extract_mutation(value)
         elif payload["phase"] == "empty":
             value = {"documents": []}
         else:
@@ -228,6 +236,41 @@ def semantic_failed(observed, monkeypatch):
         originals=[original], joins=joins, replay=replay, wires=wires)
 
 
+@pytest.fixture
+def schema_retry_exhausted(observed, monkeypatch):
+    from trading_system.research_work import _POLICY
+    monkeypatch.setitem(_POLICY, "document_workers", 1)
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    wires = synthetic_transport(monkeypatch, schema_retry=True)
+    originals = [raw(), raw("source-2")]
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "schema failure proof"}) as scope:
+        documents = clean_round(client, originals, acquisition=acquisition)
+        scope.output({"documents": [document.raw.doc_id for document in documents]})
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=originals, joins=joins, replay=replay, wires=wires)
+
+
+@pytest.fixture
+def review_schema_failed(observed, monkeypatch):
+    admission, policy, acquisition, client = prepare_proof_context(observed)
+    wires = synthetic_transport(
+        monkeypatch, review_value={"complete": "not-a-boolean"})
+    original = raw()
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "review schema proof"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output({"documents": len(documents)})
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store, documents=documents,
+        originals=[original], joins=joins, replay=replay, wires=wires)
+
+
 def validation_context(fixture):
     return {"security_ids": fixture.acquisition.frontier["security_ids"],
         "entity_registry": fixture.acquisition.entities,
@@ -304,6 +347,53 @@ def test_semantic_extract_failure_is_replayed_and_dependency_terminalized(semant
              if row["spec"]["kind"] == "document.document_review"))["value"]
     assert review_result["schema"] == "tiger.document-terminal-result/v1"
     assert review_result["upstreams"][0]["error_code"] == "WORK_ANNOTATION_INVALID"
+
+
+def test_exhausted_schema_retry_is_replayed_through_the_failed_model_child(schema_retry_exhausted):
+    fixture = schema_retry_exhausted
+    assert [document.raw.doc_id for document in fixture.documents] == ["source-1"]
+    assert len(fixture.joins) == 3 and len(fixture.wires) == 4
+    verifier = ResearchWorkProof(fixture.replay)
+    cleaned, index = [], 0
+    for original in fixture.originals:
+        document, consumed = verifier.verify_document(
+            original, fixture.joins[index:],
+            validation_context=validation_context(fixture), return_count=True)
+        index += consumed
+        if document is not None:
+            cleaned.append(document)
+    assert [document.raw.doc_id for document in cleaned] == ["source-1"]
+    assert index == len(fixture.joins)
+    dispositions = verifier.store.document_dispositions()
+    assert dispositions["eligible"] == 1 and dispositions["unverifiable"] == 1
+    failure_unit = next(row for row in verifier.store.status()["units"]
+                        if row["spec"]["kind"] == "document.extract"
+                        and row["spec"]["document_ids"] == ["source-2"])
+    failure = verifier.store.read_result(failure_unit["unit_id"])["value"]["output"]
+    assert failure["error_code"] == "WORK_OUTPUT_SCHEMA_MISMATCH"
+    summary = verifier.assert_complete()
+    assert summary["verified_units"] == 4 and summary["document_count"] == 2
+    assert summary["native_count"] == len(fixture.wires) == 4
+
+
+def test_review_schema_failure_replays_its_failed_child_without_inventing_a_review(review_schema_failed):
+    fixture = review_schema_failed
+    assert fixture.documents == []
+    assert len(fixture.joins) == 2 and len(fixture.wires) == 3
+    verifier = ResearchWorkProof(fixture.replay)
+    document, consumed = verifier.verify_document(
+        fixture.originals[0], fixture.joins,
+        validation_context=validation_context(fixture), return_count=True)
+    assert document is None and consumed == 2
+    review_result = verifier.store.read_result(
+        next(row["unit_id"] for row in verifier.store.status()["units"]
+             if row["spec"]["kind"] == "document.document_review"))["value"]["output"]
+    assert review_result["error_code"] == "WORK_OUTPUT_SCHEMA_MISMATCH"
+    disposition = verifier.store.document_dispositions()["documents"]["source-1"]
+    assert disposition["state"] == "unverifiable"
+    summary = verifier.assert_complete()
+    assert summary["verified_units"] == 2
+    assert summary["document_count"] == 1 and summary["native_count"] == 3
 
 
 def test_segment_failure_terminalizes_once_after_every_segment_is_accounted(segmented_semantic_failed):

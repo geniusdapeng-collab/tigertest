@@ -49,6 +49,45 @@ def transport(monkeypatch, *, extract_mutation=None, review_mutation=None):
     return calls
 
 
+def schema_retry_transport(monkeypatch):
+    calls, counts, lock = [], {}, Lock()
+    def post(_url, **kwargs):
+        wire = json.loads(kwargs["data"])
+        prompt = wire["messages"][-1]["content"]
+        phase = "extract" if '"phase":"extract"' in prompt else "document_review"
+        payload_text = prompt.split("\n", 1)[1].split("\nJSON schema:\n", 1)[0]
+        payload = json.loads(payload_text)
+        source_id = payload["source"]["id"]
+        with lock:
+            counts[source_id] = counts.get(source_id, 0) + 1
+            ordinal = counts[source_id]
+            calls.append({"phase": phase, "source_id": source_id})
+            identifier = "schema-retry-" + str(len(calls))
+        if phase == "extract" and ordinal == 1:
+            value = {"annotation": {"tickers": []}}
+        else:
+            value = {"annotation": annotation()} if phase == "extract" else review()
+        return Response(native(json.dumps(value, ensure_ascii=False), identifier))
+    monkeypatch.setattr(requests, "post", post)
+    return calls
+
+
+def review_schema_transport(monkeypatch):
+    calls, lock = [], Lock()
+    def post(_url, **kwargs):
+        wire = json.loads(kwargs["data"])
+        prompt = wire["messages"][-1]["content"]
+        phase = "extract" if '"phase":"extract"' in prompt else "document_review"
+        value = ({"annotation": annotation()} if phase == "extract"
+                 else {"complete": "not-a-boolean"})
+        with lock:
+            calls.append(phase)
+            identifier = "review-schema-" + str(len(calls))
+        return Response(native(json.dumps(value, ensure_ascii=False), identifier))
+    monkeypatch.setattr(requests, "post", post)
+    return calls
+
+
 @pytest.mark.parametrize("count", [1, 2])
 def test_originals_have_isolated_extract_review_and_verified_parent_joins(observed, monkeypatch, count):
     store, acquisition, client = prepare(observed)
@@ -82,6 +121,50 @@ def test_wrong_literal_becomes_a_dependency_bound_unverifiable_terminal(observed
     assert store.status()["graph_state"] == "completed"
     assert store.status()["settled_attempts"] == 1
     assert store.status()["format_reanswers"] == 0
+
+
+def test_schema_rejection_without_retry_slot_becomes_a_verified_terminal(observed, monkeypatch):
+    from trading_system.research_work import _POLICY
+    monkeypatch.setitem(_POLICY, "document_workers", 1)
+    store, acquisition, client = prepare(observed)
+    calls = schema_retry_transport(monkeypatch)
+    originals = [raw(), raw("source-2")]
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "schema retry exhausted"}) as scope:
+        result = clean_round(client, originals, acquisition=acquisition)
+        scope.output({"documents": [doc.raw.doc_id for doc in result]})
+    assert [doc.raw.doc_id for doc in result] == ["source-1"]
+    assert len(calls) == 4
+    assert [call["method"] for call in scope.io_calls] == ["tasks.child.join"] * 3
+    dispositions = store.document_dispositions()
+    assert dispositions["eligible"] == 1 and dispositions["unverifiable"] == 1
+    assert dispositions["documents"]["source-2"] == {
+        "state": "unverifiable",
+        "reason": "upstream_document_semantics_unverifiable",
+    }
+    assert store.status()["graph_state"] == "completed"
+    assert store.status()["settled_attempts"] == 4
+    assert store.status()["format_reanswers"] == 1
+
+
+def test_review_schema_failure_uses_the_original_child_as_an_unverifiable_terminal(observed, monkeypatch):
+    store, acquisition, client = prepare(observed)
+    calls = review_schema_transport(monkeypatch)
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "review schema failure"}) as scope:
+        result = clean_round(client, [raw()], acquisition=acquisition)
+        scope.output({"documents": len(result)})
+    assert result == [] and calls == ["extract", "document_review", "document_review"]
+    assert [call["method"] for call in scope.io_calls] == ["tasks.child.join"] * 2
+    disposition = store.document_dispositions()["documents"]["source-1"]
+    assert disposition == {
+        "state": "unverifiable",
+        "reason": "upstream_document_semantics_unverifiable",
+    }
+    review = store.read_result(
+        next(row["unit_id"] for row in store.status()["units"]
+             if row["spec"]["kind"] == "document.document_review"))["value"]["output"]
+    assert review["error_code"] == "WORK_OUTPUT_SCHEMA_MISMATCH"
+    assert store.status()["graph_state"] == "completed"
+    assert store.status()["settled_attempts"] == 3
 
 
 def test_semantic_review_failure_is_an_unverifiable_terminal_without_format_retry(observed, monkeypatch):

@@ -41,13 +41,16 @@
    伪造第二次模型复核；分段文档先为每段保留 extract/review 事实，再由
    metadata synthesis 单元绑定全部失败段，形成唯一原件终态。
 3. 分段合并后的最终语义校验失败同样进入 `unverifiable`。传输、schema
-   format、未知 usage、存储和内部图不变量错误仍是 run-level failure。
+   format 在共享格式重答已使用或额度已占用且 usage 已知时，也进入逐原件
+   终态；失败模型 I/O 保留在 child seal。传输、未知 usage、存储和内部图
+   不变量错误仍是 run-level failure。
 4. `ResearchWorkProof` 逐个重放真实 child；依赖终态必须与上游 result hash、
-   source hash 和稳定错误码一致，不允许以成功的 validated 行冒充模型复核。
+   source hash 和稳定错误码一致；schema failure 的 error_ref 及其原生
+   response observation 必须重放，不允许以成功的 validated 行冒充模型复核。
 
 定向证据（B）：
 
-- research work execution/proof：`70 passed`。
+- evidence plus research work execution/proof：`138 passed`。
 - 语义、执行、独立回执、公开恢复、资源/任务账本与状态组合：`167 passed`。
 
 ## 剩余非代码门禁

@@ -25,7 +25,9 @@ from ..tasks.store import WorkStore
 from . import intelligence_required as legacy
 from .deepseek_required import (MODEL, RELEASE, SEARCH_MODE, sanitize_model_text,
     sanitize_model_value, validate_schema)
-from .json_observation import TOOL_CONTRACT, contract_schemas
+from .json_observation import (TOOL_CONTRACT, contract_schemas,
+                               validate_reference_observation)
+from ..redline.model_diagnostics import validate_model_diagnostic
 from .model_budget import (COUNTER_ID, TokenBudgetError, chat_request_core,
                            frozen_budget_contract, plan_request)
 from .scene_policy import KERNEL_SCENE_MAP, ScenePolicyError, scene_config
@@ -117,12 +119,18 @@ class ResearchWorkProof:
     @_boundary
     def verify_chat(self, stage, call, arguments):
         replay = self.replay
-        if (not isinstance(call, dict) or set(call) != {"index", "method", "input_ref", "output_ref"}
+        if (not isinstance(call, dict)
+                or set(call) not in (
+                    {"index", "method", "input_ref", "output_ref"},
+                    {"index", "method", "input_ref", "error_ref"})
                 or type(call["index"]) is not int or call["index"] < 1
                 or call["method"] != "model.deepseek.chat"):
             _fail(stage)
         request = read_snapshot(replay.run, call["input_ref"], run_id=replay.run.name, stage=stage, role="input")
-        proof = read_snapshot(replay.run, call["output_ref"], run_id=replay.run.name, stage=stage, role="output")
+        failed = "error_ref" in call
+        proof = (None if failed else
+                 read_snapshot(replay.run, call["output_ref"], run_id=replay.run.name,
+                               stage=stage, role="output"))
         call_id = request["call_id"]
         if type(call_id) is not str or re.fullmatch(r"[0-9a-f]{32}", call_id) is None or call_id in replay.call_ids:
             _fail(stage)
@@ -140,6 +148,36 @@ class ResearchWorkProof:
             "schema_sha256": semantic_hash(arguments["schema"]), "release": RELEASE, **metadata}
         expected["rejected_native_contract"] = self.policy["rejected_native_contract"]
         _same(request, expected, stage)
+        if failed:
+            failure = read_snapshot(
+                replay.run, call["error_ref"], run_id=replay.run.name,
+                stage=stage, role="output")
+            if (type(failure) is not dict
+                    or set(failure) != {
+                        "error_type", "message", "outcome_observed",
+                        "diagnostic", "response_observation"}
+                    or failure["error_type"] != "RequiredModelUnavailable"
+                    or failure["message"] != "External call failed"
+                    or failure["outcome_observed"] is not True):
+                _fail(stage)
+            diagnostic = validate_model_diagnostic(failure["diagnostic"])
+            observation = validate_reference_observation(failure["response_observation"])
+            attempts = replay._observed_attempts(stage, request, observation)
+            if (diagnostic.get("code") != "OUTPUT_SCHEMA_MISMATCH"
+                    or diagnostic.get("json_stage") != "assistant_content"
+                    or attempts[-1][2]["diagnostic"] != diagnostic):
+                _fail(stage)
+            from .rejected_native import response_identity
+            for _, native, result in attempts:
+                if result["usage"] is None:
+                    _fail(stage)
+                response_id, _ = response_identity(native)
+                if response_id is not None:
+                    replay.response_ids.append(response_id)
+            replay.call_ids.add(call_id)
+            replay.counts[stage] += 1
+            self.work_call_ids.add(call_id)
+            return {"schema_failure_code": "WORK_OUTPUT_SCHEMA_MISMATCH"}
         fields = {"schema", "response_observation_contract", "call_id", "stage", "provider",
             "requested_model", "response_id", "model", "release", "usage", "scene", "thinking_mode",
             "reasoning_effort", "input_token_estimate", "output_ceiling", "policy_version",
@@ -200,10 +238,15 @@ class ResearchWorkProof:
         if len(output["io_calls"]) != 1:
             _fail(stage)
         model_call = output["io_calls"][0]
-        model_proof = read_snapshot(child_root, model_call["output_ref"], run_id=replay.run.name,
-                                    stage=stage, role="output")
-        refs = [*seal["evidence_refs"], *(row["observation_ref"]
-            for row in model_proof["response_observation"]["attempts"])]
+        refs = list(seal["evidence_refs"])
+        if "output_ref" in model_call:
+            model_proof = read_snapshot(
+                child_root, model_call["output_ref"], run_id=replay.run.name,
+                stage=stage, role="output")
+            refs.extend(row["observation_ref"]
+                        for row in model_proof["response_observation"]["attempts"])
+        elif "error_ref" not in model_call:
+            _fail(stage)
         for ref in refs:
             if verify_ref(replay.run, ref) != verify_ref(child_root, ref):
                 _fail(stage)
@@ -261,6 +304,14 @@ class ResearchWorkProof:
         def expect_semantic_failure(saved, native, source, phase, segment_id):
             if type(saved) is not dict or saved.get("schema") != SEMANTIC_FAILURE_SCHEMA:
                 _fail(stage)
+            if saved.get("error_code") == "WORK_OUTPUT_SCHEMA_MISMATCH":
+                _same(native, {
+                    "schema_failure_code": "WORK_OUTPUT_SCHEMA_MISMATCH"}, stage)
+                expected = semantic_failure_value(
+                    phase, source, segment_id,
+                    "WORK_OUTPUT_SCHEMA_MISMATCH", document_id=raw.doc_id)
+                _same(saved, expected, stage)
+                return "WORK_OUTPUT_SCHEMA_MISMATCH"
             try:
                 if phase == "extract":
                     document = normalize_annotation(
@@ -315,7 +366,11 @@ class ResearchWorkProof:
                 stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "document_review",
                              "unit_id": review_spec.unit_id, "arguments": args})
             if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
-                _fail(stage)
+                expect_semantic_failure(
+                    value, native, raw, "document_review", None)
+                terminal_disposition(result, TERMINAL_REASON)
+                self.document_hashes[raw.doc_id] = text_digest(raw.content)
+                return (None, index) if return_count else None
             review = inspect_document_review(document, native)
             _same(value, {"phase": "document_review", "document_id": raw.doc_id,
                 "segment_id": None, "native": native,
@@ -361,7 +416,11 @@ class ResearchWorkProof:
                                  "phase": "document_review",
                                  "unit_id": review_spec.unit_id, "arguments": args})
                 if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
-                    _fail(stage)
+                    expect_semantic_failure(
+                        value, native, segment, "document_review", segment_id)
+                    _same(result["dispositions"], {}, stage)
+                    semantic_failure = True
+                    continue
                 review = inspect_document_review(local, native)
                 _same(value, {"phase": "document_review", "document_id": raw.doc_id,
                     "segment_id": segment_id, "native": native,

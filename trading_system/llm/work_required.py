@@ -16,6 +16,7 @@ from ..agent_evidence import (atomic_bytes, normalize, read_bytes, read_snapshot
                               verify_ref)
 from ..research_work import (WORK_CLEAN_CONTRACT, RESEARCH_WORK_CONTRACT,
                              active_research_work, validate_research_work_policy)
+from ..redline import LLMUnavailable
 from ..search.models import RawDocument
 from ..tasks.contracts import UnitResult, UnitSpec, WorkUnitError
 from ..tasks.context import UnitExecutionContext, verify_child_seal
@@ -39,6 +40,7 @@ SEMANTIC_FAILURE_SCHEMA = "tiger.document-semantic-failure/v1"
 TERMINAL_RESULT_SCHEMA = "tiger.document-terminal-result/v1"
 SEMANTIC_FAILURE_CODES = frozenset({
     "WORK_ANNOTATION_INVALID",
+    "WORK_OUTPUT_SCHEMA_MISMATCH",
     "WORK_SEGMENT_ANNOTATION_INVALID",
     "WORK_SEGMENT_OFFSET_INVALID",
     "WORK_SPAN_BINDING_INVALID",
@@ -90,6 +92,13 @@ _REVIEW = (
 
 def semantic_failure_code(error):
     """Return a closed per-document code for model semantic failures only."""
+    if isinstance(error, LLMUnavailable):
+        try:
+            diagnostic = error.diagnostic
+        except (AttributeError, TypeError, ValueError):
+            return None
+        return ("WORK_OUTPUT_SCHEMA_MISMATCH"
+                if diagnostic.get("code") == "OUTPUT_SCHEMA_MISMATCH" else None)
     if isinstance(error, WorkUnitError):
         return error.code if error.code in SEMANTIC_FAILURE_CODES else None
     if isinstance(error, ValueError):
@@ -415,6 +424,8 @@ def _join(llm, unit_id):
                                stage=seal["stage"]["name"], role="output")
         refs = list(seal["evidence_refs"])
         for call in output["io_calls"]:
+            if "output_ref" not in call:
+                continue
             proof = read_snapshot(root, call["output_ref"], run_id=seal["run_id"],
                 stage=seal["stage"]["name"], role="output")
             refs.extend(row["observation_ref"] for row in proof["response_observation"]["attempts"])
@@ -434,6 +445,8 @@ def _join(llm, unit_id):
         "unit_id": unit_id, "manifest_sha256": store.manifest_sha256,
         "result_ref": store.unit(unit_id)["result_ref"]}, observe)
     for call in joined["io_calls"]:
+        if "output_ref" not in call:
+            continue
         proof = read_snapshot(llm.execution.store.root, call["output_ref"], run_id=llm.execution.run_id,
                               stage=llm.execution._active.spec.name, role="output")
         if any(row["response_id"] == proof["response_id"] for row in llm.receipts):
@@ -586,51 +599,60 @@ def clean_round(llm, docs, *, acquisition):
                     {"contract": policy["segment_contract"],
                      "phase": "metadata_synthesis", "unit_id": spec.unit_id,
                      "arguments": args}) as stage:
-                native = client.complete_json(**args)
-                validate_schema(native, summary_schema())
-                reviewed = [store.read_result(unit_id)["value"]["output"]
-                            for unit_id in spec.dependencies]
-                if len(reviewed) != len(manifest["segments"]):
-                    raise WorkUnitError("DOCUMENT_SEGMENT_REVIEW_INCOMPLETE",
-                                        "Every source-bound segment requires an independent review")
-                reviews = [row["review"] for row in reviewed]
-                segment_reviews_accepted = all(row.get("review_accepted") is True for row in reviews)
-                annotations = [namespace_segment_annotation(
-                    row["annotation"], number, manifest["segments"][number - 1]["start"])
-                    for number, row in enumerate(reviewed, 1)]
                 try:
-                    merged = merge_segment_annotations(
-                        raw, annotations, summary_zh=native["summary_zh"],
-                        limits=merged_annotation_limits(len(manifest["segments"])),
-                        target_ids=TARGET_IDS)
-                    validate_annotation(merged, llm.execution.admitted_at,
-                                        **validation_context)
-                except ValueError as error:
+                    native = client.complete_json(**args)
+                except LLMUnavailable as error:
                     code = semantic_failure_code(error)
                     if code is None:
                         raise
                     failure = semantic_failure_value(
                         "metadata_synthesis", raw, None, code)
                     stage.output(failure)
-                    value = {"child_seal_ref": client.execution.seal(),
-                             "output": failure}
-                    return UnitResult(value, {raw.doc_id: {
-                        "state": "unverifiable", "reason": TERMINAL_REASON}})
-                global_review = {"schema": "tiger.document-global-review/v1",
-                    "contract": policy["segment_contract"], "document_id": raw.doc_id,
-                    "source_sha256": text_digest(raw.content),
-                    "manifest_sha256": digest(manifest),
-                    "segment_review_sha256": [row["review_sha256"] for row in reviews],
-                    "summary_sha256": digest(native["summary_zh"]),
-                    "complete": segment_reviews_accepted,
-                    "checks": {key: True for key in (
-                        "whole_original_coverage", "metadata_synthesis")}
-                              | {"segment_reviews": segment_reviews_accepted}}
-                output = {"phase": "metadata_synthesis", "document_id": raw.doc_id,
-                          "native": native, "summary_zh": native["summary_zh"],
-                          "global_review": global_review}
-                stage.output(output)
+                else:
+                    validate_schema(native, summary_schema())
+                    reviewed = [store.read_result(unit_id)["value"]["output"]
+                                for unit_id in spec.dependencies]
+                    if len(reviewed) != len(manifest["segments"]):
+                        raise WorkUnitError("DOCUMENT_SEGMENT_REVIEW_INCOMPLETE",
+                                            "Every source-bound segment requires an independent review")
+                    reviews = [row["review"] for row in reviewed]
+                    segment_reviews_accepted = all(row.get("review_accepted") is True for row in reviews)
+                    annotations = [namespace_segment_annotation(
+                        row["annotation"], number, manifest["segments"][number - 1]["start"])
+                        for number, row in enumerate(reviewed, 1)]
+                    try:
+                        merged = merge_segment_annotations(
+                            raw, annotations, summary_zh=native["summary_zh"],
+                            limits=merged_annotation_limits(len(manifest["segments"])),
+                            target_ids=TARGET_IDS)
+                        validate_annotation(merged, llm.execution.admitted_at,
+                                            **validation_context)
+                    except ValueError as error:
+                        code = semantic_failure_code(error)
+                        if code is None:
+                            raise
+                        output = semantic_failure_value(
+                            "metadata_synthesis", raw, None, code)
+                    else:
+                        global_review = {"schema": "tiger.document-global-review/v1",
+                            "contract": policy["segment_contract"], "document_id": raw.doc_id,
+                            "source_sha256": text_digest(raw.content),
+                            "manifest_sha256": digest(manifest),
+                            "segment_review_sha256": [row["review_sha256"] for row in reviews],
+                            "summary_sha256": digest(native["summary_zh"]),
+                            "complete": segment_reviews_accepted,
+                            "checks": {key: True for key in (
+                                "whole_original_coverage", "metadata_synthesis")}
+                                      | {"segment_reviews": segment_reviews_accepted}}
+                        output = {"phase": "metadata_synthesis",
+                                  "document_id": raw.doc_id, "native": native,
+                                  "summary_zh": native["summary_zh"],
+                                  "global_review": global_review}
+                    stage.output(output)
             value = {"child_seal_ref": client.execution.seal(), "output": output}
+            if output.get("schema") == SEMANTIC_FAILURE_SCHEMA:
+                return UnitResult(value, {raw.doc_id: {
+                    "state": "unverifiable", "reason": TERMINAL_REASON}})
             source_complete = raw.meta.get("completeness") == "complete"
             disposition = ("eligible" if segment_reviews_accepted and source_complete
                            else "unverifiable")
@@ -650,34 +672,51 @@ def clean_round(llm, docs, *, acquisition):
         client = unit.client
         with client.execution.step("clean.llm_semantic", {"contract": WORK_CLEAN_CONTRACT,
                 "phase": phase, "unit_id": spec.unit_id, "arguments": args}) as stage:
-            native = client.complete_json(**args)
             segment_id = entry["segment"]["id"] if entry["segment"] else None
             try:
-                if phase == "extract":
-                    document = normalize_annotation(source, native["annotation"], TARGET_IDS)
-                else:
-                    document = normalize_annotation(
-                        source, args["public_payload"]["annotation"], TARGET_IDS)
-                validation = validate_annotation(
-                    document, llm.execution.admitted_at, **validation_context)
-            except ValueError as error:
+                native = client.complete_json(**args)
+            except LLMUnavailable as error:
                 code = semantic_failure_code(error)
                 if code is None:
                     raise
                 output = semantic_failure_value(
                     phase, source, segment_id, code, document_id=raw.doc_id)
             else:
-                if phase == "extract":
-                    output = {"phase": phase, "document_id": raw.doc_id,
-                              "segment_id": segment_id, "native": native,
-                              "annotation": annotation_payload(document),
-                              "validation": validation}
+                try:
+                    if phase == "extract":
+                        document = normalize_annotation(source, native["annotation"], TARGET_IDS)
+                    else:
+                        document = normalize_annotation(
+                            source, args["public_payload"]["annotation"], TARGET_IDS)
+                    validation = validate_annotation(
+                        document, llm.execution.admitted_at, **validation_context)
+                except ValueError as error:
+                    code = semantic_failure_code(error)
+                    if code is None:
+                        raise
+                    output = semantic_failure_value(
+                        phase, source, segment_id, code, document_id=raw.doc_id)
                 else:
-                    review = inspect_document_review(document, native)
-                    output = {"phase": phase, "document_id": raw.doc_id,
-                              "segment_id": segment_id, "native": native,
-                              "annotation": annotation_payload(document),
-                              "validation": validation, "review": review}
+                    if phase == "extract":
+                        output = {"phase": phase, "document_id": raw.doc_id,
+                                  "segment_id": segment_id, "native": native,
+                                  "annotation": annotation_payload(document),
+                                  "validation": validation}
+                    else:
+                        try:
+                            review = inspect_document_review(document, native)
+                        except LLMUnavailable as error:
+                            code = semantic_failure_code(error)
+                            if code is None:
+                                raise
+                            output = semantic_failure_value(
+                                phase, source, segment_id, code,
+                                document_id=raw.doc_id)
+                        else:
+                            output = {"phase": phase, "document_id": raw.doc_id,
+                                      "segment_id": segment_id, "native": native,
+                                      "annotation": annotation_payload(document),
+                                      "validation": validation, "review": review}
             stage.output(output)
         value = {"child_seal_ref": client.execution.seal(), "output": output}
         if output.get("schema") == SEMANTIC_FAILURE_SCHEMA:
