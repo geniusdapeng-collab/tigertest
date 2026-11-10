@@ -1692,7 +1692,11 @@ def verify_partial_intelligence_model(run, admission, *, scene_policy_path=None,
         return summary
     except EvidenceInvalid:
         raise
-    except (KeyError, ValueError, TypeError, IndexError, AttributeError, OSError, IntelligenceError,
+    except IntelligenceError as exc:
+        raise EvidenceInvalid("INTELLIGENCE_BUNDLE_REPLAY_FAILED",
+                              "Frozen intelligence bytes failed independent replay",
+                              stage=exc.stage) from exc
+    except (KeyError, ValueError, TypeError, IndexError, AttributeError, OSError,
             LLMUnavailable, RequiredModelFailed, TokenBudgetError, ExecutionContractError, ScenePolicyError, OverflowError):
         _fail()
 

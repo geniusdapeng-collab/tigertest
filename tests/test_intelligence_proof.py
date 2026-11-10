@@ -463,18 +463,18 @@ def test_failed_discovery_calls_preserve_billing_certainty_and_never_become_clea
     monkeypatch.setattr(DeepSeekRequiredClient, "_post_json", post)
     monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda seconds: None)
     if http_status is None:
+        output = main._daily(args, "yahoo", execution=execution)
+        assert output is not None
         from trading_system.intelligence.archive import Archive
-        from trading_system.intelligence.contracts import IntelligenceError
-        with pytest.raises(IntelligenceError) as error:
-            main._daily(args, "yahoo", execution=execution)
-        assert error.value.code == "RECONCILIATION_REQUIRED"
         archive = Archive(root / "intelligence", readonly=True)
         with archive._session() as connection:
             job_id = connection.execute("SELECT job_id FROM jobs").fetchone()[0]
         attempts = archive.attempts(job_id)
         assert len(attempts) == 1 and attempts[0]["status"] == "unknown"
         assert attempts[0]["result"]["usage"]["requires_reconciliation"] is True
-        assert not (root / "result.json").exists()
+        status = archive.status(job_id)
+        assert status["state"] == "partial"
+        assert any(gap["status"] == "source_unresolved" for gap in status["gaps"])
         return
     output = main._daily(args, "yahoo", execution=execution)
     result = asdict(output.result)

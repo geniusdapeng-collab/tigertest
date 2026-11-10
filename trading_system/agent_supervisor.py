@@ -42,6 +42,8 @@ from trading_system.redline.execution import (
 LOG_LIMIT_BYTES = 8 * 1024 * 1024
 CONTROL_LIMIT_BYTES = 65536
 MAX_LOG_LINE_BYTES = 16384
+CLOSEOUT_RESERVE_SECONDS = 120.0
+GUARDIAN_DRAIN_GRACE_SECONDS = 0.15
 
 
 class SupervisorInterrupted(RuntimeError):
@@ -272,6 +274,7 @@ def guardian(run: Path, *, parent_fd: int, control_fd: int, deadline: float,
             for fd, label in streams.items():
                 os.set_blocking(fd, False)
                 selector.register(fd, selectors.EVENT_READ, label)
+            child_exit_at = None
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -294,10 +297,34 @@ def guardian(run: Path, *, parent_fd: int, control_fd: int, deadline: float,
                         streams.pop(key.fd, None)
                 # Child polling is safe here: guardian, not engine, remains the
                 # un-reaped process-group leader under supervisor ownership.
+                if child.poll() is not None:
+                    if child_exit_at is None:
+                        child_exit_at = time.monotonic()
+                    # A third-party descendant may inherit stdout/stderr and
+                    # keep the pipes open after the direct engine exits. Drain
+                    # only available bytes during a short grace, then stop
+                    # waiting and clean the owned group before reaping.
+                    if time.monotonic() - child_exit_at >= GUARDIAN_DRAIN_GRACE_SECONDS:
+                        for fd, label in list(streams.items()):
+                            try:
+                                while True:
+                                    chunk = os.read(fd, 8192)
+                                    if not chunk:
+                                        break
+                                    logger.consume(label, chunk)
+                            except (BlockingIOError, OSError):
+                                pass
+                            try:
+                                selector.unregister(fd)
+                            except KeyError:
+                                pass
+                            streams.pop(fd, None)
                 if not streams and child.poll() is not None:
                     code = child.wait()
                     log_summary = logger.finish()
                     logger = None
+                    log_summary["drain_grace_seconds"] = GUARDIAN_DRAIN_GRACE_SECONDS
+                    log_summary["stream_eof_not_required_after_engine_exit"] = True
                     atomic_json(run, "log-summary.json", log_summary, exclusive=True)
                     _send_control(control_fd, {"kind": "engine_finished", "exit_code": code})
                     normal = True
@@ -492,6 +519,8 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
         # runtime input; it never accepts a saved policy flag as authority.
         business_remaining = min(remaining, _policy.get("business_deadline_seconds", DEADLINE_SECONDS))
         deadline = time.monotonic() + business_remaining
+        closeout_reserve = min(CLOSEOUT_RESERVE_SECONDS, max(10.0, business_remaining / 5))
+        analysis_deadline = max(time.monotonic() + 0.001, deadline - closeout_reserve)
         bootstrap_guard.__exit__(None, None, None)
         business_guard = PreparationDeadline(business_remaining, stage="supervisor.business", deadline=deadline)
         business_guard.__enter__()
@@ -524,7 +553,8 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
         signal.signal(signal.SIGTERM, interrupted)
         signal.signal(signal.SIGINT, interrupted)
         if resume_mode != "closeout":
-            process_receipt = supervise_group(run, lock_fds=(account_fd, run_fd), deadline=deadline)
+            process_receipt = supervise_group(run, lock_fds=(account_fd, run_fd),
+                                              deadline=analysis_deadline)
             atomic_json(run, "process-exit.json", process_receipt, exclusive=True)
         elif _policy.get("research_work") is not None:
             read_json(run, "process-exit.json")
@@ -539,17 +569,36 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
         # If publication succeeded before a later status write failed, readers
         # prove commitment from the pointer/receipt chain, regardless of this.
         error = error_record(exc, run_id=run_id)
+        engine_succeeded = False
         engine_path = run / "engine-result.json"
         if not engine_path.exists():
             error["details_ref"] = None
         if engine_path.exists():
             try:
                 engine = read_json(run, "engine-result.json")
+                engine_succeeded = engine.get("success") is True
                 if engine.get("success") is False and isinstance(engine.get("error"), dict):
                     error = engine["error"]
             except (OSError, ValueError):
                 # Keep the original safe error if the partial engine evidence
                 # itself is unreadable; never promote it to success.
+                error["details_ref"] = None
+        if engine_succeeded and not (run / "publication-durability.json").exists():
+            closeout = {
+                "schema": "tiger.closeout-error.v1",
+                "run_id": run_id,
+                "phase": "publication",
+                "code": error.get("code", "RUNNER_FAILED"),
+                "stage": error.get("stage"),
+                "message": error.get("message", "Closeout failed"),
+                "engine_result_sha256": digest(read_bytes(run, "engine-result.json")),
+                "engine_result_success": True,
+                "retryable": False,
+            }
+            try:
+                atomic_json(run, "closeout-error.json", closeout, exclusive=True)
+                error["details_ref"] = "closeout-error.json"
+            except (OSError, ValueError):
                 error["details_ref"] = None
         try:
             atomic_json(run, "status.json", {

@@ -243,9 +243,9 @@ def test_observation_crash_drains_peers_and_retry_never_repeats_unknown_dispatch
     assert sorted(row["status"] for row in status["attempts"]) == ["empty", "unknown"]
     assert status["source_runtime"]["active_source_operations"] == 0
     assert status["usage"]["reserved_bytes"] > 0
-    with pytest.raises(IntelligenceError) as denied:
-        svc.collect(job)
-    assert denied.value.code == "RECONCILIATION_REQUIRED" and len(calls) == 2
+    replay = svc.collect(job)
+    assert replay["state"] == "partial" and len(calls) == 2
+    assert any(row["status"] == "source_unresolved" for row in replay["gaps"])
 
 
 def test_receipt_cannot_release_more_quota_than_reserved(tmp_path):

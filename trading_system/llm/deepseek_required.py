@@ -487,6 +487,7 @@ class DeepSeekRequiredClient:
                     or not callable(getattr(execution, "claim_model_format_retry", None))):
                 _fail("TRUSTED_CONFIGURATION_MISMATCH")
         self._last_chat_transport = None
+        self._chat_route_retries = 0
 
     @contextmanager
     def native_io_budget(self, *, max_bytes: int, deadline: float):
@@ -704,6 +705,31 @@ class DeepSeekRequiredClient:
                 except Exception:
                     _fail("RESPONSE_CLOSE_FAILURE")
 
+    def _post_chat_bounded(self, request: dict):
+        """Retry one documented/connection/presence failure, with no loop.
+
+        The durable dispatch still precedes this call. A read timeout can
+        duplicate provider work, so it is capped at one explicit retry and its
+        original failure remains in the execution evidence.
+        """
+        try:
+            return self._post_json("/chat/completions", request)
+        except RequiredModelUnavailable as error:
+            diagnostic = error.diagnostic
+            status = diagnostic.get("http_status")
+            transport = diagnostic.get("transport") or {}
+            reason = transport.get("transport_error") if isinstance(transport, dict) else None
+            retryable = (
+                status == 503
+                or diagnostic.get("code") in {"NETWORK_TIMEOUT", "TRANSPORT_FAILURE"}
+                or reason in {"connect_timeout", "transport_failure", "timeout", "read_timeout"}
+            )
+            if not retryable or self._chat_route_retries >= 1:
+                raise
+            self._chat_route_retries += 1
+            time.sleep(1.0)
+            return self._post_json("/chat/completions", request)
+
     def _native_transport_usage(self):
         limits = self._native_io_limits
         if limits is None or not limits["meter"]["transport_observed"]:
@@ -825,7 +851,7 @@ class DeepSeekRequiredClient:
                     registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
             except TokenBudgetError as error:
                 _fail(error.code)
-            response, body_hash = self._post_json("/chat/completions", request)
+            response, body_hash = self._post_chat_bounded(request)
             if response.get("model") != MODEL:
                 _fail("RESPONSE_MODEL_MISMATCH")
             if response.get("object") != "chat.completion":
@@ -1033,7 +1059,7 @@ class DeepSeekRequiredClient:
                                 registry_version=inputs["registry_version"], tokenizer_sha256=inputs["tokenizer_sha256"])
                         except TokenBudgetError as error:
                             _fail(error.code)
-                        native, body_hash = self._post_json("/chat/completions", request)
+                        native, body_hash = self._post_chat_bounded(request)
                         if native.get("model") != MODEL:
                             _fail("RESPONSE_MODEL_MISMATCH")
                         if native.get("object") != "chat.completion":

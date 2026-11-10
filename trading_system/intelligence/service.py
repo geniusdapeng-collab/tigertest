@@ -222,7 +222,15 @@ class IntelligenceService:
         raw, redacted = self._safe_raw(result.raw_bytes)
         metadata = safe_value(result.metadata, secrets)
         self._guard_decoded_body(source_id, operation, parameters, result, raw, metadata)
-        if redacted and metadata.get("extractor") in {"tiger-main-text/v1", "tiger-scrapling/v1"}:
+        # PII/credential redaction changes archived bytes. Every textual/HTML
+        # result must therefore be re-normalized from those final bytes;
+        # otherwise the recorded parser hash describes bytes that can no
+        # longer be replayed. PDF and opaque binary payloads cannot be safely
+        # rewritten and remain partial terminal observations.
+        textual = (result.text_kind in {"html_main", "html_text", "plain_text", "data"}
+                   and result.media_type != "application/pdf"
+                   and not result.raw_bytes.startswith(b"%PDF-"))
+        if redacted and (textual or metadata.get("parse_failure") is not None):
             from .extract import extract_response
             from .parse_limits import redact_partial
             from .transport import HttpResponse
@@ -316,8 +324,9 @@ class IntelligenceService:
                 details={**details, "attempt_id": previous_attempt["attempt_id"]})
         if spec.kind == "search" or spec.credential_env:
             unresolved = [row for row in all_attempts
-                if row["status"] in {"inflight", "unknown"}
-                or row.get("result", {}).get("usage", {}).get("requires_reconciliation")]
+                if row["source_id"] == source_id
+                and (row["status"] in {"inflight", "unknown"}
+                     or row.get("result", {}).get("usage", {}).get("requires_reconciliation"))]
             if unresolved:
                 raise IntelligenceError("RECONCILIATION_REQUIRED", "Original paid dispatch or usage must be reconciled before another request",
                     details={"attempt_id": unresolved[0]["attempt_id"]})
@@ -597,10 +606,10 @@ class IntelligenceService:
 
     def _mark(self, job_id, cells, *, status, reason, attempt_refs=(), document_ids=()):
         with self._source_guard if self.source_workers > 1 else nullcontext():
-            latest = {row["cell_id"]: row for row in self.status(job_id)["gaps"]} if (
-                self.source_workers > 1 and reason == "SEMANTIC_ASSESSMENT_REQUIRED") else {}
+            latest = {row["cell_id"]: row for row in self.status(job_id)["gaps"]}
             for cell_id in cells:
-                if latest.get(cell_id, {}).get("status") == "unverifiable":
+                if latest.get(cell_id, {}).get("status") in {
+                        "unverifiable", "source_unresolved", "model_unresolved"}:
                     continue
                 self.archive.gap(job_id, {"cell_id": cell_id, "status": status, "reason": reason,
                     "attempt_refs": list(attempt_refs), "document_ids": list(document_ids),
@@ -676,9 +685,13 @@ class IntelligenceService:
                         attempts.append(error.details["attempt_id"])
                     retryable = error.code in {"RATE_LIMITED", "SOURCE_UNAVAILABLE", "SOURCE_TIMEOUT"}
                     if retryable and error.delivery == "unknown" and (spec.kind == "search" or spec.credential_env):
-                        self._mark(job_id, cell_ids, status="unverifiable", reason="RECONCILIATION_REQUIRED", attempt_refs=attempts)
-                        raise IntelligenceError("RECONCILIATION_REQUIRED", "Paid source response is unknown; retain original attempt",
-                            details={"attempt_id": error.details.get("attempt_id")}) from None
+                        # A paid dispatch with unknown delivery is a terminal
+                        # fact for the affected cell, not an exception that
+                        # aborts unrelated source work. The attempt and its
+                        # reservation stay in the append-only ledger.
+                        self._mark(job_id, cell_ids, status="source_unresolved",
+                            reason="RECONCILIATION_REQUIRED", attempt_refs=attempts)
+                        return collected
                     delay = error.retry_after if error.retry_after is not None else float(2**ordinal)
                     if not retryable or ordinal >= spec.max_retries or time.monotonic() + delay >= self._deadline(job_id):
                         self._mark(job_id, cell_ids, status="unverifiable", reason=error.code, attempt_refs=attempts)
@@ -777,9 +790,12 @@ class IntelligenceService:
             self.archive.append(job_id, "query_completed", {"source_id": entry["source_id"],
                 "plan_request_hash": request_hash})
         except IntelligenceError as error:
-            if error.code not in {"BUDGET_EXHAUSTED", "CONTRACT_INVALID", "SOURCE_AUTH_REQUIRED", "SOURCE_IDENTITY_REQUIRED"}:
+            if error.code not in {"BUDGET_EXHAUSTED", "CONTRACT_INVALID", "SOURCE_AUTH_REQUIRED",
+                                  "SOURCE_IDENTITY_REQUIRED", "RECONCILIATION_REQUIRED"}:
                 raise
-            self._mark(job_id, entry["cell_ids"], status="unverifiable", reason=error.code)
+            self._mark(job_id, entry["cell_ids"],
+                       status="source_unresolved" if error.code == "RECONCILIATION_REQUIRED" else "unverifiable",
+                       reason=error.code, attempt_refs=[error.details.get("attempt_id")] if error.details.get("attempt_id") else ())
             if error.code == "BUDGET_EXHAUSTED":
                 return False
         return True
@@ -1047,6 +1063,8 @@ class IntelligenceService:
             if set(refs) - document_ids - raw_ids:
                 raise IntelligenceError("EVIDENCE_NOT_FOUND", "Claim cites an unknown document")
         normalized = []
+        terminal = {row["cell_id"]: row for row in self.status(job_id)["gaps"]
+                    if row.get("status") in {"source_unresolved", "model_unresolved"}}
         for row in coverage_rows:
             if not isinstance(row, dict):
                 raise IntelligenceError("CONTRACT_INVALID", "Invalid coverage row")
@@ -1070,6 +1088,9 @@ class IntelligenceService:
             if status == "present" and not refs:
                 raise IntelligenceError("CONTRACT_INVALID", "Present coverage requires source evidence")
             for cell in matched:
+                if cell["cell_id"] in terminal:
+                    normalized.append(dict(terminal[cell["cell_id"]]))
+                    continue
                 value = {**row, "cell_id": cell["cell_id"], "target_id": cell["target_id"],
                     "status": status, "document_ids": refs, "attempt_refs": attempt_refs}
                 normalized.append(value)
@@ -1177,6 +1198,14 @@ class IntelligenceService:
             try:
                 self._query(job_id, entry["source_id"], _parameters(entry["request"]), entry["cell_ids"])
             except IntelligenceError as error:
+                if error.code == "RECONCILIATION_REQUIRED":
+                    self._mark(job_id, entry["cell_ids"], status="source_unresolved",
+                        reason="RECONCILIATION_REQUIRED",
+                        attempt_refs=[error.details["attempt_id"]] if error.details.get("attempt_id") else ())
+                    state = "partial"
+                    self.archive.append(job_id, "research_query_completed",
+                        {"round": round_number, "query_sha256": query_sha, "state": "source_unresolved"})
+                    continue
                 if error.code != "BUDGET_EXHAUSTED":
                     raise
                 self._mark(job_id, entry["cell_ids"], status="unverifiable", reason=error.code)
