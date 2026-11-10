@@ -91,9 +91,22 @@ def validate_request(operation: str, request: object) -> dict:
         "resume": {"run_id"},
         "supplement": {"schema_version", "parent_run_id", "symbols", "idempotency_key"},
         "cancel": {"run_id"},
-        "status": {"run_id"}, "receipt": {"run_id"}, "verify": {"run_id"},
+        "status": {"run_id", "detail", "cursor", "limit"},
+        "receipt": {"run_id"}, "verify": {"run_id"},
     }[operation]
-    if set(request) != fields:
+    if operation == "status":
+        required = {"run_id"}
+        if not required <= set(request) or set(request) - fields:
+            raise EvidenceInvalid("INVALID_REQUEST", "Request fields differ from the fixed contract")
+        if "detail" in request and request["detail"] not in {"summary", "cards", "sources"}:
+            raise EvidenceInvalid("INVALID_REQUEST", "Invalid status detail")
+        if "cursor" in request and (not isinstance(request["cursor"], str)
+                                    or len(request["cursor"]) > 256):
+            raise EvidenceInvalid("INVALID_REQUEST", "Invalid status cursor")
+        if "limit" in request and (type(request["limit"]) is not int
+                                   or not 1 <= request["limit"] <= 200):
+            raise EvidenceInvalid("INVALID_REQUEST", "Invalid status limit")
+    elif set(request) != fields:
         raise EvidenceInvalid("INVALID_REQUEST", "Request fields differ from the fixed contract")
     if operation in {"describe", "run"} and (not isinstance(request["profile"], str)
                                             or request["profile"] not in SUPPORTED_PROFILES):
@@ -523,12 +536,19 @@ def submit_cancel(state: Path, request: dict) -> dict:
         store = WorkStore.create(run / "tasks", work_manifest(admission))
         status = store.cancel(reason="operator_cancel_request")
         state_label = "cancelling" if observation["active"] else "cancelled"
+        pending = [
+            {"unit_id": row["unit_id"], "state": row["state"], "epoch": row["epoch"]}
+            for row in status["units"] if row["state"] not in {"validated", "cancelled"}
+        ]
         return envelope("cancel", run_id=run_id, status=state_label,
                         data={"cancel_requested": True,
                               "scheduling": {
                                   "graph_state": status["graph_state"],
                                   "unknown_attempts": status["unknown_attempts"],
                                   "cancelling_observation_stops_scheduler": False,
+                                  "in_flight": pending,
+                                  "held_reservations": status["held_reservations"],
+                                  "force_cancel_process": False,
                               }})
     except EvidenceInvalid as exc:
         return failure("cancel", exc.code, str(exc), run_id=run_id,
@@ -550,70 +570,72 @@ def submit_resume(state: Path, request: dict, *,
         if threading.current_thread() is not threading.main_thread():
             raise EvidenceInvalid("RUNNER_FAILED", "Same-run resume requires the main supervisor thread")
         checked_root(state)
-        with PreparationDeadline(_preparation_seconds) as guard:
-            with admission_lock(state, deadline=guard.deadline):
-                run = state / "runs" / run_id
-                observed = observe_run(state, run_id)
-                current = pointer_read(state)
-                if current is not None and current["run_id"] == run_id:
-                    verify_run(state, run_id, current_source=None)
-                    return envelope("resume", run_id=run_id, status="completed",
-                                    data={"idempotent_replay": True, "observed_status": "completed"})
-                if observed["active"]:
-                    return envelope("resume", run_id=run_id,
-                                    status="running" if observed["status"] == "accepted" else observed["status"],
-                                    data={"idempotent_replay": True, "observed_status": observed["status"]})
-                try:
-                    account_fd = _lock_fd(state, "account.lock", create=False, nonblocking=True)
-                except BlockingIOError as exc:
-                    raise EvidenceInvalid(
-                        "ACCOUNT_BUSY", "Another paper run owns the account lock") from exc
-                try:
-                    run_fd = _lock_fd(run, "run.lock", create=False, nonblocking=True)
-                except BlockingIOError:
-                    return envelope("resume", run_id=run_id, status="running",
-                                    data={"idempotent_replay": True, "observed_status": observed["status"]})
-                admission, policy, _ = validate_admission(run, validate_working_calendar=False)
-                from .research_resume import prepare_resume, supported
-                if not supported(policy):
-                    raise EvidenceInvalid("RESUME_UNSUPPORTED", "Frozen research contract is not resumable")
-                current = pointer_read(state)
-                if current != admission["parent"]:
-                    raise EvidenceInvalid(
-                        "ACCOUNT_VERSION_CONFLICT", "Paper account advanced after this research admission")
+        # The 45-second preparation budget covers lock acquisition and
+        # identity admission only. Large-run recovery gets its own phase under
+        # the original business deadline and never sends before proof exists.
+        with admission_lock(state, deadline=time.monotonic() + _preparation_seconds):
+            run = state / "runs" / run_id
+            observed = observe_run(state, run_id)
+            current = pointer_read(state)
+            if current is not None and current["run_id"] == run_id:
+                verify_run(state, run_id, current_source=None)
+                return envelope("resume", run_id=run_id, status="completed",
+                                data={"idempotent_replay": True, "observed_status": "completed"})
+            if observed["active"]:
+                return envelope("resume", run_id=run_id,
+                                status="running" if observed["status"] == "accepted" else observed["status"],
+                                data={"idempotent_replay": True, "observed_status": observed["status"]})
+            try:
+                account_fd = _lock_fd(state, "account.lock", create=False, nonblocking=True)
+            except BlockingIOError as exc:
+                raise EvidenceInvalid(
+                    "ACCOUNT_BUSY", "Another paper run owns the account lock") from exc
+            try:
+                run_fd = _lock_fd(run, "run.lock", create=False, nonblocking=True)
+            except BlockingIOError:
+                return envelope("resume", run_id=run_id, status="running",
+                                data={"idempotent_replay": True, "observed_status": observed["status"]})
+            admission, policy, _ = validate_admission(run, validate_working_calendar=False)
+            from .research_resume import prepare_resume, supported
+            if not supported(policy):
+                raise EvidenceInvalid("RESUME_UNSUPPORTED", "Frozen research contract is not resumable")
+            current = pointer_read(state)
+            if current != admission["parent"]:
+                raise EvidenceInvalid(
+                    "ACCOUNT_VERSION_CONFLICT", "Paper account advanced after this research admission")
 
-                def stopped_verifier():
-                    return _lock_identity_is_owned((
-                        (account_fd, state / "account.lock"),
-                        (run_fd, run / "run.lock"),
-                    ))
+            def stopped_verifier():
+                return _lock_identity_is_owned((
+                    (account_fd, state / "account.lock"),
+                    (run_fd, run / "run.lock"),
+                ))
 
-                prepared = prepare_resume(run, admission, policy, stopped_verifier=stopped_verifier)
-                ack_read, ack_write = os.pipe()
-                entry = run / "source" / "trading_system" / "agent_supervisor.py"
-                role = "closeout-supervisor" if prepared["closeout_only"] else "resume-supervisor"
-                worker = subprocess.Popen(
-                    [sys.executable, "-I", "-B", str(entry), role, str(state), run_id,
-                     str(account_fd), str(run_fd), str(ack_write)],
-                    cwd=run / "work",
-                    env=run_environment(run / "work",
-                        model_required=policy["execution"]["model_mode"] == "enabled"),
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
-                    pass_fds=(account_fd, run_fd, ack_write),
-                )
-                os.close(ack_write)
-                ack_write = -1
-                os.close(account_fd)
-                account_fd = -1
-                os.close(run_fd)
-                run_fd = -1
-                _acknowledgement(ack_read, run_id)
-                return envelope("resume", run_id=run_id, status="accepted",
-                                data={"idempotent_replay": False,
-                                      "observed_status": "running",
-                                      "parent_attempt": prepared["attempt"]["number"],
-                                      "closeout_only": prepared["closeout_only"]})
+            prepared = prepare_resume(run, admission, policy, stopped_verifier=stopped_verifier)
+            ack_read, ack_write = os.pipe()
+            entry = run / "source" / "trading_system" / "agent_supervisor.py"
+            role = "closeout-supervisor" if prepared["closeout_only"] else "resume-supervisor"
+            worker = subprocess.Popen(
+                [sys.executable, "-I", "-B", str(entry), role, str(state), run_id,
+                 str(account_fd), str(run_fd), str(ack_write)],
+                cwd=run / "work",
+                env=run_environment(run / "work",
+                    model_required=policy["execution"]["model_mode"] == "enabled"),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+                pass_fds=(account_fd, run_fd, ack_write),
+            )
+            os.close(ack_write)
+            ack_write = -1
+            os.close(account_fd)
+            account_fd = -1
+            os.close(run_fd)
+            run_fd = -1
+            _acknowledgement(ack_read, run_id)
+            return envelope("resume", run_id=run_id, status="accepted",
+                            data={"idempotent_replay": False,
+                                  "observed_status": "running",
+                                  "parent_attempt": prepared["attempt"]["number"],
+                                  "closeout_only": prepared["closeout_only"]})
     except (EvidenceInvalid, PreparationExpired, OSError) as exc:
         code = exc.code if isinstance(exc, (EvidenceInvalid, PreparationExpired)) else "ARTIFACT_WRITE_FAILED"
         message = str(exc) if isinstance(exc, (EvidenceInvalid, PreparationExpired)) else (
@@ -641,6 +663,14 @@ def doctor(state: Path, mode: str) -> dict:
         "dependencies": packages, "state_root_exists": state.exists(),
         "platform": sys.platform, "state_writes": False, "network_requests": False,
         "business_workers_started": False,
+        "model_credentials": {
+            "provider": "deepseek",
+            "backend": os.environ.get("LLM_BACKEND"),
+            "base_url": os.environ.get("LLM_BASE_URL"),
+            "model": os.environ.get("LLM_MODEL"),
+            "api_key_present": bool(os.environ.get("LLM_API_KEY")),
+            "required_for_intelligence_profile": True,
+        },
         "business_runtime": {"profile": INTELLIGENCE_PROFILE,
             "startup_environment": RUNTIME_POLICY_ENV, "configured": runtime_input is not None,
             "business_deadline_seconds": runtime_input["business_deadline_seconds"] if runtime_input else DEADLINE_SECONDS,
@@ -658,7 +688,9 @@ def doctor(state: Path, mode: str) -> dict:
 
 def _research_status_projection(state: Path, run_id: str, observed: str, *,
                                 verification: dict | None = None,
-                                raw: dict | None = None) -> dict:
+                                raw: dict | None = None,
+                                detail: str = "summary", cursor: str | None = None,
+                                limit: int = 100) -> dict:
     from .research_status import project_research_status
     run = state / "runs" / run_id
     work_status = None
@@ -669,9 +701,8 @@ def _research_status_projection(state: Path, run_id: str, observed: str, *,
             admission = read_json(run, "admission.json")
             from .research_work import work_manifest
             from .tasks.store import WorkStore
-            store = WorkStore.open(tasks, work_manifest(admission))
+            store = WorkStore.open(tasks, work_manifest(admission), verify_checks=False)
             work_status = store.status()
-            dispositions = store.document_dispositions()
         except (OSError, EvidenceInvalid, KeyError, TypeError, ValueError):
             work_status = {
                 "graph_state": "unknown", "units": [], "unknown_attempts": 0,
@@ -681,6 +712,7 @@ def _research_status_projection(state: Path, run_id: str, observed: str, *,
         raw or {}, work_status=work_status, document_dispositions=dispositions,
         verification=verification, observed_state=observed,
         report_ready=observed in {"completed", "completed_degraded"}, run_id=run_id,
+        detail=detail, cursor=cursor, limit=limit,
     )
 
 
@@ -744,7 +776,9 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
                         "message": "Observed completion is not independently verifiable.",
                     }
             data["research_status"] = _research_status_projection(
-                state, run_id, observed, verification=verification, raw=raw)
+                state, run_id, observed, verification=verification, raw=raw,
+                detail=request.get("detail", "summary"),
+                cursor=request.get("cursor"), limit=request.get("limit", 100))
             return envelope(operation, run_id=run_id, status=observed, data=data)
         if observed not in {"completed", "completed_degraded"}:
             return failure(operation, "RUN_INCOMPLETE", "Run has no verified published completion.",

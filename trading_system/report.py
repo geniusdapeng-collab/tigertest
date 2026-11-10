@@ -411,7 +411,8 @@ def research_audit_tables(raw: dict) -> list[tuple[str, tuple, list]]:
     intelligence = raw.get("intelligence")
     if intelligence:
         states = {"present": "已取得合格事实", "missing": "尚缺资料", "conflicting": "事实冲突待查",
-                  "unverifiable": "本轮无法核验", "not_connected": "未连接", "pending": "待核验"}
+                      "unverifiable": "本轮无法核验", "source_unresolved": "来源发送未决",
+                      "model_unresolved": "模型回执未决", "not_connected": "未连接", "pending": "待核验"}
         questions = {"issuer_financial": "财报与指引基线", "adverse_event": "重大不利事项",
                      "counterevidence": "反证与更正", "macro_release": "宏观发布", "news": "事件与风险",
                      "connection": "持仓连接状态"}
