@@ -724,7 +724,16 @@ class DeepSeekRequiredClient:
                 or diagnostic.get("code") in {"NETWORK_TIMEOUT", "TRANSPORT_FAILURE"}
                 or reason in {"connect_timeout", "transport_failure", "timeout", "read_timeout"}
             )
-            if not retryable or self._chat_route_retries >= 1:
+            # TopicStore reserves each HTTP wire independently. Once that
+            # attempt is unknown, creating a second reservation would either
+            # fail closed or risk a second paid dispatch before reconciliation.
+            # Retry only execution contexts whose durable attempt spans the
+            # whole bounded retry.
+            topic_reservation = (
+                hasattr(self.execution, "store")
+                and callable(getattr(self.execution.store, "reserve", None))
+            )
+            if topic_reservation or not retryable or self._chat_route_retries >= 1:
                 raise
             self._chat_route_retries += 1
             time.sleep(1.0)
