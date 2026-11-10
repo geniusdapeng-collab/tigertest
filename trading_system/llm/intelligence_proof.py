@@ -734,6 +734,11 @@ def _project_gaps(events):
             for cell, row in latest.items()]
 
 
+def _member_material_types(member):
+    values = member.get("material_types")
+    return set(values) if isinstance(values, list) and values else {member["material_type"]}
+
+
 def _verify_baseline(packet, bundle):
     baseline = packet["baseline"]
     if baseline is None:
@@ -806,7 +811,9 @@ def _verify_baseline(packet, bundle):
                 elif kind in {"source", "material", "validated_subject"}:
                     subject_ids = {row if isinstance(row, str) else row.get("entity_id", row.get("id"))
                         for row in member["validated_subjects"] if isinstance(row, (str, dict))}
-                    expected_values = {member["source_id"]} if kind == "source" else {member["material_type"]} if kind == "material" else subject_ids
+                    expected_values = ({member["source_id"]} if kind == "source" else
+                                       _member_material_types(member)
+                                       if kind == "material" else subject_ids)
                     if event != creation or association["value"] not in expected_values:
                         _fail("intelligence.freeze")
                 else:

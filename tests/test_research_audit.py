@@ -1,4 +1,5 @@
 from trading_system.agent_evidence import atomic_bytes, atomic_json, file_ref
+from trading_system.llm.intelligence_proof import _member_material_types
 from trading_system.research_audit import _current_event_relative, candidate_funnel
 from trading_system.review.attribution import attribute_journal
 
@@ -82,3 +83,10 @@ def test_research_audit_resolves_the_verified_current_parent_attempt(tmp_path):
         "start_ref": file_ref(tmp_path, start_path, "tiger.parent-attempt/v1"),
     })
     assert _current_event_relative(tmp_path) == relative
+
+
+def test_baseline_member_preserves_all_validated_material_types():
+    assert _member_material_types({
+        "material_type": "industry_data",
+        "material_types": ["industry_data", "macro_policy"],
+    }) == {"industry_data", "macro_policy"}
