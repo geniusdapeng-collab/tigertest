@@ -11,7 +11,7 @@ export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
   frameBytes: 131072, requestMs: 60000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
-  terminateMs: 250, cleanupMs: 2000 });
+  terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 7500 });
 const RUN_ID = /^run-[0-9a-f]{32}$/u;
 const TERMINAL_OK = new Set(["completed", "completed_degraded"]);
 const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
@@ -474,6 +474,28 @@ export async function readRequestInput(file, stream = process.stdin, { signal } 
   } finally {
     signal?.removeEventListener("abort", onAbort);
     if (handle) await handle.close();
+  }
+}
+
+export async function readOptionalRequestInput(stream = process.stdin, fallback = {}, { signal } = {}) {
+  const chunks = [];
+  let bytes = 0;
+  const onAbort = () => stream.destroy(new WorkflowError("CANCELLED", "Input reading was cancelled."));
+  try {
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) throw new WorkflowError("CANCELLED", "Input reading was cancelled.");
+    for await (const chunk of stream) {
+      const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += part.length;
+      if (bytes > LIMITS.inputBytes) throw new WorkflowError("INPUT_TOO_LARGE", "Input exceeds the byte limit.");
+      chunks.push(part);
+    }
+    return bytes === 0 ? fallback : parseJson(Buffer.concat(chunks));
+  } catch (error) {
+    if (error instanceof WorkflowError) throw error;
+    throw invalid("Unable to read a valid JSON request.");
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 

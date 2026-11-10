@@ -3,14 +3,15 @@
 import { pathToFileURL } from "node:url";
 import {
   LIMITS, OPERATIONS, PROFILE, WorkflowError, exitCode, failureEnvelope, invokeWorkflow,
-  readRequestInput, startupOptions, waitForReceipt,
+  readOptionalRequestInput, readRequestInput, startupOptions, waitForReceipt,
 } from "../bundles/trading/capabilities/workflow-client.mjs";
 
 export function parseArgs(argv) {
   const operation = argv[0];
   if (!OPERATIONS.includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Use doctor, describe, run, resume, supplement, cancel, status, receipt or verify.");
   const flags = new Map();
-  const allowed = new Set(["--python", "--state-root", "--mode", "--input-file", "--wait", "--wait-timeout-seconds"]);
+  const allowed = new Set(["--python", "--state-root", "--mode", "--input-file", "--wait",
+    "--wait-timeout-seconds", "--detail", "--cursor", "--limit"]);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
     if (!allowed.has(flag) || flags.has(flag)) throw new WorkflowError("INVALID_REQUEST", "Unknown or duplicate command option.");
@@ -25,16 +26,23 @@ export function parseArgs(argv) {
   if ((wait || flags.has("--wait-timeout-seconds"))
     && !["run", "resume", "supplement"].includes(operation)) throw new WorkflowError("INVALID_REQUEST", "Only run, resume and supplement support --wait.");
   if (flags.has("--wait-timeout-seconds") && !wait) throw new WorkflowError("INVALID_REQUEST", "A wait deadline requires --wait.");
-  let waitMs = LIMITS.waitMs;
+  let waitMs = LIMITS.maxWaitSeconds * 1000;
   if (flags.has("--wait-timeout-seconds")) {
     const seconds = flags.get("--wait-timeout-seconds");
-    if (!/^[1-9][0-9]{0,3}$/u.test(seconds) || Number(seconds) > 3600) throw new WorkflowError("INVALID_REQUEST", "Wait deadline must be 1 to 3600 seconds.");
+    if (!/^[1-9][0-9]{0,4}$/u.test(seconds) || Number(seconds) > LIMITS.maxWaitSeconds) throw new WorkflowError("INVALID_REQUEST", `Wait deadline must be 1 to ${LIMITS.maxWaitSeconds} seconds.`);
     waitMs = Number(seconds) * 1000;
+  }
+  const statusOptions = {};
+  for (const key of ["detail", "cursor", "limit"]) if (flags.has(`--${key}`)) statusOptions[key] = flags.get(`--${key}`);
+  if (Object.keys(statusOptions).length && operation !== "status") throw new WorkflowError("INVALID_REQUEST", "Status detail options require the status operation.");
+  if ("limit" in statusOptions) {
+    if (!/^[1-9][0-9]{0,2}$/u.test(statusOptions.limit) || Number(statusOptions.limit) > 200) throw new WorkflowError("INVALID_REQUEST", "Status limit must be 1 to 200.");
+    statusOptions.limit = Number(statusOptions.limit);
   }
   const options = startupOptions({ ...(flags.has("--python") ? { python: flags.get("--python") } : {}),
     ...(flags.has("--state-root") ? { stateRoot: flags.get("--state-root") } : {}),
     ...(flags.has("--mode") ? { mode: flags.get("--mode") } : {}) });
-  return { operation, options, file: flags.get("--input-file"), wait, waitMs };
+  return { operation, options, file: flags.get("--input-file"), wait, waitMs, statusOptions };
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -54,8 +62,10 @@ export async function main(argv = process.argv.slice(2)) {
     // Readonly rejects run before even opening an operator-supplied request file.
     if (["run", "resume", "supplement", "cancel"].includes(operation)
       && parsed.options.mode === "readonly") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
+    const fallback = operation === "doctor" ? {} : operation === "describe" ? { profile: PROFILE } : {};
     const input = parsed.file ? await readRequestInput(parsed.file, process.stdin, { signal: controller.signal })
-      : operation === "doctor" ? {} : operation === "describe" ? { profile: PROFILE } : {};
+      : await readOptionalRequestInput(process.stdin, fallback, { signal: controller.signal });
+    if (parsed.operation === "status") Object.assign(input, parsed.statusOptions);
     envelope = await invokeWorkflow(operation, input, parsed.options, { signal: controller.signal });
     knownRun = envelope.run_id;
     if (parsed.wait && envelope.operation_ok) envelope = await waitForReceipt(knownRun, parsed.options,

@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { REQUEST, RUN_ID, collectProcess, eventually, runnerFixture } from "./tiger-agent-test-support.mjs";
+import { parseArgs } from "./tiger-agent.mjs";
 
 function launch(fixture, operation, extra = []) {
   return collectProcess("scripts/tiger-agent.mjs", [operation, "--python", fixture.python,
@@ -129,4 +130,21 @@ test("CLI input files with spaces/nonASCII work and failed status is only a quer
   const file = join(fixture.dir, "输入 request.json"); await writeFile(file, JSON.stringify({ run_id: RUN_ID }));
   const proc = launch(fixture, "status", ["--input-file", file]); proc.child.stdin.end();
   const value = envelope(await proc.closed, 0); assert.equal(value.status, "failed"); assert.equal(value.summary, null);
+});
+
+test("CLI wait covers the 7200-second business budget and rejects beyond its margin", async (t) => {
+  assert.equal(parseArgs(["run", "--wait", "--wait-timeout-seconds", "7200"]).waitMs, 7_200_000);
+  assert.throws(() => parseArgs(["run", "--wait", "--wait-timeout-seconds", "7501"]),
+    (error) => error.code === "INVALID_REQUEST");
+});
+
+test("CLI reads ordinary stdin without --input-file and forwards status card pagination", async (t) => {
+  const fixture = await runnerFixture(t, "send(result(operation,{status:'failed'}));");
+  const proc = launch(fixture, "status", ["--detail", "cards", "--limit", "20"]);
+  proc.child.stdin.end(JSON.stringify({ run_id: RUN_ID }));
+  const value = envelope(await proc.closed, 0);
+  assert.equal(value.status, "failed");
+  assert.deepEqual((await fixture.calls()).map((call) => [call.operation, call.input]), [
+    ["status", { run_id: RUN_ID, detail: "cards", limit: 20 }],
+  ]);
 });

@@ -190,7 +190,12 @@
     },
     "status_request": {
       "type": "object", "additionalProperties": false, "required": ["run_id"],
-      "properties": {"run_id": {"type": "string", "pattern": "^run-[0-9a-f]{32}$"}}
+      "properties": {
+        "run_id": {"type": "string", "pattern": "^run-[0-9a-f]{32}$"},
+        "detail": {"type": "string", "enum": ["summary", "cards", "sources"]},
+        "cursor": {"type": "string", "minLength": 1, "maxLength": 256},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200}
+      }
     },
     "receipt_request": {
       "type": "object", "additionalProperties": false, "required": ["run_id"],
