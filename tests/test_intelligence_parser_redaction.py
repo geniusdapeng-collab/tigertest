@@ -1,12 +1,14 @@
 """A redacted original cannot bypass a frozen parser failure or its policy."""
 from copy import deepcopy
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
 from test_intelligence_acquisition import web
 from trading_system.intelligence.contracts import FetchResult, IntelligenceError, digest, timestamp, utc_now
 from trading_system.intelligence.parse_limits import ParsePolicy, _partial, redact_partial, replay_partial
+from trading_system.intelligence.extract import extract_response
 from trading_system.intelligence.planner import build_plan
 from trading_system.intelligence.registry import SourceRegistry, SourceSpec
 from trading_system.intelligence.replay import reconstruct_document
@@ -133,3 +135,34 @@ def test_literal_redaction_marker_is_not_a_relative_attachment_or_an_unchanged_p
     assert result.attachments == []
     assert result.metadata["redaction_markup_policy"] == "tiger.redacted-html-links/v1"
     assert result.metadata["extractor_config_sha256"]
+
+
+def test_structure_text_manifest_is_rebuilt_from_final_redacted_bytes(tmp_path):
+    policy = ParsePolicy(manifest_version="v1")
+    spec = SourceSpec("web_page", "web_fetch", "https://test-fixture.invalid/",
+        minimum_interval_seconds=0, options={"extractor": policy.public()})
+    registry = SourceRegistry([spec])
+    service = IntelligenceService(tmp_path, registry,
+        adapters={"web_page": SimpleNamespace(parse_policy=policy)}, clock=lambda: utc_now())
+    original = (b'<html><head><title>TEST_FIXTURE release</title></head>'
+        b'<body><article><h1>TEST_FIXTURE release</h1>'
+        b'<p>TEST_FIXTURE operating evidence.</p>'
+        b'<a href="https://test-fixture.invalid/report?token=SECRET">Source</a>'
+        b'</article></body></html>')
+    sanitized = original.replace(b'https://test-fixture.invalid/report?token=SECRET',
+                                 b'[REDACTED_URL]')
+    response = HttpResponse("https://test-fixture.invalid/release", 200,
+        {"content-type": "text/html"}, original, "2026-11-06T00:00:00+00:00",
+        hashlib.sha256(original).hexdigest())
+    result = extract_response(response, policy=policy)
+    service._safe_raw = lambda _raw: (sanitized, True)
+    observed = service._observe_result("web_page", "fetch", {
+        "url": response.url, "_parse_policy": policy.public()}, result)
+    expected = extract_response(HttpResponse(response.url, 200,
+        {"content-type": "text/html"}, sanitized, response.received_at,
+        response.transport_sha256), policy=policy)
+    metadata = observed["normalized"]["metadata"]
+    assert metadata["extractor"] == "tiger.structure-text/v1"
+    assert metadata["redaction_markup_policy"] == "tiger.redacted-html-links/v1"
+    assert metadata["extractor_config_sha256"] == expected.metadata["extractor_config_sha256"]
+    assert metadata["extractor_config_sha256"] != result.metadata["extractor_config_sha256"]

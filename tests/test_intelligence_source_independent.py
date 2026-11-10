@@ -220,7 +220,7 @@ def test_pdf_attachment_parser_failure_remains_an_explicit_source_gap(tmp_path, 
     assert "ATTACHMENT" in acquired["gaps"][0]["reason"]
 
 
-def test_unknown_paid_search_dispatch_blocks_new_retry_ordinal(tmp_path, web):
+def test_unknown_paid_search_dispatch_isolated_without_new_retry_ordinal(tmp_path, web):
     base, routes, calls = web
     def first_response_lost(_call):
         if len(calls) == 1:
@@ -240,9 +240,11 @@ def test_unknown_paid_search_dispatch_blocks_new_retry_ordinal(tmp_path, web):
         "limits": {"requests": 10, "fetches": 2, "bytes": 100000, "rounds": 1,
                    "concurrency": 1, "deadline_seconds": 10}}, registry)
     job = service.create_job(plan, "independent-unknown-send")
-    with pytest.raises(IntelligenceError) as blocked:
-        service.collect(job["job_id"])
-    assert blocked.value.code == "RECONCILIATION_REQUIRED"
+    collected = service.collect(job["job_id"])
+    assert collected["state"] == "partial"
+    assert collected["attempts"][0]["status"] == "unknown"
+    assert collected["attempts"][0]["result"]["usage"]["requires_reconciliation"] is True
+    assert any(gap["status"] == "source_unresolved" for gap in collected["gaps"])
     assert len(calls) == 1
 
 

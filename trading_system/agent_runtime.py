@@ -1012,7 +1012,8 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
 
 
 def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
-               current_source: Path | None = SOURCE_ROOT) -> dict:
+               current_source: Path | None = SOURCE_ROOT,
+               prepared_summary: dict | None = None) -> dict:
     if not isinstance(run_id, str) or not RUN_RE.fullmatch(run_id):
         raise EvidenceInvalid("INVALID_REQUEST", "Invalid run identity")
     run = state / "runs" / run_id
@@ -1139,7 +1140,11 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
         raise EvidenceInvalid("RESULT_INVALID", "Account version binding differs")
     for ref in version["files"]:
         verify_ref(run / "work" / "reports", ref)
-    summary = business_summary(run, admission, receipt["artifacts"])
+    # Publication may build this deterministic proof once and reuse it across
+    # prepared and committed readback. The other replay and hash checks still
+    # run on every verification.
+    summary = (business_summary(run, admission, receipt["artifacts"])
+               if prepared_summary is None else prepared_summary)
     if research_history is not None:
         from .research_resume import verify_parent_history
         verify_parent_history(run, admission, policy, research_history)
@@ -1284,7 +1289,8 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
             raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing receipt differs")
     else:
         atomic_json(run, "receipt.json", receipt, exclusive=True)
-    prepared = verify_run(state, run.name, require_committed=False, current_source=None)
+    prepared = verify_run(state, run.name, require_committed=False, current_source=None,
+                          prepared_summary=summary)
     check_account_parent()
     publish_pointer(prepared["pointer"])
-    return verify_run(state, run.name, current_source=None)
+    return verify_run(state, run.name, current_source=None, prepared_summary=summary)

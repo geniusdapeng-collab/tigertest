@@ -214,6 +214,47 @@ def reconstruct_document(document, read_blob, source_manifest):
         expected_version = digest({key: value for key, value in version_input.items()
                                    if key != "extractor_config_sha256"})
         version_contract = "legacy-default-redacted-html-without-parser-hash/v1"
+    elif expected_version != document["version"]:
+        # Historical structure-text attachers recorded the parser projection
+        # before URL-placeholder redaction could change the underlying
+        # builtin/scrapling config hash. Accept only the exact transform:
+        # recorded parser+previous=None, observed parser+known redaction
+        # config, and every text/time/title/URL/attachment field above equal.
+        recorded_parser = recorded_metadata.get("parse_manifest", {}).get("parser", {}) \
+            if isinstance(recorded_metadata.get("parse_manifest"), dict) else {}
+        observed_parser = observed_metadata.get("parse_manifest", {}).get("parser", {}) \
+            if isinstance(observed_metadata.get("parse_manifest"), dict) else {}
+        redaction_policy = observed_metadata.get("redaction_markup_policy")
+        recorded_config = recorded_metadata.get("extractor_config_sha256")
+        observed_config = observed_metadata.get("extractor_config_sha256")
+        expected_recorded = digest({"parser": recorded_parser, "previous": None})
+        expected_underlying = (
+            digest({"engine": observed_parser.get("engine"),
+                    "redaction_markup_policy": redaction_policy})
+            if observed_parser and redaction_policy else None
+        )
+        expected_observed = (
+            digest({"parser": observed_parser, "previous": expected_underlying})
+            if expected_underlying is not None else None
+        )
+        legacy_structure_redaction = (
+            recipe.get("operation") == "fetch" and recipe.get("raw_redacted") is True
+            and recorded_metadata.get("extractor") == "tiger.structure-text/v1"
+            and observed_metadata.get("extractor") == "tiger.structure-text/v1"
+            and recorded_config == expected_recorded
+            and observed_config == expected_observed
+            and redaction_policy == "tiger.redacted-html-links/v1"
+            and "redaction_markup_policy" not in recorded_metadata
+        )
+        if legacy_structure_redaction:
+            recorded_version_input = {
+                **version_input,
+                "extractor_config_sha256": recorded_config,
+            }
+            if digest(recorded_version_input) != document["version"]:
+                raise IntelligenceError("HASH_MISMATCH", "Historical parser transform is not bound to the recorded version")
+            expected_version = document["version"]
+            version_contract = "tiger-legacy-redacted-structure-text/v1"
     expected_doc_id = "intel_" + hashlib.sha256(document["canonical_url"].encode()).hexdigest()[:24]
     if (document["version"] != expected_version or document["doc_id"] != expected_doc_id
             or document["id"] != "docver_" + digest({"doc_id": expected_doc_id, "version": expected_version})[:32]):

@@ -75,6 +75,27 @@ def configured(monkeypatch):
     return RecordingExecution()
 
 
+def test_chat_transport_unknown_has_one_bounded_retry(configured, monkeypatch):
+    from trading_system.llm.deepseek_required import DeepSeekRequiredClient
+    from trading_system.redline.model_diagnostics import RequiredModelUnavailable
+    client = DeepSeekRequiredClient(configured)
+    calls = []
+    def post(_client, path, _request):
+        calls.append(path)
+        if len(calls) == 1:
+            raise RequiredModelUnavailable("NETWORK_TIMEOUT")
+        if len(calls) == 2:
+            return {"ok": True}, "a" * 64
+        raise RequiredModelUnavailable("NETWORK_TIMEOUT")
+    monkeypatch.setattr(DeepSeekRequiredClient, "_post_json", post)
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda _seconds: None)
+    assert client._post_chat_bounded({"model": "deepseek-flash"}) == ({"ok": True}, "a" * 64)
+    assert calls == ["/chat/completions", "/chat/completions"]
+    with pytest.raises(RequiredModelUnavailable):
+        client._post_chat_bounded({"model": "deepseek-flash"})
+    assert len(calls) == 3
+
+
 def test_required_chat_binds_keyless_request_and_actual_response(configured, monkeypatch):
     seen = []
     response = Response(chat_response())

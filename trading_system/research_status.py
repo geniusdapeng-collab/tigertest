@@ -186,10 +186,24 @@ def _security_rows(raw, gaps, model_completed):
         company_ok = outcome.get("status") == "filing_verified" or gates.get("company", {}).get("status") == "passed"
         company_gap = bool(outcome) and outcome.get("status") != "filing_verified"
         scope_sufficient = bool(required) and not missing and (company_ok or intelligence.get("state") == "completed")
-        if instruction and instruction.get("action") == "buy" and (outside or missing or unknown or rejected or company_gap
+        buy_conflict = bool(
+            instruction and instruction.get("action") == "buy" and (
+                outside or missing or unknown or rejected or company_gap
                 or any(gates.get(key, {}).get("status") != "passed" for key in
-                       ("market_data", "hard_filter", "numeric_risk", "portfolio", "company", "model"))):
+                       ("market_data", "hard_filter", "numeric_risk", "portfolio",
+                        "company", "model"))
+            )
+        )
+        terminal_evidence = any(
+            gap.get("status") in {"source_unresolved", "model_unresolved"}
+            for gap in missing
+        )
+        if buy_conflict and not terminal_evidence:
             raise ValueError("RESEARCH_STATUS_BUY_GATE_CONFLICT")
+        if buy_conflict and terminal_evidence:
+            reasons = sorted(set(
+                [*reasons, "recorded_buy_blocked_by_unresolved_evidence"]
+            ))
         qualified = False
         if outside:
             state, evidence = "PENDING_RESEARCH", "not_researched"
@@ -216,9 +230,27 @@ def _security_rows(raw, gaps, model_completed):
     return cards, instructions
 
 
+def _page(rows, cursor, limit):
+    if type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError("RESEARCH_STATUS_PAGE_INVALID")
+    start = 0 if cursor is None else len(rows)
+    if cursor is not None:
+        if type(cursor) is not str or not cursor:
+            raise ValueError("RESEARCH_STATUS_PAGE_INVALID")
+        start = next((index + 1 for index, row in enumerate(rows)
+                      if row.get("id", row.get("symbol")) == cursor), None)
+        if start is None:
+            raise ValueError("RESEARCH_STATUS_CURSOR_INVALID")
+    page = rows[start:start + limit]
+    next_cursor = (page[-1].get("id", page[-1].get("symbol"))
+                   if page and start + limit < len(rows) else None)
+    return page, next_cursor
+
+
 def project_research_status(raw=None, *, work_status=None, document_dispositions=None,
                             verification=None, observed_state=None, report_ready=False,
-                            observation_state="connected", run_id=None):
+                            observation_state="connected", run_id=None,
+                            detail="full", cursor=None, limit=100):
     """Return four independent axes, stable identity counts and full security rows.
 
     Missing inputs stay unknown. Unit counts are not document counts. The
@@ -238,7 +270,8 @@ def project_research_status(raw=None, *, work_status=None, document_dispositions
     intelligence = _mapping(raw.get("intelligence"))
     gaps = list(_index(intelligence.get("gaps"), "cell_id").values())
     if any(type(row.get("required")) is not bool or row.get("status") not in
-           {"present", "missing", "conflicting", "unverifiable", "not_connected", "pending"} for row in gaps):
+           {"present", "missing", "conflicting", "unverifiable", "source_unresolved",
+            "model_unresolved", "not_connected", "pending"} for row in gaps):
         raise ValueError("RESEARCH_STATUS_GAP_INVALID")
     required = [row for row in gaps if row["required"]]
     missing = [row for row in required if row["status"] != "present"]
@@ -317,7 +350,9 @@ def project_research_status(raw=None, *, work_status=None, document_dispositions
         resume.append("read_same_run_status_without_starting_new_research")
     if account_state != "committed":
         reasons.append("ACCOUNT_PUBLICATION_UNVERIFIED")
-    return {"schema": CONTRACT, "run_id": run_id, "verified_receipt": checked is not None,
+    if detail not in {"full", "summary", "cards", "sources"}:
+        raise ValueError("RESEARCH_STATUS_DETAIL_INVALID")
+    value = {"schema": CONTRACT, "run_id": run_id, "verified_receipt": checked is not None,
         "basis": "verified_run" if checked else "report_snapshot" if report_ready else "observed_records",
         "axes": {"process": {"state": process_state, "observed_state": observed_state, "graph_state": graph_state},
             "evidence": {"state": evidence_state, "scope": "frozen_research_frontier",
@@ -334,8 +369,16 @@ def project_research_status(raw=None, *, work_status=None, document_dispositions
                 "wait_evidence": security_counts["WAIT_EVIDENCE"], "pending_research": security_counts["PENDING_RESEARCH"],
                 "not_selected": security_counts["NOT_SELECTED"], "not_assessed": security_counts["NOT_ASSESSED"]}},
         "block_reasons": sorted(set(reasons)), "resume_conditions": sorted(set(resume)),
-        "securities": cards, "sources": _source_index(raw, instructions, cards),
-        "missing_required": deepcopy(missing), "frozen_bundle": deepcopy(bundle),
+        "detail": detail,
         "plan_revision": work.get("plan_revision"),
         "usage": {"known": deepcopy(work.get("known_usage")),
                   "observed": deepcopy(work.get("known_usage_observed")), "unknown_attempts": unknown_attempts}}
+    if detail == "full":
+        value.update(securities=cards, sources=_source_index(raw, instructions, cards),
+                     missing_required=deepcopy(missing), frozen_bundle=deepcopy(bundle))
+    elif detail == "cards":
+        value["securities"], value["next_cursor"] = _page(cards, cursor, limit)
+    elif detail == "sources":
+        value["sources"], value["next_cursor"] = _page(
+            _source_index(raw, instructions, cards), cursor, limit)
+    return value

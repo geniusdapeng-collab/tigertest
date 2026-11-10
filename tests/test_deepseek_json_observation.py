@@ -189,7 +189,7 @@ def test_redacted_bad_reply_has_known_usage_but_cannot_authorize_retry(observed,
 
 
 @pytest.mark.parametrize("kind", ["timeout", "transport", "close"])
-def test_uncertain_transport_or_close_never_authorizes_another_send(observed, monkeypatch, kind):
+def test_uncertain_transport_gets_only_its_admitted_bounded_retry(observed, monkeypatch, kind):
     sent = []
     def post(*a, **k):
         sent.append(1)
@@ -203,7 +203,8 @@ def test_uncertain_transport_or_close_never_authorizes_another_send(observed, mo
     with pytest.raises(RequiredModelUnavailable) as error:
         with observed.step("clean.llm_semantic", {"fixture": "TEST_FIXTURE"}): invoke(observed)
     attempt = snapshot(observed, error.value.observation["attempts"][0]["observation_ref"])
-    assert attempt["response"] is None and len(sent) == 1
+    assert attempt["response"] is None
+    assert len(sent) == (2 if kind in {"timeout", "transport"} else 1)
     assert error.value.diagnostic["json_stage"] == "http_envelope"
     assert KEY not in json.dumps([attempt, error.value.observation, error.value.diagnostic])
 

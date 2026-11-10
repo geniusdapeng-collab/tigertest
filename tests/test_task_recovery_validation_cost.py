@@ -45,3 +45,15 @@ def test_one_join_reuses_its_shared_dependency_verification_within_that_read(tmp
     assert store.read_result("h")["value"] == {"ok": True}
     assert len(reads) == 8
     assert sum(reads.values()) <= 2 * len(reads)
+
+
+def test_claim_uses_validated_index_without_rehashing_results(tmp_path, monkeypatch):
+    store = diamond(tmp_path)
+    reads = Counter()
+    original = store._read_blob
+    def blob(ref, schema):
+        reads[ref["sha256"]] += 1
+        return original(ref, schema)
+    monkeypatch.setattr(store, "_read_blob", blob)
+    assert store.claim_ready("no-ready-work") is None
+    assert reads == {}

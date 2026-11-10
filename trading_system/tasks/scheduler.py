@@ -130,7 +130,7 @@ class Coordinator:
     def _next_lease(self):
         if not self.resource_capacity and self.unit_ids is None:
             return self.store.claim_ready("coordinator-" + str(self._owner), lease_seconds=self.lease_seconds), {}
-        reusable = set(self.store.resume_plan()["reusable"])
+        reusable = set(self.store.validated_unit_ids())
         for row in self.store.status()["units"]:
             if self.unit_ids is not None and row["unit_id"] not in self.unit_ids:
                 continue
@@ -232,12 +232,24 @@ class Coordinator:
         self._check_owner()
         self._stop_observing.set()
 
-    def close(self, *, wait=True):
+    def close(self, *, wait=True, timeout=None):
         self._check_owner()
         if not self._closed:
             self._closed = True
             self._executor.shutdown(wait=wait, cancel_futures=False)
             if wait:
-                for future in self._futures:
-                    future.result()
-                self._futures.clear()
+                if timeout is None:
+                    for future in self._futures:
+                        future.result()
+                    self._futures.clear()
+                else:
+                    wait_futures(tuple(self._futures), timeout=timeout,
+                                 return_when=FIRST_COMPLETED)
+                    return {"closed": True,
+                            "pending_units": [
+                                {"future_pending": not future.done(),
+                                 "unit_id": lease.unit_id, "epoch": lease.epoch}
+                                for future, lease in self._futures.items()
+                                if not future.done()
+                            ]}
+        return {"closed": True, "pending_units": []}

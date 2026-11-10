@@ -308,3 +308,23 @@ def test_static_report_has_real_filter_empty_state_and_no_paid_or_cancel_dispatc
         assert expected in markup
     assert "fetch(" not in markup and "XMLHttpRequest" not in markup
     assert "取消调度" not in markup or "不能取消调度" in markup
+
+
+def test_default_status_summary_is_compact_and_cards_are_cursor_paginated():
+    raw = raw_fixture()
+    summary = project(raw, detail="summary", limit=2)
+    assert "securities" not in summary and "sources" not in summary
+    first = project(raw, detail="cards", limit=2)
+    assert len(first["securities"]) == 2 and first["next_cursor"]
+    second = project(raw, detail="cards", limit=2, cursor=first["next_cursor"])
+    assert second["securities"]
+    assert not ({row["symbol"] for row in first["securities"]}
+                & {row["symbol"] for row in second["securities"]})
+
+
+def test_source_unresolved_is_a_partial_required_gap_not_clean_evidence():
+    raw = raw_fixture()
+    raw["intelligence"]["gaps"][1]["status"] = "source_unresolved"
+    value = project(raw, detail="summary")
+    assert value["axes"]["evidence"]["state"] == "partial"
+    assert value["axes"]["decision"]["state"] == "WAIT_EVIDENCE"

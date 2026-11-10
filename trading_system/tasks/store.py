@@ -109,7 +109,7 @@ class WorkStore:
             raise result._error(exc) from None
 
     @classmethod
-    def open(cls, root, manifest, **kwargs):
+    def open(cls, root, manifest, *, verify_checks=True, **kwargs):
         result = cls(Path(root), manifest, **kwargs)
         try:
             checked_root(result.root)
@@ -118,7 +118,8 @@ class WorkStore:
             with result._tx() as connection:
                 if result._meta(connection, "manifest") != result.manifest:
                     raise WorkUnitError("MANIFEST_MISMATCH", "Work-unit manifest differs")
-            result.verify()
+            if verify_checks:
+                result.verify()
             return result
         except WorkUnitError:
             raise
@@ -406,6 +407,16 @@ class WorkStore:
     def claim_ready(self, owner, *, lease_seconds=60):
         return self._claim(None, owner, lease_seconds)
 
+    def validated_unit_ids(self):
+        """Read the verified-state projection without rehashing every result.
+
+        Callers use this only after WorkStore.open() has verified the complete
+        chain once, or while the current coordinator owns every mutation.
+        """
+        with self._tx() as connection:
+            return [row["unit_id"] for row in self._rows(connection, "units")
+                    if row["state"] == "validated"]
+
     def claim(self, unit_id, owner, *, lease_seconds=60):
         identifier(unit_id, "unit")
         return self._claim(unit_id, owner, lease_seconds)
@@ -415,8 +426,10 @@ class WorkStore:
         seconds = timestamp_number(lease_seconds)
         if seconds == 0:
             raise WorkUnitError("CONTRACT_INVALID", "Lease duration must be positive")
-        # Hash/identity verification happens before taking the writer lock.
-        results = self.resume_plan()["reusable"]
+        # open() verified the complete chain before the coordinator began.
+        # Claims use the validated-state index instead of rehashing every
+        # result artifact on every scheduling decision.
+        results = self.validated_unit_ids()
         with self._tx(write=True) as connection:
             if self._meta(connection, "cancel"):
                 return None

@@ -561,7 +561,9 @@ class Archive:
                 for key, value in linked.items()]
 
     def gap(self, job_id, row):
-        if row.get("status") not in {"present", "missing", "conflicting", "unverifiable", "not_connected", "pending"}:
+        if row.get("status") not in {"present", "missing", "conflicting", "unverifiable",
+                                     "source_unresolved", "model_unresolved",
+                                     "not_connected", "pending"}:
             raise IntelligenceError("CONTRACT_INVALID", "Invalid coverage status")
         plan = self.plan(job_id)
         cells = {c["cell_id"]: c for c in plan["coverage_cells"]}
