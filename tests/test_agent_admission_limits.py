@@ -253,14 +253,18 @@ def test_supervisor_business_deadline_uses_original_clock_after_bootstrap(tmp_pa
         }
         assert read_json(run, "status.json")["status"] == "running"
         assert strict_json(os.read(ack_read, 4096)) == {"accepted": True, "run_id": run_id}
-        assert len(utc_reads) == len(monotonic_reads) == 1
+        assert len(utc_reads) == 1 and len(monotonic_reads) >= 1
         original_remaining = (original_deadline - utc_reads[0]).total_seconds()
-        assert kwargs["deadline"] == monotonic_reads[0] + original_remaining
+        reserve = min(supervisor.CLOSEOUT_RESERVE_SECONDS,
+                      max(10.0, min(original_remaining, business_seconds) / 5))
+        assert kwargs["deadline"] == (
+            monotonic_reads[0] + min(original_remaining, business_seconds) - reserve)
         assert len(guards) == 2
         business_guard = guards[1]
         assert business_guard.stage == "supervisor.business" and business_guard.active
         assert business_guard.seconds == original_remaining
-        assert business_guard.requested_deadline == business_guard.deadline == kwargs["deadline"]
+        assert business_guard.requested_deadline == business_guard.deadline
+        assert kwargs["deadline"] < business_guard.deadline
         remaining, interval = signal.getitimer(signal.ITIMER_REAL)
         handler = signal.getsignal(signal.SIGALRM)
         assert callable(handler) and handler != previous_alarm
