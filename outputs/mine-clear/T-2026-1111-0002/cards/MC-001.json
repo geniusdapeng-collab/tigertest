@@ -40,5 +40,8 @@
       "last_result": "not-run"
     }
   ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k indexed_claim -q"
+  },
   "notes": "修复必须保持依赖正确性，不能把缓存变成第二事实源。"
 }

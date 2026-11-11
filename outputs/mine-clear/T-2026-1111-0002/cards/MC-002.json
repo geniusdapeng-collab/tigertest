@@ -40,5 +40,8 @@
       "last_result": "not-run"
     }
   ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k transient_busy -q"
+  },
   "notes": "只允许在未产生任何事务内副作用前重试；事务体异常不得整段重放。"
 }

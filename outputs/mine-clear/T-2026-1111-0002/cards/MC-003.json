@@ -40,5 +40,8 @@
       "last_result": "not-run"
     }
   ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k large_workload_capacity -q"
+  },
   "notes": "仍受 token/memory 加权准入和业务 deadline 硬约束；不能通过隐藏文档或降低复核质量换吞吐。"
 }

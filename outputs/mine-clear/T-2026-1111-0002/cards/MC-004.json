@@ -51,5 +51,8 @@
       "last_result": "not-run"
     }
   ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k fast_status -q"
+  },
   "notes": "receipt/verify 仍是唯一完整证据核验入口。"
 }

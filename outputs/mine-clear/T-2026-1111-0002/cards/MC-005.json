@@ -40,5 +40,8 @@
       "last_result": "not-run"
     }
   ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k market_gap_fill -q"
+  },
   "notes": "不得用合成数据补洞，也不得把真实缺失静默改为存在。"
 }

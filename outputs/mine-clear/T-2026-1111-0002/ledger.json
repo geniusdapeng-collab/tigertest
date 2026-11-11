@@ -5,7 +5,7 @@
   "repo_path": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code",
   "title": "Tiger v2 runtime reliability and data coverage",
   "created_at": "2026-11-11T15:23:55.097Z",
-  "updated_at": "2026-11-11T15:31:20.832Z",
+  "updated_at": "2026-11-11T15:32:03.937Z",
   "baseline": {
     "audit": {
       "commit": "d0176e8b98dff575e5638e43c203b64c6aab1dc9",
@@ -141,6 +141,9 @@
           "last_result": "not-run"
         }
       ],
+      "regression": {
+        "command": "python -m pytest tests/test_runtime_reliability_release.py -k indexed_claim -q"
+      },
       "notes": "修复必须保持依赖正确性，不能把缓存变成第二事实源。"
     },
     {
@@ -193,6 +196,9 @@
           "last_result": "not-run"
         }
       ],
+      "regression": {
+        "command": "python -m pytest tests/test_runtime_reliability_release.py -k transient_busy -q"
+      },
       "notes": "只允许在未产生任何事务内副作用前重试；事务体异常不得整段重放。"
     },
     {
@@ -245,6 +251,9 @@
           "last_result": "not-run"
         }
       ],
+      "regression": {
+        "command": "python -m pytest tests/test_runtime_reliability_release.py -k large_workload_capacity -q"
+      },
       "notes": "仍受 token/memory 加权准入和业务 deadline 硬约束；不能通过隐藏文档或降低复核质量换吞吐。"
     },
     {
@@ -311,6 +320,9 @@
           "last_result": "not-run"
         }
       ],
+      "regression": {
+        "command": "python -m pytest tests/test_runtime_reliability_release.py -k fast_status -q"
+      },
       "notes": "receipt/verify 仍是唯一完整证据核验入口。"
     },
     {
@@ -363,6 +375,9 @@
           "last_result": "not-run"
         }
       ],
+      "regression": {
+        "command": "python -m pytest tests/test_runtime_reliability_release.py -k market_gap_fill -q"
+      },
       "notes": "不得用合成数据补洞，也不得把真实缺失静默改为存在。"
     },
     {
@@ -409,6 +424,9 @@
           "last_result": "not-run"
         }
       ],
+      "regression": {
+        "command": "python -m pytest tests/test_runtime_reliability_release.py -k wait_projection -q"
+      },
       "notes": "WAIT 是正常业务终态，不是证据缺失或运行失败。"
     }
   ],

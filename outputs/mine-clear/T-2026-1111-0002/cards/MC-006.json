@@ -34,5 +34,8 @@
       "last_result": "not-run"
     }
   ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k wait_projection -q"
+  },
   "notes": "WAIT 是正常业务终态，不是证据缺失或运行失败。"
 }
