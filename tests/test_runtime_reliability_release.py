@@ -144,11 +144,20 @@ def test_fast_status_uses_sealed_projection_without_full_verify(tmp_path, monkey
     def forbidden(*_args, **_kwargs):
         raise AssertionError("status must not run the complete verify proof")
 
-    monkeypatch.setattr(runner, "verify_run", forbidden)
-    status = runner.execute("status", {"run_id": run_id}, mode="readonly", state=state)
+    with monkeypatch.context() as patch:
+        patch.setattr(runner, "verify_run", forbidden)
+        status = runner.execute("status", {"run_id": run_id}, mode="readonly", state=state)
     assert status["operation_ok"], status
     assert status["status"] == "completed_degraded"
     assert status["data"]["research_status"]["basis"] in {"fast_projection", "report_snapshot"}
+
+    cards = runner.execute(
+        "status", {"run_id": run_id, "detail": "cards", "limit": 1},
+        mode="readonly", state=state,
+    )
+    assert cards["operation_ok"], cards
+    assert cards["data"]["research_status"]["detail"] == "cards"
+    assert "securities" in cards["data"]["research_status"]
 
 
 class _BatchProvider(DataProvider):

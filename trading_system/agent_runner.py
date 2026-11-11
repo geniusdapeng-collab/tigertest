@@ -787,7 +787,9 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
             verification = None
             raw = None
             fast_research_status = None
-            if observed in {"completed", "completed_degraded"}:
+            requested_detail = request.get("detail", "summary")
+            if (observed in {"completed", "completed_degraded"}
+                    and requested_detail == "summary"):
                 try:
                     fast_research_status = _fast_status_projection(state, run_id, observed)
                 except EvidenceInvalid:
@@ -811,7 +813,7 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
                         }
             data["research_status"] = fast_research_status or _research_status_projection(
                 state, run_id, observed, verification=verification, raw=raw,
-                detail=request.get("detail", "summary"),
+                detail=requested_detail,
                 cursor=request.get("cursor"), limit=request.get("limit", 100))
             if fast_research_status is not None:
                 data["completion_proof"] = {
