@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { waitForReceipt } from "./workflow-client.mjs";
+import { LIMITS, waitForReceipt } from "./workflow-client.mjs";
 import { RUN_ID, result } from "../../../scripts/tiger-agent-test-support.mjs";
+
+test("large-run receipt proof has a bounded 90-minute request budget", () => {
+  assert.equal(LIMITS.receiptMs, 90 * 60 * 1000);
+  assert.equal(LIMITS.maxWaitSeconds, 4 * 60 * 60);
+});
 
 test("run wait retries a transient status timeout without resubmitting", async () => {
   const calls = [];

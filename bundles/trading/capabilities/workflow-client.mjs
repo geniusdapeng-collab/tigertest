@@ -10,8 +10,8 @@ export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
 export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
-  frameBytes: 131072, requestMs: 60000, receiptMs: 900000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
-  terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 7500 });
+  frameBytes: 131072, requestMs: 60000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
+  terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 14400 });
 const RUN_ID = /^run-[0-9a-f]{32}$/u;
 const TERMINAL_OK = new Set(["completed", "completed_degraded"]);
 const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",

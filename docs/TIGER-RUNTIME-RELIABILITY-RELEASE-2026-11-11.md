@@ -51,8 +51,9 @@
 - `receipt` / `verify` 仍是 authoritative full proof；status 的
   `completion_proof.full_proof_command` 明确指向 `verify`。
 - `run --wait` 对只读 status 的 60 秒观察超时进行指数退避重试；
-  `INVALID_REQUEST` 等永久错误立即停止。最终 receipt proof 使用 15 分钟
-  单次预算，并可在总 wait deadline 内重试，且永不重新分配 run identity。
+  `INVALID_REQUEST` 等永久错误立即停止。最终 receipt proof 使用 90 分钟
+  单次预算，总 wait 上限为 4 小时，可在总 deadline 内重试，且永不重新
+  分配 run identity；7,200 秒业务截止不因观察窗口延长。
 
 ### 5. 行情补洞与失效股票池隔离
 
