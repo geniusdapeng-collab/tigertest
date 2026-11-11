@@ -1,0 +1,55 @@
+{
+  "id": "MC-004",
+  "kind": "problem",
+  "level": "L3",
+  "severity": "P1",
+  "batch": 2,
+  "state": "open",
+  "title": "status 与 run --wait 仍可能触发完整验证和 60 秒观察超时",
+  "evidence": [
+    {
+      "type": "code",
+      "ref": "trading_system/agent_runner.py:763@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "6283a3e8b37555e0bbc99b1adc8146566df0078200df5a7e46c024ad4c7de26d",
+      "note": "status 在 completed 时再次调用 verify_run，大工作图可能超过客户端单次请求预算。"
+    },
+    {
+      "type": "code",
+      "ref": "bundles/trading/capabilities/workflow-client.mjs:521@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "c768eb5a2c0f2ba0dfd4be3d0ba3473ec1039e176fcb63378e6b557116c1e85d",
+      "note": "waitForReceipt 遇到任何 operation_ok=false 立即停止，不区分可重试的观察超时与永久业务错误。"
+    }
+  ],
+  "root_cause": {
+    "file": "trading_system/agent_runner.py",
+    "line": 763,
+    "commit": "d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+    "symbol": "execute.status"
+  },
+  "trigger_path": "大 v2 运行完成或正在收尾时查询 status；一次 60 秒超时会让 run --wait 终止观察，尽管 detached worker 仍在运行。",
+  "assertions": [
+    {
+      "kind": "sample",
+      "given": "已封存 run 的紧凑状态投影存在，以及一次 status invoke 返回可重试 TIMEOUT",
+      "expect": "默认 status 使用投影且不调用 verify_run；waitForReceipt 对观察超时继续指数退避，对永久错误立即返回。",
+      "command": "python -m pytest tests/test_runtime_reliability_release.py -k fast_status -q",
+      "exec": {
+        "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
+        "args": ["-B", "-m", "pytest", "tests/test_runtime_reliability_release.py", "-k", "fast_status", "-q"]
+      },
+      "last_result": "not-run"
+    },
+    {
+      "kind": "sample",
+      "given": "Node waitForReceipt 注入第一次 TIMEOUT、第二次 completed/status，随后 receipt",
+      "expect": "等待器重试同一 status 并最终返回 receipt，不生成新 run 或新幂等键。",
+      "command": "node --test bundles/trading/capabilities/runtime-reliability.test.mjs",
+      "exec": {
+        "file": "/Users/mac/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node",
+        "args": ["--test", "bundles/trading/capabilities/runtime-reliability.test.mjs"]
+      },
+      "last_result": "not-run"
+    }
+  ],
+  "notes": "receipt/verify 仍是唯一完整证据核验入口。"
+}

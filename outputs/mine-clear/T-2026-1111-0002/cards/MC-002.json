@@ -1,0 +1,44 @@
+{
+  "id": "MC-002",
+  "kind": "problem",
+  "level": "L3",
+  "severity": "P0",
+  "batch": 1,
+  "state": "open",
+  "title": "SQLite 瞬时 STORE_BUSY 会终止整个语义阶段",
+  "evidence": [
+    {
+      "type": "code",
+      "ref": "trading_system/tasks/store.py:169@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "a7df3da04134f2fc627230365d6ccf4f930a277f7325fba78325280e41d45a75",
+      "note": "BEGIN IMMEDIATE 争用直接映射为 STORE_BUSY，调用方没有只针对锁获取的安全重试。"
+    },
+    {
+      "type": "code",
+      "ref": "trading_system/tasks/scheduler.py:119@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "ad0b620331f783177ec5f271cea1282df0ed5657a3e34cfdb01943203041dff1",
+      "note": "单个 unit 遇到 STORE_BUSY 后只被标记为可重试失败，阶段随即因 graph failed 退出。"
+    }
+  ],
+  "root_cause": {
+    "file": "trading_system/tasks/store.py",
+    "line": 169,
+    "commit": "d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+    "symbol": "WorkStore._tx"
+  },
+  "trigger_path": "多 worker 同时 BEGIN IMMEDIATE；短暂 BUSY/LOCKED 被立即暴露给语义阶段，任何单点争用都会扩大成整轮失败。",
+  "assertions": [
+    {
+      "kind": "sample",
+      "given": "另一连接持有写锁 150ms，随后释放；本连接在 5 秒 busy budget 内 claim",
+      "expect": "claim 在锁释放后成功；事务开始前的锁获取冲突不会变成 STORE_BUSY。",
+      "command": "python -m pytest tests/test_runtime_reliability_release.py -k transient_busy -q",
+      "exec": {
+        "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
+        "args": ["-B", "-m", "pytest", "tests/test_runtime_reliability_release.py", "-k", "transient_busy", "-q"]
+      },
+      "last_result": "not-run"
+    }
+  ],
+  "notes": "只允许在未产生任何事务内副作用前重试；事务体异常不得整段重放。"
+}
