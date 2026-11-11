@@ -52,3 +52,30 @@ test("run wait still stops immediately for a permanent request error", async () 
   assert.equal(value.error.code, "INVALID_REQUEST");
   assert.deepEqual(calls, ["status"]);
 });
+
+test("run wait retries a transient receipt proof timeout without resubmitting", async () => {
+  const calls = [];
+  let receipts = 0;
+  const invoke = async (operation) => {
+    calls.push(operation);
+    if (operation === "status") return result("status", { status: "completed" });
+    if (operation === "receipt" && receipts++ === 0) {
+      return {
+        ...result("receipt"),
+        operation_ok: false,
+        status: "interrupted",
+        error: {
+          code: "TIMEOUT", message: "receipt proof exceeded the request budget",
+          run_id: RUN_ID, stage: null, retryable: false, details_ref: null,
+        },
+      };
+    }
+    if (operation === "receipt") return result("receipt");
+    throw new Error(`unexpected operation ${operation}`);
+  };
+
+  const value = await waitForReceipt(RUN_ID, {}, { invoke, pollMs: 1, waitMs: 1000 });
+  assert.equal(value.operation, "receipt");
+  assert.equal(value.operation_ok, true);
+  assert.deepEqual(calls, ["status", "receipt", "receipt"]);
+});

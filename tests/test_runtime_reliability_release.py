@@ -1,5 +1,8 @@
 """Focused regressions for the 2026-11-11 default-v2 reliability release."""
 from copy import deepcopy
+import sqlite3
+import threading
+import time
 
 import pandas as pd
 
@@ -70,12 +73,62 @@ def test_transient_busy_store_error_is_retried_by_coordinator(tmp_path, monkeypa
     assert result["graph_state"] == "completed"
 
 
-def test_large_workload_capacity_preserves_frozen_policy_compatibility():
+def test_transient_busy_write_lock_is_retried_before_transaction(tmp_path):
+    store = create(tmp_path)
+    store.busy_timeout_ms = 25
+    store.write_busy_retry_ms = 2_000
+    ready = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        holder = sqlite3.connect(store.database, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        ready.set()
+        release.wait(2)
+        holder.commit()
+        holder.close()
+
+    thread = threading.Thread(target=hold_lock, daemon=True)
+    thread.start()
+    assert ready.wait(2)
+    threading.Timer(0.35, release.set).start()
+    try:
+        lease = store.claim_ready("retry-worker")
+    finally:
+        release.set()
+        thread.join(2)
+    assert lease is not None and lease.unit_id == "a"
+
+
+def test_large_workload_capacity_preserves_frozen_policy_compatibility(tmp_path):
     policy = research_work_policy()
     assert policy["document_workers"] >= 16
     previous = deepcopy(policy)
+    previous["parser_workers"] = 2
     previous["document_workers"] = 4
     assert validate_research_work_policy(previous) == previous
+
+    store = create(tmp_path, [unit(f"capacity-{number:03d}") for number in range(64)])
+    active, peak, lock = 0, 0, threading.Lock()
+
+    def handler(_context):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.15)
+        with lock:
+            active -= 1
+        return {"ok": True}
+
+    coordinator = Coordinator(store, max_workers=policy["document_workers"])
+    try:
+        result = coordinator.run(
+            {"extract": handler}, validators={"extract": _valid}, timeout=10)
+    finally:
+        coordinator.close()
+    assert result["graph_state"] == "completed"
+    assert peak >= 16
 
 
 def test_fast_status_uses_sealed_projection_without_full_verify(tmp_path, monkeypatch):
@@ -135,7 +188,8 @@ def test_market_gap_fill_recovers_small_active_gap_and_prunes_retired_symbols(mo
     fill = _BatchProvider("fill", ["CCC"])
     monkeypatch.setattr(pipeline, "_ordered_batch_chain", lambda _execution=None: [fill])
     result = pipeline._batch_with_fallback(
-        primary, ["AAA", "BBB", "CCC"], days=60, minimum=1, label="TEST_FIXTURE")
+        primary, ["AAA", "BBB", "CCC"], days=60, minimum=1,
+        label="TEST_FIXTURE", gap_fill=True)
     assert fill.calls == [("CCC",)]
     assert set(result) == {"AAA", "BBB", "CCC"}
 

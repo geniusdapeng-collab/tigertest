@@ -54,6 +54,7 @@ _LINEAGE: list[tuple[str, str]] = []   # 本轮行情来源血缘（对象, 实�
 _HEALTH: dict[str, dict] = {}
 # 回退失败与最终缺失的结构化披露；只记异常类型，避免把源端 URL/凭据写入报告。
 _DATA_ISSUES: list[dict] = []
+MAX_BATCH_GAP_FILL = 64
 
 
 class ProviderDataError(RuntimeError):
@@ -357,7 +358,8 @@ def quote_with_fallback(provider, ticker: str) -> dict | None:
 
 
 def _batch_with_fallback(provider, tickers: list[str], days: int,
-                         label: str = "batch", *, close_cutoff=None, minimum=None) -> dict[str, pd.DataFrame]:
+                         label: str = "batch", *, close_cutoff=None, minimum=None,
+                         gap_fill=False) -> dict[str, pd.DataFrame]:
     """批量拉取：yahoo → stooq → 服务端通道群依次补洞
     （仅真实源之间降级；生产链路绝不回退合成数据，覆盖率如实记录 data_coverage）。"""
     execution = getattr(provider, "execution", None)
@@ -419,9 +421,8 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
     data = _fetch(provider, tickers)
     enough = minimum if minimum is not None else max(3, len(tickers) // 3)
     _LINEAGE.append((f"{label}[{len(data)}/{len(tickers)}]", _provider_source(provider)))
-    if len(data) >= enough:
-        return _finish()
-    if provider.name != "stooq" and (execution is None or "stooq" in execution.policy.provider_names):
+    if (len(data) < enough and provider.name != "stooq"
+            and (execution is None or "stooq" in execution.policy.provider_names)):
         logger.warning("%s 批量拉取覆盖率不足（%d/%d），降级 stooq",
                        provider.name, len(data), len(tickers))
         from .providers.stooq import StooqProvider
@@ -432,8 +433,10 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         data.update(got)
         if got:
             _LINEAGE.append((f"{label}+补{len(got)}只", _provider_source(stooq)))
-        if len(data) >= enough:
-            return _finish()
+    missing = [ticker for ticker in tickers if ticker not in data]
+    if len(data) >= enough and (
+            not gap_fill or not missing or len(missing) > MAX_BATCH_GAP_FILL):
+        return _finish()
     # A source's aggregate health can be low because it does not implement a
     # macro or quote operation, even when it is the fastest suitable OHLCV
     # batch source. Batch fallback therefore keeps the declared capability
@@ -506,6 +509,15 @@ def run_pipeline(
                 universe, universe_source = load_full_universe()   # nasdaqtrader/cache/fallback
             else:
                 universe = load_universe(universe_mode, universe_file)
+                if universe_mode != "file" and not is_synthetic(provider):
+                    from .universe import RETIRED_UNIVERSE
+                    _DATA_ISSUES.append({
+                        "provider": "universe", "synthetic": False,
+                        "method": "symbol_directory",
+                        "symbols": sorted(RETIRED_UNIVERSE),
+                        "issue": "retired_or_renamed_pruned",
+                        "error_type": "SymbolDirectoryPruned",
+                    })
         else:
             # CN/HK：full=东财全量清单（两级拉取复刻 US）；其他=内嵌池/文件
             from .universe import load_market_universe
@@ -729,12 +741,15 @@ def run_pipeline(
             chain_tickers: set[str] = set()
             if spec.market_id == "us":
                 from .chains import CHAINS
+                from .universe import RETIRED_UNIVERSE
                 for c in CHAINS.values():
                     for link in ("upstream", "midstream", "downstream"):
                         chain_tickers.update(c[link]["tickers"])
+                chain_tickers.difference_update(RETIRED_UNIVERSE)
             all_tickers = sorted(set(universe) | chain_tickers)
-            stock_data = _batch_with_fallback(provider, all_tickers, days,
-                **({"label": "signal_stocks", "close_cutoff": session} if session else {}))
+            stock_data = _batch_with_fallback(
+                provider, all_tickers, days, label="signal_stocks", gap_fill=True,
+                **({"close_cutoff": session} if session else {}))
             if session and not stock_data:
                 raise StrictDataUnavailable(f"缺少已完成交易日 {session} 的可用股票收盘数据")
             market_data["stock_ohlcv"] = stock_data

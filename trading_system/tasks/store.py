@@ -19,11 +19,13 @@ from ..agent_evidence import (EvidenceInvalid, atomic_bytes, checked_root, diges
 from .contracts import (CONTRACT, DISPOSITIONS, EVENT_SCHEMA, OBSERVATION_SCHEMA,
                         PLAN_SCHEMA, REQUEST_SCHEMA, RESULT_SCHEMA, AttemptHandle,
                         UnitLease, UnitSpec, WorkUnitError, detached, hash_value,
-                        identifier, instant, known_usage, plain_label,
+                        identifier, identifiers, instant, known_usage, plain_label,
                         timestamp_number, validate_manifest, value_hash)
 
 APPLICATION_ID = 0x54574B31
 SCHEMA_VERSION = 1
+DEFAULT_WRITE_BUSY_RETRY_MS = 10000
+WRITE_LOCK_ATTEMPT_MS = 250
 TABLES = {
     "meta": ("key", ("key", "value")),
     "units": ("unit_id", ("unit_id", "spec", "state", "owner", "epoch", "lease_until",
@@ -38,15 +40,20 @@ JSON_COLUMNS = frozenset({"value", "spec", "result_ref", "request_ref", "reserva
 
 
 class WorkStore:
-    def __init__(self, root: Path, manifest: dict, *, clock=None, busy_timeout_ms=15000):
+    def __init__(self, root: Path, manifest: dict, *, clock=None, busy_timeout_ms=15000,
+                 write_busy_retry_ms=DEFAULT_WRITE_BUSY_RETRY_MS):
         self.root = Path(root)
         self.database = self.root / "work-units.sqlite3"
         self.manifest = validate_manifest(manifest)
         self.manifest_sha256 = value_hash(self.manifest)
         self.clock = time.time if clock is None else clock
-        if not callable(self.clock) or type(busy_timeout_ms) is not int or not 0 <= busy_timeout_ms <= 60000:
+        if (not callable(self.clock) or type(busy_timeout_ms) is not int
+                or not 0 <= busy_timeout_ms <= 60000
+                or type(write_busy_retry_ms) is not int
+                or not 0 <= write_busy_retry_ms <= 60000):
             raise WorkUnitError("CONTRACT_INVALID", "Invalid task store clock or timeout")
         self.busy_timeout_ms = busy_timeout_ms
+        self.write_busy_retry_ms = write_busy_retry_ms
 
     @classmethod
     def create(cls, root, manifest, **kwargs):
@@ -70,6 +77,8 @@ class WorkStore:
                     except FileExistsError:
                         if read_bytes(result.root, "work-manifest.json") != json_bytes(result.manifest):
                             raise WorkUnitError("MANIFEST_MISMATCH", "Work-unit manifest differs") from None
+                with result._tx(write=True) as connection:
+                    result._ensure_indexes(connection)
                 return cls.open(root, manifest, **kwargs)
             else:
                 os.close(descriptor)
@@ -88,6 +97,8 @@ class WorkStore:
                     "CREATE TABLE retry_claims(slot INTEGER PRIMARY KEY CHECK(slot=1),unit_id TEXT NOT NULL REFERENCES units(unit_id),attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id))",
                     "CREATE TABLE events(sequence INTEGER PRIMARY KEY,payload TEXT NOT NULL,event_sha256 TEXT NOT NULL UNIQUE)",
                     "CREATE INDEX attempts_unit_state ON attempts(unit_id,state)",
+                    "CREATE INDEX units_state ON units(state)",
+                    "CREATE INDEX attempts_state_unit ON attempts(state,unit_id)",
                 ):
                     connection.execute(statement)
                 for table in ("observations", "retry_claims", "events"):
@@ -133,6 +144,20 @@ class WorkStore:
                              "Work-unit store is busy" if busy else "Work-unit persistence is invalid",
                              cause_type=type(exc).__name__)
 
+    @staticmethod
+    def _ensure_indexes(connection):
+        for statement in (
+                "CREATE INDEX IF NOT EXISTS attempts_unit_state ON attempts(unit_id,state)",
+                "CREATE INDEX IF NOT EXISTS units_state ON units(state)",
+                "CREATE INDEX IF NOT EXISTS attempts_state_unit ON attempts(state,unit_id)"):
+            connection.execute(statement)
+
+    @staticmethod
+    def _busy_error(exc):
+        return (isinstance(exc, sqlite3.OperationalError)
+                and getattr(exc, "sqlite_errorcode", None) in {
+                    sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+
     def _safe_database(self):
         checked_root(self.root)
         for name in ("work-units.sqlite3", "work-units.sqlite3-wal", "work-units.sqlite3-shm", "work-units.sqlite3-journal"):
@@ -158,17 +183,39 @@ class WorkStore:
             self._safe_database()
             if not self.database.exists():
                 raise WorkUnitError("STORE_INVALID", "Work-unit database is missing")
-            connection = sqlite3.connect(self.database, timeout=self.busy_timeout_ms / 1000, isolation_level=None)
+            connect_timeout = (min(self.busy_timeout_ms, WRITE_LOCK_ATTEMPT_MS) / 1000
+                               if write else self.busy_timeout_ms / 1000)
+            connection = sqlite3.connect(self.database, timeout=connect_timeout, isolation_level=None)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA synchronous=FULL")
-            connection.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
+            connection.execute(
+                f"PRAGMA busy_timeout="
+                f"{min(self.busy_timeout_ms, WRITE_LOCK_ATTEMPT_MS) if write else self.busy_timeout_ms}")
             if (connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID
                     or connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION):
                 raise WorkUnitError("STORE_VERSION_INVALID", "Unrecognized work-unit database contract")
-            connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            deadline = time.monotonic() + self.write_busy_retry_ms / 1000
+            while True:
+                try:
+                    connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if not write or not self._busy_error(exc) or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(min(0.025, max(0, deadline - time.monotonic())))
             yield connection
-            connection.commit()
+            if write:
+                while True:
+                    try:
+                        connection.commit()
+                        break
+                    except sqlite3.OperationalError as exc:
+                        if not self._busy_error(exc) or time.monotonic() >= deadline:
+                            raise
+                        time.sleep(min(0.025, max(0, deadline - time.monotonic())))
+            else:
+                connection.commit()
         except (sqlite3.Error, OSError, EvidenceInvalid, ValueError) as exc:
             if connection is not None:
                 connection.rollback()
@@ -414,8 +461,67 @@ class WorkStore:
         chain once, or while the current coordinator owns every mutation.
         """
         with self._tx() as connection:
-            return [row["unit_id"] for row in self._rows(connection, "units")
-                    if row["state"] == "validated"]
+            return [row[0] for row in connection.execute(
+                "SELECT unit_id FROM units WHERE state='validated' ORDER BY rowid")]
+
+    def _claimable_rows(self, connection, *, name=None, after_rowid=0, limit=64):
+        columns = TABLES["units"][1]
+        selected = ",".join("u." + column for column in columns)
+        dependency_ready = """
+            NOT EXISTS (
+                SELECT 1
+                FROM json_each(u.spec, '$.dependencies') AS dependency
+                LEFT JOIN units AS prerequisite
+                  ON prerequisite.unit_id = dependency.value
+                WHERE prerequisite.unit_id IS NULL
+                   OR prerequisite.state != 'validated'
+            )
+        """
+        if name is None:
+            raw_rows = connection.execute(
+                f"SELECT u.rowid AS _rowid,{selected} FROM units AS u "
+                f"WHERE u.state IN ('ready','blocked') AND u.rowid>? "
+                f"AND {dependency_ready} ORDER BY u.rowid LIMIT ?",
+                (after_rowid, limit),
+            )
+        else:
+            raw_rows = connection.execute(
+                f"SELECT u.rowid AS _rowid,{selected} FROM units AS u "
+                f"WHERE u.unit_id=? AND u.state IN ('ready','blocked') "
+                f"AND {dependency_ready} LIMIT 1",
+                (name,),
+            )
+        rows = []
+        for raw in raw_rows:
+            row = {"_rowid": raw["_rowid"]}
+            row.update({column: strict_json(raw[column]) if column in JSON_COLUMNS and raw[column] is not None
+                        else raw[column] for column in columns})
+            rows.append(row)
+        return rows
+
+    def ready_candidates(self, *, after_rowid=0, limit=64):
+        if type(after_rowid) is not int or after_rowid < 0:
+            raise WorkUnitError("CONTRACT_INVALID", "Invalid ready-row cursor")
+        if type(limit) is not int or not 1 <= limit <= 512:
+            raise WorkUnitError("CONTRACT_INVALID", "Ready-row limit must be bounded")
+        with self._tx() as connection:
+            return self._claimable_rows(
+                connection, after_rowid=after_rowid, limit=limit)
+
+    def scope_states(self, unit_ids):
+        names = identifiers(unit_ids, "coordinator scope")
+        with self._tx() as connection:
+            states = {}
+            for offset in range(0, len(names), 512):
+                batch = names[offset:offset + 512]
+                placeholders = ",".join("?" for _ in batch)
+                states.update({row[0]: row[1] for row in connection.execute(
+                    f"SELECT unit_id,state FROM units WHERE unit_id IN ({placeholders})",
+                    batch,
+                )})
+        if set(states) != set(names):
+            raise WorkUnitError("UNIT_MISSING", "Coordinator scope contains a missing unit")
+        return states
 
     def claim(self, unit_id, owner, *, lease_seconds=60):
         identifier(unit_id, "unit")
@@ -426,23 +532,20 @@ class WorkStore:
         seconds = timestamp_number(lease_seconds)
         if seconds == 0:
             raise WorkUnitError("CONTRACT_INVALID", "Lease duration must be positive")
-        # open() verified the complete chain before the coordinator began.
-        # Claims use the validated-state index instead of rehashing every
-        # result artifact on every scheduling decision.
-        results = self.validated_unit_ids()
         with self._tx(write=True) as connection:
             if self._meta(connection, "cancel"):
                 return None
             self._admission(connection)
-            for row in self._rows(connection, "units"):
-                if ((name is None or row["unit_id"] == name) and row["state"] in {"ready", "blocked"}
-                        and set(row["spec"]["dependencies"]) <= set(results)):
-                    until = min(self._now() + seconds, instant(self.manifest["deadline_at"]))
-                    row.update(state="running", owner=owner, epoch=row["epoch"] + 1,
-                               lease_until=until, error_code=None, retryable=0)
-                    self._change(connection, "claimed", {"units": [row]})
-                    return UnitLease(self.manifest["tenant_id"], self.manifest["run_id"],
-                                     self.manifest_sha256, row["unit_id"], owner, row["epoch"], until)
+            rows = self._claimable_rows(connection, name=name, limit=1)
+            if rows:
+                row = rows[0]
+                row.pop("_rowid")
+                until = min(self._now() + seconds, instant(self.manifest["deadline_at"]))
+                row.update(state="running", owner=owner, epoch=row["epoch"] + 1,
+                           lease_until=until, error_code=None, retryable=0)
+                self._change(connection, "claimed", {"units": [row]})
+                return UnitLease(self.manifest["tenant_id"], self.manifest["run_id"],
+                                 self.manifest_sha256, row["unit_id"], owner, row["epoch"], until)
         return None
 
     def heartbeat(self, lease, *, lease_seconds=60):
@@ -459,13 +562,32 @@ class WorkStore:
                          lease.unit_id, lease.owner, lease.epoch, until)
 
     def _unresolved(self, connection, *, except_id=None):
-        units = {row["unit_id"]: row for row in self._rows(connection, "units")}
-        return [row for row in self._rows(connection, "attempts") if row["attempt_id"] != except_id
-                and row["state"] in {"dispatched", "observed"}
-                and (row["state"] == "observed" and row["usage"] is None
-                     or units[row["unit_id"]]["state"] != "running"
-                     or units[row["unit_id"]]["epoch"] != row["epoch"]
-                     or units[row["unit_id"]]["lease_until"] <= self._now())]
+        columns = TABLES["attempts"][1]
+        raw_rows = connection.execute(
+            f"SELECT {','.join(columns)} FROM attempts "
+            f"WHERE state IN ('dispatched','observed') ORDER BY unit_id,ordinal")
+        unresolved = []
+        for raw in raw_rows:
+            row = {name: strict_json(raw[name]) if name in JSON_COLUMNS and raw[name] is not None
+                   else raw[name] for name in columns}
+            if row["attempt_id"] == except_id:
+                continue
+            unit = self._row(connection, "units", row["unit_id"])
+            if (row["state"] == "observed" and row["usage"] is None
+                    or unit["state"] != "running"
+                    or unit["epoch"] != row["epoch"]
+                    or unit["lease_until"] <= self._now()):
+                unresolved.append(row)
+        return unresolved
+
+    def _attempts_for_unit_rows(self, connection, unit_id):
+        columns = TABLES["attempts"][1]
+        raw_rows = connection.execute(
+            f"SELECT {','.join(columns)} FROM attempts WHERE unit_id=? ORDER BY ordinal",
+            (unit_id,),
+        )
+        return [{name: strict_json(raw[name]) if name in JSON_COLUMNS and raw[name] is not None
+                 else raw[name] for name in columns} for raw in raw_rows]
 
     def begin_attempt(self, lease, request, *, operation, ordinal=1, reservation=None):
         if not isinstance(lease, UnitLease):
@@ -483,15 +605,15 @@ class WorkStore:
         first_request = None
         if ordinal == 2:
             with self._tx() as connection:
-                first_before = next((row for row in self._rows(connection, "attempts")
-                                     if row["unit_id"] == lease.unit_id and row["ordinal"] == 1), None)
+                first_before = next((row for row in self._attempts_for_unit_rows(
+                    connection, lease.unit_id) if row["ordinal"] == 1), None)
             if first_before is not None:
                 first_request = self._read_blob(first_before["request_ref"], REQUEST_SCHEMA)
         with self._tx(write=True) as connection:
             self._lease(connection, lease)
             self._admission(connection)
-            existing = next((row for row in self._rows(connection, "attempts")
-                             if row["unit_id"] == lease.unit_id and row["ordinal"] == ordinal), None)
+            existing = next((row for row in self._attempts_for_unit_rows(
+                connection, lease.unit_id) if row["ordinal"] == ordinal), None)
             if existing is not None:
                 if existing["request_ref"] != ref or existing["operation"] != operation or existing["reservation"] != reservation:
                     raise WorkUnitError("ATTEMPT_MISMATCH", "Attempt cannot replace its exact request")
@@ -508,8 +630,8 @@ class WorkStore:
                 raise WorkUnitError("ATTEMPT_UNKNOWN", "Unresolved attempt requires reconciliation before another send")
             if ordinal == 2:
                 claim = self._row(connection, "retry_claims", 1)
-                first = next((row for row in self._rows(connection, "attempts")
-                              if row["unit_id"] == lease.unit_id and row["ordinal"] == 1), None)
+                first = next((row for row in self._attempts_for_unit_rows(
+                    connection, lease.unit_id) if row["ordinal"] == 1), None)
                 if claim is None or first is None or claim["attempt_id"] != first["attempt_id"]:
                     raise WorkUnitError("RETRY_NOT_ADMITTED", "Format reanswer has not been admitted")
                 if (first != first_before or first_request is None
@@ -692,7 +814,7 @@ class WorkStore:
                 raise ValueError
         except Exception:
             raise WorkUnitError("RESULT_REJECTED", "Work-unit validator rejected the result") from None
-        snapshot = self._result_snapshot()
+        snapshot = self._result_validation_snapshot(lease.unit_id)
         unit = snapshot["units"].get(lease.unit_id)
         if unit is None:
             raise WorkUnitError("UNIT_MISSING", "Work-unit does not exist")
@@ -707,8 +829,7 @@ class WorkStore:
             if type(row) is not dict or set(row) != {"state", "reason"} or row["state"] not in DISPOSITIONS:
                 raise WorkUnitError("DISPOSITION_INVALID", "Invalid document disposition")
             plain_label(row["reason"], "disposition reason")
-        plan = snapshot["plan"]
-        original_hashes = {row["id"]: row["sha256"] for row in plan["originals"] if row["id"] in dispositions}
+        original_hashes = {name: snapshot["originals"][name] for name in dispositions}
         envelope = {"schema": RESULT_SCHEMA, "tenant_id": lease.tenant_id, "run_id": lease.run_id,
                     "manifest_sha256": self.manifest_sha256, "unit_id": lease.unit_id,
                     "input_sha256": value_hash(unit["spec"]["inputs"]),
@@ -719,6 +840,42 @@ class WorkStore:
         self._commit_result(lease, ref, deps)
         return ref
 
+    def _result_validation_snapshot(self, unit_id):
+        """Load only one result's dependency closure and terminal originals."""
+        with self._tx() as connection:
+            target = self._row(connection, "units", unit_id)
+            if target is None:
+                raise WorkUnitError("UNIT_MISSING", "Work-unit does not exist")
+            units = {unit_id: target}
+            pending = list(target["spec"]["dependencies"])
+            while pending:
+                name = pending.pop()
+                if name in units:
+                    continue
+                row = self._row(connection, "units", name)
+                if row is None:
+                    raise WorkUnitError("UNIT_MISSING", "Work-unit dependency does not exist")
+                units[name] = row
+                pending.extend(row["spec"]["dependencies"])
+            documents = sorted({name for row in units.values()
+                                for name in row["spec"]["terminal_documents"]})
+            originals = {}
+            if documents:
+                for offset in range(0, len(documents), 512):
+                    batch = documents[offset:offset + 512]
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = connection.execute(
+                        "SELECT json_extract(item.value,'$.id'),"
+                        "json_extract(item.value,'$.sha256') "
+                        "FROM meta,json_each(meta.value,'$.originals') AS item "
+                        f"WHERE meta.key='plan' AND json_extract(item.value,'$.id') IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                    originals.update({row[0]: row[1] for row in rows})
+                if set(originals) != set(documents):
+                    raise WorkUnitError("PLAN_INVALID", "Terminal originals are missing from the plan")
+        return {"units": units, "originals": originals, "memo": {}, "visiting": set()}
+
     def _commit_result(self, lease, ref, dependency_results):
         with self._tx(write=True) as connection:
             row = self._lease(connection, lease)
@@ -727,8 +884,8 @@ class WorkStore:
                 dependency = self._row(connection, "units", name)
                 if dependency["state"] != "validated" or dependency["result_ref"]["sha256"] != expected:
                     raise WorkUnitError("DEPENDENCY_INVALID", "Unit dependency changed before publication")
-            if any(attempt["unit_id"] == lease.unit_id and attempt["state"] not in {"settled", "not_sent"}
-                   for attempt in self._rows(connection, "attempts")):
+            if any(attempt["state"] not in {"settled", "not_sent"}
+                   for attempt in self._attempts_for_unit_rows(connection, lease.unit_id)):
                 raise WorkUnitError("ATTEMPT_UNKNOWN", "Unsettled external attempt blocks result publication")
             row.update(state="validated", owner=None, lease_until=None, result_ref=ref, error_code=None, retryable=0)
             self._change(connection, "result_validated", {"units": [row]})
@@ -787,7 +944,7 @@ class WorkStore:
 
     def read_result(self, unit_id):
         identifier(unit_id, "unit")
-        return self._read_result_from(unit_id, self._result_snapshot())
+        return self._read_result_from(unit_id, self._result_validation_snapshot(unit_id))
 
     def fail(self, lease, error_code, *, retryable=False):
         identifier(error_code, "error code")
@@ -797,21 +954,32 @@ class WorkStore:
             row = self._lease(connection, lease)
             row.update(state="failed", error_code=error_code, retryable=int(retryable), owner=None, lease_until=None)
             not_sent = []
-            for attempt in self._rows(connection, "attempts"):
-                if attempt["unit_id"] == lease.unit_id and attempt["state"] == "prepared":
+            for attempt in self._attempts_for_unit_rows(connection, lease.unit_id):
+                if attempt["state"] == "prepared":
                     attempt["state"] = "not_sent"
                     not_sent.append(attempt)
             self._change(connection, "unit_failed", {"units": [row], "attempts": not_sent})
 
     def recover_expired(self):
         ready, unknown = [], []
+        now = self._now()
+        with self._tx() as connection:
+            if connection.execute(
+                    "SELECT 1 FROM units WHERE state='running' AND lease_until<=? LIMIT 1",
+                    (now,)).fetchone() is None:
+                return {"ready": ready, "unknown": unknown}
         with self._tx(write=True) as connection:
             changed_units, changed_attempts = [], []
-            attempts = self._rows(connection, "attempts")
-            for row in self._rows(connection, "units"):
-                if row["state"] != "running" or row["lease_until"] > self._now():
-                    continue
-                owned = [a for a in attempts if a["unit_id"] == row["unit_id"]]
+            columns = TABLES["units"][1]
+            raw_rows = connection.execute(
+                f"SELECT {','.join(columns)} FROM units "
+                "WHERE state='running' AND lease_until<=? ORDER BY rowid",
+                (now,),
+            )
+            for raw in raw_rows:
+                row = {name: strict_json(raw[name]) if name in JSON_COLUMNS and raw[name] is not None
+                       else raw[name] for name in columns}
+                owned = self._attempts_for_unit_rows(connection, row["unit_id"])
                 for attempt in owned:
                     if attempt["state"] == "prepared":
                         attempt["state"] = "not_sent"
@@ -900,10 +1068,10 @@ class WorkStore:
             self._admission(connection)
             if self._unresolved(connection):
                 raise WorkUnitError("ATTEMPT_UNKNOWN", "Transient retry requires native reconciliation first")
-            rows, attempts = [], list(self._rows(connection, "attempts"))
+            rows = []
             for name in unit_ids:
                 row = self._row(connection, "units", name)
-                unit_attempts = [attempt for attempt in attempts if attempt["unit_id"] == name]
+                unit_attempts = self._attempts_for_unit_rows(connection, name)
                 # ATTEMPT_UNKNOWN/UNIT_HANDLER_FAILED with no dispatched work is
                 # a scheduler-side failure, not a permanent semantic failure.
                 no_unsettled = all(attempt["state"] in {"settled", "not_sent"} for attempt in unit_attempts)
@@ -958,6 +1126,51 @@ class WorkStore:
         return {"admitted": len(originals), "terminal": len(values),
                 **{state: sum(value["state"] == state for value in values.values()) for state in sorted(DISPOSITIONS)},
                 "pending": sorted(set(originals) - set(values)), "documents": values}
+
+    def compact_status(self, *, include_units=False):
+        """Cheap projection for scheduling and default status reads."""
+        if type(include_units) is not bool:
+            raise WorkUnitError("CONTRACT_INVALID", "Compact status unit flag must be boolean")
+        with self._tx() as connection:
+            unit_counts = {state: count for state, count in connection.execute(
+                "SELECT state,COUNT(*) FROM units GROUP BY state")}
+            attempt_counts = {state: count for state, count in connection.execute(
+                "SELECT state,COUNT(*) FROM attempts GROUP BY state")}
+            usage = tuple(connection.execute(
+                "SELECT COALESCE(SUM(json_extract(usage,'$.prompt_tokens')),0),"
+                "COALESCE(SUM(json_extract(usage,'$.completion_tokens')),0),"
+                "COALESCE(SUM(json_extract(usage,'$.total_tokens')),0) "
+                "FROM attempts WHERE state='settled'").fetchone())
+            cancelled = self._meta(connection, "cancel")
+            retry_count = connection.execute("SELECT COUNT(*) FROM retry_claims").fetchone()[0]
+            revision = connection.execute(
+                "SELECT CASE WHEN value IS NULL OR value='null' THEN 0 "
+                "ELSE json_extract(value,'$.revision') END "
+                "FROM meta WHERE key='plan'").fetchone()[0]
+            units = self._rows(connection, "units") if include_units else []
+        total = sum(unit_counts.values())
+        unknown = attempt_counts.get("dispatched", 0) + attempt_counts.get("observed", 0)
+        held = sum(count for state, count in attempt_counts.items()
+                   if state not in {"settled", "not_sent"})
+        states = {state for state, count in unit_counts.items() if count}
+        graph_state = ("cancelling" if unknown else "cancelled") if cancelled else (
+            "completed" if total and states == {"validated"} else
+            "failed" if states & {"failed", "unknown"} else
+            "running" if "running" in states else "ready")
+        observed_usage = {"prompt_tokens": usage[0], "completion_tokens": usage[1],
+                          "total_tokens": usage[2]}
+        return {"schema": CONTRACT, "manifest_sha256": self.manifest_sha256,
+                "plan_sha256": None, "graph_state": graph_state,
+                "plan_revision": revision, "cancel_requested": cancelled,
+                "units": units, "unit_count": total,
+                "unit_counts": {state: unit_counts.get(state, 0) for state in
+                                ("ready", "blocked", "running", "validated", "failed", "unknown", "cancelled")},
+                "unknown_attempts": unknown,
+                "settled_attempts": attempt_counts.get("settled", 0),
+                "known_usage": None if unknown else observed_usage,
+                "known_usage_observed": observed_usage,
+                "format_reanswers": retry_count,
+                "held_reservation_count": held, "held_reservations": []}
 
     def status(self):
         with self._tx() as connection:

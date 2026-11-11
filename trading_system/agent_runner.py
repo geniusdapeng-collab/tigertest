@@ -686,6 +686,34 @@ def doctor(state: Path, mode: str) -> dict:
     return value
 
 
+_FAST_STATUS_SCHEMA = "tiger.research-status-summary/v1"
+
+
+def _fast_status_projection(state: Path, run_id: str, observed: str) -> dict | None:
+    path = state / "runs" / run_id / "research-status-summary.json"
+    if not path.exists():
+        return None
+    value = read_json(path.parent, path.name)
+    pointer = committed_pointer(state, run_id)
+    if (type(value) is not dict
+            or set(value) != {"schema", "run_id", "status", "receipt_sha256", "projection"}
+            or value["schema"] != _FAST_STATUS_SCHEMA
+            or value["run_id"] != run_id
+            or value["status"] != observed
+            or not isinstance(value["receipt_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", value["receipt_sha256"]) is None
+            or pointer is None
+            or pointer["run_id"] != run_id
+            or pointer["receipt_sha256"] != value["receipt_sha256"]
+            or type(value["projection"]) is not dict
+            or value["projection"].get("run_id") != run_id
+            or value["projection"].get("verified_receipt") is not True):
+        raise EvidenceInvalid("RESULT_INVALID", "Fast research status projection is invalid")
+    projection = dict(value["projection"])
+    projection["basis"] = "fast_projection"
+    return projection
+
+
 def _research_status_projection(state: Path, run_id: str, observed: str, *,
                                 verification: dict | None = None,
                                 raw: dict | None = None,
@@ -702,7 +730,7 @@ def _research_status_projection(state: Path, run_id: str, observed: str, *,
             from .research_work import work_manifest
             from .tasks.store import WorkStore
             store = WorkStore.open(tasks, work_manifest(admission), verify_checks=False)
-            work_status = store.status()
+            work_status = store.compact_status()
         except (OSError, EvidenceInvalid, KeyError, TypeError, ValueError):
             work_status = {
                 "graph_state": "unknown", "units": [], "unknown_attempts": 0,
@@ -758,27 +786,39 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
             data = dict(observation)
             verification = None
             raw = None
+            fast_research_status = None
             if observed in {"completed", "completed_degraded"}:
                 try:
-                    verification = verify_run(state, run_id, current_source=None)
-                    admission = read_json(state / "runs" / run_id, "admission.json")
-                    compact = admission["clock"]["run_date"].replace("-", "")
-                    result = read_json(state / "runs" / run_id,
-                                       f"work/reports/result_{compact}.json")
-                    raw = result.get("raw")
-                    if not isinstance(raw, dict):
-                        raise EvidenceInvalid("RESULT_INVALID", "Verified result raw is invalid")
+                    fast_research_status = _fast_status_projection(state, run_id, observed)
                 except EvidenceInvalid:
-                    verification = None
-                    raw = None
-                    data["verification_error"] = {
-                        "code": "COMPLETION_PROOF_UNVERIFIED",
-                        "message": "Observed completion is not independently verifiable.",
-                    }
-            data["research_status"] = _research_status_projection(
+                    raise
+                if fast_research_status is None:
+                    try:
+                        verification = verify_run(state, run_id, current_source=None)
+                        admission = read_json(state / "runs" / run_id, "admission.json")
+                        compact = admission["clock"]["run_date"].replace("-", "")
+                        result = read_json(state / "runs" / run_id,
+                                           f"work/reports/result_{compact}.json")
+                        raw = result.get("raw")
+                        if not isinstance(raw, dict):
+                            raise EvidenceInvalid("RESULT_INVALID", "Verified result raw is invalid")
+                    except EvidenceInvalid:
+                        verification = None
+                        raw = None
+                        data["verification_error"] = {
+                            "code": "COMPLETION_PROOF_UNVERIFIED",
+                            "message": "Observed completion is not independently verifiable.",
+                        }
+            data["research_status"] = fast_research_status or _research_status_projection(
                 state, run_id, observed, verification=verification, raw=raw,
                 detail=request.get("detail", "summary"),
                 cursor=request.get("cursor"), limit=request.get("limit", 100))
+            if fast_research_status is not None:
+                data["completion_proof"] = {
+                    "basis": "fast_projection",
+                    "receipt_sha256": committed_pointer(state, run_id)["receipt_sha256"],
+                    "full_proof_command": "verify",
+                }
             return envelope(operation, run_id=run_id, status=observed, data=data)
         if observed not in {"completed", "completed_degraded"}:
             return failure(operation, "RUN_INCOMPLETE", "Run has no verified published completion.",
