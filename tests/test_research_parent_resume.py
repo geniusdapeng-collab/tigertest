@@ -15,7 +15,7 @@ import requests
 
 from trading_system import agent_runtime as runtime
 from trading_system.agent_evidence import (EvidenceInvalid, atomic_json, checked_root, digest,
-    json_bytes, normalize, read_bytes, read_json)
+    file_ref, json_bytes, normalize, read_bytes, read_json)
 from trading_system.redline.execution import (EvidenceWriteError, ExecutionPolicy, RuntimePaths,
     INTELLIGENCE_POLICY_ID, INTELLIGENCE_SEARCH_SOURCES)
 from trading_system.research_work import research_work_policy, attach_research_work
@@ -50,6 +50,44 @@ def prepared_parent(tmp_path):
                                       "status": "running", "error": None})
     resume.begin_parent_attempt(run, admission, policy)
     return state, run, admission, policy
+
+
+def test_parent_history_reuses_the_already_verified_event_proof(tmp_path, monkeypatch):
+    _state, run, admission, policy = prepared_parent(tmp_path)
+    proof = {"event_count": 2, "stage_count": 1, "last_event_sha256": "a" * 64,
+             "degraded": [], "evidence_refs": []}
+    (run / "parent-attempts/1/events.jsonl").write_bytes(b"{}\n")
+    monkeypatch.setattr(resume, "verify_events",
+                        lambda *_args, **_kwargs: pytest.fail("event proof was recomputed"))
+    monkeypatch.setattr("trading_system.research_replay.read_io_journal",
+                        lambda *_args, **_kwargs: [])
+
+    class Store:
+        @classmethod
+        def open(cls, *_args, **_kwargs):
+            return cls()
+
+        def verify(self):
+            return {"last_event_sha256": "b" * 64}
+
+    monkeypatch.setattr("trading_system.tasks.store.WorkStore", Store)
+    value = resume._history_value(run, admission, policy, proof=proof)
+    assert value["event_tail_sha256"] == proof["last_event_sha256"]
+
+
+def test_parent_history_verification_reuses_prepared_value(tmp_path, monkeypatch):
+    _state, run, admission, policy = prepared_parent(tmp_path)
+    (run / "events.jsonl").write_bytes(b"{}\n")
+    value = {
+        "schema": resume.HISTORY,
+        "events_ref": file_ref(run, "events.jsonl", "application/x-ndjson"),
+    }
+    atomic_json(run, "research-parent-history.json", value)
+    reference = file_ref(run, "research-parent-history.json", resume.HISTORY)
+    monkeypatch.setattr(resume, "_history_value",
+                        lambda *_args, **_kwargs: pytest.fail("history was recomputed"))
+    assert resume.verify_parent_history(
+        run, admission, policy, reference, expected=value) == value
 
 
 def parent_context(run, admission, policy):

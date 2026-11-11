@@ -10,6 +10,8 @@
 
 修复默认 `us-public-intelligence-paper-v2` 在大文档工作图和 7,200 秒业务预算下暴露的六项运行问题。改动仍只服务公开数据、本地 paper 研究和可恢复执行，不开放真实券商、实盘或交易阈值变更。
 
+真实 2,768-unit 验收又发现并修复了收尾阶段的重复证明放大，因此发布共闭环七项问题。
+
 ## 修复
 
 ### 1. 调度热路径按依赖索引领取
@@ -68,6 +70,16 @@
 - `WAIT` 不再降级为 `unknown`，也不会伪造成 BUY、HOLD 或
   `WAIT_EVIDENCE`。
 
+### 7. 收尾复用同一份完整证明
+
+- supervisor 不再在进入 `seal_and_publish` 前单独重算 parent history；发布阶段
+  先生成一次 stage proof，再将其显式传给 parent history、receipt 生成、发布前
+  verify 和发布后 readback。
+- receipt 仍逐字节核验 parent history 和 canonical events；省略的是同一锁定进程
+  内对同一批不可变证据的重复重放，不是完整性检查。
+- 回归断言确认对已准备好的 stage proof 和 parent history 不会再次调用
+  `verify_events` 或完整 history proof。
+
 ## 兼容与回滚
 
 - WorkStore schema 版本保持 `1`；只新增可重复创建的查询索引，不改事件或
@@ -91,6 +103,7 @@
 - Parent resume/public recovery/followup：`31 passed`。
 - Agent runtime/evidence/audit：`112 passed`。
 - Node CLI、workflow client 与新增 wait 重试：`40 passed`。
+- Parent-history proof 复用回归：`17 passed`；Agent runtime：`43 passed`。
 
 本地验证证明代码、协议、证据链和夹具行为；真实 v2 长运行、候选 CI、
 `main` 合并和 Release 字节回读由任务回执继续记录。

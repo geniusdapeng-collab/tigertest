@@ -1013,7 +1013,9 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
 
 def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
                current_source: Path | None = SOURCE_ROOT,
-               prepared_summary: dict | None = None) -> dict:
+               prepared_summary: dict | None = None,
+               prepared_stages: dict | None = None,
+               prepared_parent_history: dict | None = None) -> dict:
     if not isinstance(run_id, str) or not RUN_RE.fullmatch(run_id):
         raise EvidenceInvalid("INVALID_REQUEST", "Invalid run identity")
     run = state / "runs" / run_id
@@ -1097,7 +1099,8 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
             or not isinstance(log.get("limit_bytes"), int) or log_size > log["limit_bytes"]
             or log.get("diagnostics_are_not_business_receipts") is not True):
         raise EvidenceInvalid("RESULT_INVALID", "Bounded diagnostic log differs")
-    stages = verify_events(run, run_id, policy["stages"])
+    stages = (verify_events(run, run_id, policy["stages"])
+              if prepared_stages is None else prepared_stages)
     if receipt.get("event_tail_sha256") != stages["last_event_sha256"]:
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Receipt event tail differs")
     status = "completed_degraded" if stages["degraded"] else "completed"
@@ -1147,7 +1150,10 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
                if prepared_summary is None else prepared_summary)
     if research_history is not None:
         from .research_resume import verify_parent_history
-        verify_parent_history(run, admission, policy, research_history)
+        verify_parent_history(
+            run, admission, policy, research_history,
+            expected=prepared_parent_history,
+        )
     if receipt["artifacts"] != engine.get("artifacts") or receipt.get("summary") != summary:
         raise EvidenceInvalid("RESULT_INVALID", "Receipt and actual business artifacts differ")
     if require_committed and committed_pointer(state, run_id) != pointer:
@@ -1307,9 +1313,11 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
     stages = verify_events(run, run.name, policy["stages"])
     summary = business_summary(run, admission, engine["artifacts"])
     research_history = None
+    research_history_value = None
     if policy.get("research_work") is not None:
         from .research_resume import publish_parent_completion
-        research_history = publish_parent_completion(run, admission, policy)
+        research_history, research_history_value = publish_parent_completion(
+            run, admission, policy, proof=stages)
     materialize_version(state, run, admission)
     receipt = {
         "schema": "tiger.receipt.v1", "run_id": run.name, "profile": policy["profile"],
@@ -1345,8 +1353,14 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
             raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Existing receipt differs")
     else:
         atomic_json(run, "receipt.json", receipt, exclusive=True)
-    prepared = verify_run(state, run.name, require_committed=False, current_source=None,
-                          prepared_summary=summary)
+    prepared = verify_run(
+        state, run.name, require_committed=False, current_source=None,
+        prepared_summary=summary, prepared_stages=stages,
+        prepared_parent_history=research_history_value,
+    )
     check_account_parent()
     publish_pointer(prepared["pointer"])
-    return finalize(verify_run(state, run.name, current_source=None, prepared_summary=summary))
+    return finalize(verify_run(
+        state, run.name, current_source=None, prepared_summary=summary,
+        prepared_stages=stages, prepared_parent_history=research_history_value,
+    ))

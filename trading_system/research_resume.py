@@ -390,7 +390,7 @@ def _verify_partial_events(run, attempt, policy):
         previous = row["event_sha256"]
 
 
-def _history_value(run, admission, policy):
+def _history_value(run, admission, policy, *, proof=None):
     from .research_replay import read_io_journal
     current = current_parent_attempt(run, admission)
     if current is None:
@@ -419,7 +419,11 @@ def _history_value(run, admission, policy):
                                ("stage", "stage_index", "call_index", "method", "input_ref", "output_ref", "error_ref"))):
                     raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Provider replay changed the original observation")
             prior_io[(number, row["sha256"])] = row
-    proof = verify_events(run, run.name, policy["stages"], event_relative=current["events_path"])
+    if proof is None:
+        proof = verify_events(run, run.name, policy["stages"], event_relative=current["events_path"])
+    elif type(proof) is not dict or not {
+            "event_count", "stage_count", "last_event_sha256", "degraded", "evidence_refs"} <= set(proof):
+        raise EvidenceInvalid("RESULT_INVALID", "Parent event proof is invalid")
     current_io = read_io_journal(run, current["number"])
     by_call = {(row["stage_index"], row["call_index"]): row for row in current_io if row["kind"] == "end"}
     events = [strict_json(line) for line in read_bytes(run, current["events_path"]).splitlines()]
@@ -446,18 +450,18 @@ def _history_value(run, admission, policy):
         "failed_attempts_remain_failures": True}
 
 
-def publish_parent_completion(run, admission, policy):
+def publish_parent_completion(run, admission, policy, *, proof=None):
     _require(policy)
-    value = _history_value(run, admission, policy)
+    value = _history_value(run, admission, policy, proof=proof)
     _write_equal(run, "research-parent-history.json", json_bytes(value))
     _write_equal(run, "events.jsonl", verify_ref(run, value["events_ref"], schema="application/x-ndjson"))
-    return file_ref(run, "research-parent-history.json", HISTORY)
+    return file_ref(run, "research-parent-history.json", HISTORY), value
 
 
-def verify_parent_history(run, admission, policy, reference):
+def verify_parent_history(run, admission, policy, reference, *, expected=None):
     _require(policy)
     value = strict_json(verify_ref(run, reference, schema=HISTORY))
-    expected = _history_value(run, admission, policy)
+    expected = _history_value(run, admission, policy) if expected is None else expected
     if value != expected or read_bytes(run, "events.jsonl") != verify_ref(run, value["events_ref"], schema="application/x-ndjson"):
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Canonical parent history differs from its completed attempt")
     return value
