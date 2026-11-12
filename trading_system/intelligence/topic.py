@@ -514,7 +514,9 @@ class TopicModelClient(DeepSeekRequiredClient):
         observation = TransportObservation() if self._topic_transport else None
         try:
             if observation is None:
-                response, body_hash = super()._post_json(path, request)
+                from ..llm.deepseek_required import LEGACY_CHAT_READ_TIMEOUT
+                response, body_hash = super()._post_json(
+                    path, request, _chat_read_timeout=LEGACY_CHAT_READ_TIMEOUT)
             else:
                 from ..llm.deepseek_required import CHAT_RESPONSE_DEADLINE
                 with observation.deadline(execution.store.job(execution.job_id), CHAT_RESPONSE_DEADLINE,
