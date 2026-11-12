@@ -71,5 +71,5 @@
   "regression": {
     "command": ".venv/bin/python -B -m pytest tests/test_deepseek_required.py tests/test_task_child_context.py -q"
   },
-  "notes": "429 只允许一次有界重试；并发发送上限为 8，仍高于旧 4-worker 上限。"
+  "notes": "429 只允许一次有界重试；并发发送上限为 8，仍高于旧 4-worker 上限；读取超时 240 秒、总响应预算 900 秒。"
 }

@@ -97,7 +97,10 @@ def test_chat_transport_unknown_has_one_bounded_retry(configured, monkeypatch):
 
 
 def test_chat_rate_limit_has_one_bounded_retry(configured, monkeypatch):
-    from trading_system.llm.deepseek_required import DeepSeekRequiredClient
+    from trading_system.llm.deepseek_required import (
+        CHAT_READ_TIMEOUT, CHAT_RESPONSE_DEADLINE, DeepSeekRequiredClient,
+    )
+    assert CHAT_READ_TIMEOUT == 240.0 and CHAT_RESPONSE_DEADLINE == 900.0
     client = DeepSeekRequiredClient(configured)
     calls = []
     sleeps = []

@@ -88,6 +88,8 @@
   同一 wire 不重复生成 `dispatch_started` 事件。
 - 全局并发 chat 发送上限为 8，仍高于旧的 4-worker 上限，但避免 16 个文档
   worker 同时冲击提供方 rate limit。
+- 单个 chat envelope 的读取超时提高到 240 秒、总响应预算提高到 900 秒，
+  避免高负载下仍在持续传输的 200 响应被旧 480 秒截止误判为未知 usage。
 - 重试后仍收到完整非 2xx envelope 时，按“未产生模型 completion”的零 usage
   结算，只影响本单元，不再让全局未决检查把其他并发单元级联打成
   `ATTEMPT_UNKNOWN`。
