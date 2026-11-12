@@ -10,8 +10,8 @@ export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
 export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
-  frameBytes: 131072, requestMs: 60000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
-  terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 7500 });
+  frameBytes: 131072, requestMs: 60000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
+  terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 14400 });
 const RUN_ID = /^run-[0-9a-f]{32}$/u;
 const TERMINAL_OK = new Set(["completed", "completed_degraded"]);
 const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
@@ -511,6 +511,7 @@ export function abortableDelay(ms, signal) {
 export async function waitForReceipt(runId, options, { operation = "run", signal, waitMs = LIMITS.waitMs, pollMs = LIMITS.pollMs,
   invoke = invokeWorkflow } = {}) {
   const deadline = Date.now() + waitMs;
+  let retryDelay = pollMs;
   try {
     validateRequest("status", { run_id: runId });
     for (;;) {
@@ -518,10 +519,24 @@ export async function waitForReceipt(runId, options, { operation = "run", signal
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new WorkflowError("TIMEOUT", "Waiting for the existing run exceeded the observation deadline.");
       const current = await invoke("status", { run_id: runId }, options, { signal, timeoutMs: Math.min(remaining, LIMITS.requestMs) });
-      if (!current.operation_ok) return current;
+      if (!current.operation_ok) {
+        const transientObservation = current.error?.code === "TIMEOUT" || current.error?.retryable === true;
+        if (!transientObservation) return current;
+        await abortableDelay(Math.min(retryDelay, Math.max(1, deadline - Date.now())), signal);
+        retryDelay = Math.min(retryDelay * 2, 30000);
+        continue;
+      }
+      retryDelay = pollMs;
       if (TERMINAL_OK.has(current.status)) {
-        const receipt = await invoke("receipt", { run_id: runId }, options, { signal, timeoutMs: Math.min(Math.max(1, deadline - Date.now()), LIMITS.requestMs) });
-        return receipt;
+        for (;;) {
+          const receipt = await invoke("receipt", { run_id: runId }, options,
+            { signal, timeoutMs: Math.min(Math.max(1, deadline - Date.now()), LIMITS.receiptMs) });
+          if (receipt.operation_ok) return receipt;
+          const transientProof = receipt.error?.code === "TIMEOUT" || receipt.error?.retryable === true;
+          if (!transientProof) return receipt;
+          await abortableDelay(Math.min(retryDelay, Math.max(1, deadline - Date.now())), signal);
+          retryDelay = Math.min(retryDelay * 2, 30000);
+        }
       }
       if (!["accepted", "running"].includes(current.status)) {
         const failed = failureEnvelope(operation, new WorkflowError("RUN_INCOMPLETE", "The existing run did not complete. Query its status; do not submit a replacement key."), runId);

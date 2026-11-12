@@ -34,21 +34,24 @@ _POLICY = {
     "retry_scope": "parent_run",
     "unknown_dispatch": "reconcile_before_send",
     "source_workers": 4,
-    "parser_workers": 2,
+    "parser_workers": 4,
     "parser_temporary_bytes": 268435456,
     "parser_queue": "original_deadline",
-    "document_workers": 4,
-    "analysis_workers": 3,
+    "document_workers": 16,
+    "analysis_workers": 1,
     "max_active_input_tokens": 1048576,
     "max_active_memory_bytes": 3221225472,
     "lease_seconds": 120,
     "resume_identity": "same_run_source_input_account_deadline",
 }
 
-_LEGACY_POLICY = {key: value for key, value in _POLICY.items()
+_PREVIOUS_POLICY = {**_POLICY, "parser_workers": 2, "document_workers": 4,
+                    "analysis_workers": 3}
+_LEGACY_POLICY = {key: value for key, value in _PREVIOUS_POLICY.items()
                   if key not in {"segment_contract", "segment_max_count",
                                  "segment_input_token_limit",
                                  "segment_context_characters"}}
+_ACCEPTED_POLICIES = (_POLICY, _PREVIOUS_POLICY, _LEGACY_POLICY)
 
 
 def research_work_policy(*, legacy: bool = False) -> dict:
@@ -56,7 +59,7 @@ def research_work_policy(*, legacy: bool = False) -> dict:
 
 
 def validate_research_work_policy(value) -> dict:
-    if value not in (_POLICY, _LEGACY_POLICY):
+    if value not in _ACCEPTED_POLICIES:
         raise ValueError("RESEARCH_WORK_POLICY_MISMATCH")
     return deepcopy(value)
 

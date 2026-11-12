@@ -361,14 +361,38 @@ def test_actual_transport_hook_requires_exact_wire_and_dispatches_once(observed,
         assert changed.value.code == "ATTEMPT_MISMATCH" and store.status()["unknown_attempts"] == 0
         child.model_transport_dispatch(inputs["request"])
         assert store.status()["unknown_attempts"] == 1
-        with pytest.raises(WorkUnitError):
-            child.model_transport_dispatch(inputs["request"])
+        child.model_transport_dispatch(inputs["request"])
+        assert store.status()["unknown_attempts"] == 1
         raise RequiredModelUnavailable("NETWORK_TIMEOUT")
     with pytest.raises(RequiredModelUnavailable):
         with child.step("clean.llm_semantic", {}):
             child.call_io("model.deepseek.chat", inputs, invoke_hook)
     store.fail(lease, "NETWORK_TIMEOUT", retryable=False)
     assert store.status()["unknown_attempts"] == 1 and store.status()["held_reservations"]
+
+
+def test_rate_limit_retry_is_one_durable_dispatch_and_terminal_zero_usage(observed, tmp_path, monkeypatch):
+    store, lease, child = child_fixture(tmp_path, observed)
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        return Response({"error": "rate limited"}, status=429)
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda _seconds: None)
+    with pytest.raises(RequiredModelUnavailable):
+        with child.step("clean.llm_semantic", {"TEST_FIXTURE": "whole original"}):
+            invoke(child)
+    attempts = store.attempts_for_unit("extract")
+    assert len(calls) == 5
+    assert len(attempts) == 1 and attempts[0]["state"] == "settled"
+    assert attempts[0]["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert store.status()["unknown_attempts"] == 0
+    with store._tx() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM events WHERE json_extract(payload,'$.kind')='dispatch_started'"
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("window", ["before_retry_cas", "after_retry_cas", "after_retry_prepare"])

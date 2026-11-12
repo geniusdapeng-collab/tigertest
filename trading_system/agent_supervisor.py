@@ -558,9 +558,6 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
             atomic_json(run, "process-exit.json", process_receipt, exclusive=True)
         elif _policy.get("research_work") is not None:
             read_json(run, "process-exit.json")
-        if _policy.get("research_work") is not None:
-            from trading_system.research_resume import publish_parent_completion
-            publish_parent_completion(run, admission, _policy)
         verified = seal_and_publish(state, run, deadline=deadline)
         atomic_json(run, "status.json", {"schema": "tiger.status.v1", "run_id": run_id,
                                         "status": verified["status"], "error": None})

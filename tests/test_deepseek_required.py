@@ -75,7 +75,7 @@ def configured(monkeypatch):
     return RecordingExecution()
 
 
-def test_chat_transport_unknown_has_one_bounded_retry(configured, monkeypatch):
+def test_chat_transport_unknown_has_four_bounded_retries(configured, monkeypatch):
     from trading_system.llm.deepseek_required import DeepSeekRequiredClient
     from trading_system.redline.model_diagnostics import RequiredModelUnavailable
     client = DeepSeekRequiredClient(configured)
@@ -93,7 +93,44 @@ def test_chat_transport_unknown_has_one_bounded_retry(configured, monkeypatch):
     assert calls == ["/chat/completions", "/chat/completions"]
     with pytest.raises(RequiredModelUnavailable):
         client._post_chat_bounded({"model": "deepseek-flash"})
-    assert len(calls) == 3
+    assert len(calls) == 6
+
+
+def test_chat_rate_limit_has_bounded_retries(configured, monkeypatch):
+    from trading_system.llm.deepseek_required import (
+        CHAT_READ_TIMEOUT, CHAT_RESPONSE_DEADLINE, DeepSeekRequiredClient,
+    )
+    assert CHAT_READ_TIMEOUT == 240.0 and CHAT_RESPONSE_DEADLINE == 900.0
+    client = DeepSeekRequiredClient(configured)
+    calls = []
+    sleeps = []
+
+    def post(_client, path, _request):
+        calls.append(path)
+        if len(calls) == 1:
+            raise RequiredModelUnavailable("HTTP_ERROR", http_status=429)
+        return {"ok": True}, "a" * 64
+
+    monkeypatch.setattr(DeepSeekRequiredClient, "_post_json", post)
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", sleeps.append)
+    assert client._post_chat_bounded({"model": "deepseek-flash"}) == ({"ok": True}, "a" * 64)
+    assert calls == ["/chat/completions", "/chat/completions"]
+    assert sleeps == [5.0]
+
+
+def test_chat_rate_limit_retries_four_times_then_stops(configured, monkeypatch):
+    from trading_system.llm.deepseek_required import DeepSeekRequiredClient
+    client = DeepSeekRequiredClient(configured)
+    sleeps = []
+
+    def post(_client, _path, _request):
+        raise RequiredModelUnavailable("HTTP_ERROR", http_status=429)
+
+    monkeypatch.setattr(DeepSeekRequiredClient, "_post_json", post)
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", sleeps.append)
+    with pytest.raises(RequiredModelUnavailable):
+        client._post_chat_bounded({"model": "deepseek-flash"})
+    assert sleeps == [5.0, 10.0, 20.0, 30.0]
 
 
 def test_required_chat_binds_keyless_request_and_actual_response(configured, monkeypatch):
@@ -241,16 +278,18 @@ def test_trusted_configuration_fails_closed(configured, monkeypatch, name, value
 
 
 @pytest.mark.parametrize("status", [301, 400, 401, 402, 403, 408, 429, 500, 504])
-def test_http_error_never_retries_or_leaks_body(configured, monkeypatch, status):
+def test_http_error_retry_boundary_and_no_body_leak(configured, monkeypatch, status):
     seen = []
     response = Response(body=f"{KEY} accessToken=private-token".encode(), status=status)
     monkeypatch.setattr(requests, "post", lambda *a, **k: seen.append(1) or response)
+    monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", lambda _seconds: None)
     client = DeepSeekRequiredClient(configured)
     with pytest.raises(LLMUnavailable) as error:
         client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)
     assert str(status) in str(error.value)
     assert KEY not in str(error.value) and "private-token" not in str(error.value)
-    assert len(seen) == 1 and not client.receipts and response.closed
+    assert len(seen) == (5 if status == 429 else 1)
+    assert not client.receipts and response.closed
 
 
 @pytest.mark.parametrize("change", [

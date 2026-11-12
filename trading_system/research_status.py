@@ -22,6 +22,7 @@ STATE_LABELS = {
     "completed": "流程已结束", "failed": "流程失败", "cancelling": "停止调度，待核对在途调用",
     "cancelled": "调度已取消", "partial": "必需证据仍有缺口", "sufficient": "必需证据充分",
     "qualified": "已形成合格决策", "WAIT_EVIDENCE": "等待证据",
+    "WAIT": "等待信号",
     "unverified": "尚未核验账户提交", "pending_publication": "等待账户发布核验",
     "committed": "账户已提交", "blocked": "账户动作受阻",
     "BUY": "纸面买入计划", "HOLD": "合格观察", "PENDING_RESEARCH": "待补查",
@@ -292,6 +293,12 @@ def project_research_status(raw=None, *, work_status=None, document_dispositions
     if any(row.get("state") not in _UNITS for row in units.values()):
         raise ValueError("RESEARCH_STATUS_UNIT_STATE_INVALID")
     unit_counts = Counter(row["state"] for row in units.values())
+    compact_counts = work.get("unit_counts")
+    if compact_counts is not None:
+        if (type(compact_counts) is not dict or set(compact_counts) != set(_UNITS)
+                or any(_count(compact_counts[state]) != compact_counts[state] for state in _UNITS)):
+            raise ValueError("RESEARCH_STATUS_UNIT_COUNTS_INVALID")
+        unit_counts = Counter({state: compact_counts[state] for state in _UNITS})
     unknown_attempts = _count(work.get("unknown_attempts", 0))
     cancel_requested = work.get("cancel_requested", False)
     if type(cancel_requested) is not bool or type(report_ready) is not bool:
@@ -315,8 +322,11 @@ def project_research_status(raw=None, *, work_status=None, document_dispositions
     else:
         process_state = {"completed": "work_completed", "failed": "failed", "running": "running",
                          "ready": "ready", "cancelling": "cancelling", "cancelled": "cancelled"}.get(graph_state, "unknown")
+    recorded_action = raw.get("action")
     if evidence_state == "partial" or any(row["state"] == "WAIT_EVIDENCE" and row["in_frozen_frontier"] for row in cards):
         decision_state = "WAIT_EVIDENCE"
+    elif recorded_action == "WAIT" and model_completed:
+        decision_state = "WAIT"
     elif evidence_state == "sufficient" and model_completed:
         decision_state = "qualified"
     else:
@@ -362,7 +372,8 @@ def project_research_status(raw=None, *, work_status=None, document_dispositions
             "account": {"state": account_state, "pointer": deepcopy(checked["pointer"]) if checked else None}},
         "observation": {"state": observation_state, "cancelling_observation_stops_scheduler": False},
         "scheduling": {"cancel_requested": cancel_requested, "unknown_attempts": unknown_attempts},
-        "counts": {"units": {"total": len(units) if work_status is not None else None,
+        "counts": {"units": {"total": (work.get("unit_count", len(units)) if compact_counts is not None
+                                      else len(units)) if work_status is not None else None,
                              **{key: unit_counts[key] if work_status is not None else None for key in _UNITS}},
             "documents": _document_counts(document_dispositions),
             "securities": {"total": len(cards), "buy": security_counts["BUY"], "qualified_hold": security_counts["HOLD"],

@@ -132,9 +132,9 @@ test("CLI input files with spaces/nonASCII work and failed status is only a quer
   const value = envelope(await proc.closed, 0); assert.equal(value.status, "failed"); assert.equal(value.summary, null);
 });
 
-test("CLI wait covers the 7200-second business budget and rejects beyond its margin", async (t) => {
-  assert.equal(parseArgs(["run", "--wait", "--wait-timeout-seconds", "7200"]).waitMs, 7_200_000);
-  assert.throws(() => parseArgs(["run", "--wait", "--wait-timeout-seconds", "7501"]),
+test("CLI wait covers the business deadline plus bounded receipt proof", async (t) => {
+  assert.equal(parseArgs(["run", "--wait", "--wait-timeout-seconds", "14400"]).waitMs, 14_400_000);
+  assert.throws(() => parseArgs(["run", "--wait", "--wait-timeout-seconds", "14401"]),
     (error) => error.code === "INVALID_REQUEST");
 });
 
