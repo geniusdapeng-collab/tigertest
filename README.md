@@ -7,7 +7,7 @@
 **No prediction. Process, discipline, audit.（别人预测市场，我们执行纪律。）**
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-9A7B2D)](LICENSE)
-[![GitHub](https://img.shields.io/badge/repo-workroom--tiger-1B2A4E)](https://github.com/workloom-ai/workroom-tiger)
+[![GitHub](https://img.shields.io/badge/repo-workroom--tiger-1B2A4E)](https://github.com/geniusdapeng-collab/workroom-tiger)
 
 </div>
 
@@ -58,7 +58,7 @@
 1. **期望值思维替代涨跌判断。** 系统不回答「明天涨还是跌」，只回答「当前这笔交易的风险回报比是否值得用 0.8% 的净值去交换」。MRS 许可、SHS 主线、ICS 景气、TSS 买点，四道闸门过滤的不是"会涨的股票"，而是**值得承担风险的机会**——MRS*<4 的市场，空仓本身就是收益。
 2. **纪律的价值在于它不可被破坏。** 人类基金经理的纪律毁于情绪与疲劳，模型的"纪律"毁于幻觉与谄媚。本系统的纪律存在于代码与围栏引擎中：亏损 1R 必走、单票不超 20%、数据不实立即停手——没有例外通道，没有"这次听我的"。
 3. **可审计性是机构化的入场券。** 桥水们真正的壁垒不是策略，是**流程**：每一步有依据、有留痕、可复盘、可迭代。老虎交易把这套流程开源化：21 个环节逐一验收点名，缺一环即运行事故；每个决策都能回放到当时的输入、数据版本与规则版本。
-4. **承认不知道，比假装知道更值钱。** LLM 不可用时透传披露，行情源断供时诚实失败，参数不显著时保持默认——系统为「不知道」设计了正式出路，而不是用编造掩盖。**宁可不答，不可错答；宁可不交易，不用假数据交易。**
+4. **承认不知道，比假装知道更值钱。** 旧演示/禁用模型配置将模型缺失透传披露；真实模型必需配置在模型不可用时停止整个任务，禁止降级交付。行情源断供时诚实失败，参数不显著时保持默认——系统为「不知道」设计了正式出路，而不是用编造掩盖。**宁可不答，不可错答；宁可不交易，不用假数据交易。**
 
 ---
 
@@ -84,7 +84,7 @@ LLM 的本质是**高维语义压缩器**：它擅长理解、归纳、生成、
 
 ### 模型的失败，需要一条设计好的出路
 
-前沿系统与玩具系统的分水岭，不在于成功时多聪明，而在于**失败时多诚实**。我们为 LLM 的每一类失败设计了正式出路：不可用 → 透传披露（🔁透传 + 原因留痕），禁止降档重答、禁止规则伪造语义分；语义置信不足 → 熔断拒答而非猜测；数据源断供 → 诚实失败并告警，绝不回退合成数据。`main.py --demo` 实测里 5 个 LLM 环节全部如实透传——**一个敢于承认"我不知道"的系统，才配得上被信任。** 这也是我们把「宁可不答，不可错答」写成金融降级铁律的原因。
+前沿系统与玩具系统的分水岭，不在于成功时多聪明，而在于**失败时多诚实**。旧演示/禁用模型配置允许不可用时透传披露（🔁透传 + 原因留痕）；`us-public-model-required-paper-v1` 则要求真实模型，任何模型不可用、空结果或透传都停止整个任务，不发布研究成功。所有配置均禁止降档重答、禁止规则伪造语义分；数据源断供时诚实失败，绝不回退合成数据。`main.py --demo` 的五阶段透传是历史离线演示，不是模型研究验收。
 
 ### 渐进式自治：AI 权力的授予必须比能力更谨慎
 
@@ -147,10 +147,10 @@ LLM 的本质是**高维语义压缩器**：它擅长理解、归纳、生成、
 
 ### AI 分工与工程红线：幻觉永远碰不到交易按钮
 
-- **5 个 LLM 环节全部登记在案**：clean.llm_semantic / tech.sentiment / tech.risk / sector.narrative / decision.debate，由 `scene_policy.py` 启动期校验覆盖——**环节未登记即配置事故，不进运行期**；
-- **LLM 不可逆**：没有任何"模型挂了就用规则编一个语义分"的回退分支。失败唯一出路是**透传披露**（🔁透传 + 原因留痕），`main.py --demo` 实测可见全部 LLM 环节如实透传而非伪造分数；
+- **5 个 LLM 环节全部登记在案**：clean.llm_semantic / tech.sentiment / tech.risk / sector.narrative / decision.debate。model-required 配置逐阶段校验实际 Flash 调用、完整输入与输出、来源和 schema；不能只靠注册表声称模型已执行；
+- **LLM 不可逆**：没有任何"模型挂了就用规则编一个语义分"的回退分支。旧演示/禁用模型配置如实透传，model-required 配置失败即停；`main.py --demo` 的透传不能计为真实模型完成；
 - **盘中零 LLM**：秒级交易决策 100% 纯规则确定性执行，LLM 负载全部落在盘前 / 盘后批量窗口（谷时算力 ×0.2，成本与稳定性的双赢）；
-- **多空辩论只影响语义分**：多方/空方研究员同证据辩论，主持官汇总分歧——辩论再激烈，开仓权仍在规则闸门手里。
+- **最终模型受风险上限约束**：旧路径的辩论只作为报告证据；model-required 的实际最终模型可选择或否决已经过风险闸门的买入，不能新增、扩大仓位或绕过数值限制。
 
 ### 迭代诚实：WFA + DSR，向回测过拟合宣战
 
@@ -181,7 +181,7 @@ LLM 的本质是**高维语义压缩器**：它擅长理解、归纳、生成、
 金融场景的成本与可靠性双重要求，由底座通用模型路由承载：
 
 - **金融场景路由表**（`governance/bundles/trading/model-policy.yml`）：新闻标注 / 科技舆情 L2 盘前谷时批量；板块叙事评分 / 多空辩论 L3 旗舰档（`noDowngrade` + `fallback: passthrough-disclose`）；
-- **金融降级铁律**：语义归 LLM，数值归规则；LLM 失败唯一出路是透传披露，**禁止降档重答**——宁可不答，不可错答；
+- **金融降级铁律**：语义归 LLM，数值归规则；旧配置将模型缺失透传披露，model-required 配置失败即停，均**禁止降档重答或规则代写语义**；
 - **成本可审**：每一次模型调用按场景定档、按倍率计量、按事件留痕，月度模型开支可逐场景审计。
 
 ### 白皮书十条铁律（全系统最高纪律，任何升级不得违反）
@@ -279,11 +279,17 @@ LLM 的本质是**高维语义压缩器**：它擅长理解、归纳、生成、
 
 ## 快速开始（交易内核）
 
+只通过 Codex、Qoder 等平台对话操作后端时，从 [对话操作指南](docs/TIGER-OPERATOR.md) 开始。
+Agent 会先检查环境，再按固定 CLI/MCP 提交与查询同一个任务，取得独立核验回执后汇报。
+平台配置、Qoder CLI 与桌面导入的区别见 [客户端接入指南](docs/AGENT-CLIENTS.md)；
+同一 profile 的纸面账户保持同一 state-root，日常新任务只更换逻辑幂等键。
+
 ```bash
 bash scripts/setup.sh                # 一键安装+自检（或 pip install -r requirements.txt）
 python3 -m pytest tests/ -q          # 交易内核测试（本机实测 327 passed，2026-09-19）
 python3 main.py --demo               # 离线演示（合成数据，端到端 21 环节）
-python3 main.py --universe full --top 30 --picks 8   # 生产模式（每日全市场）
+python3 main.py --universe focused --top 30 --picks 8 # 受控 v2 默认：120 只核心扫描
+python3 main.py --universe full --top 30 --picks 8    # 旧通用入口的全市场实验
 bash scripts/stack_setup.sh          # 全栈：+ WorkLoom 治理底座（Node≥24/Docker）
 
 # S6 复盘闭环与审批流
@@ -292,7 +298,20 @@ python3 main.py --review-approve <id>                    # 批准 → 次日生�
 python3 main.py --review-reject <id> --reason "..."      # 驳回（原因必填）
 ```
 
-LLM 双模驱动：自有 API（`LLM_BACKEND=api`，任何 OpenAI 兼容端点）或本地 Agent 模型（`LLM_BACKEND=local`，自动探测 Ollama / LM Studio）；不配则红线透传、绝不伪造语义分。详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。
+普通非受控旧入口保留离线演示与透传语义，详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。新的 AI 研究和官网更新必须显式使用受控 CLI/MCP 和 `us-public-intelligence-paper-v2`，按 [Agent 操作指南](docs/AGENT-CLIENTS.md) 加载仓库外受保护环境文件；模板见 [`.env.example`](.env.example)。新配置先冻结独立数值候选，再按研究问题采集登记来源、原文与附件，逐目标验证实体、事件、时间和用途并冻结证据包。缺资料的目标保留 `null` 与缺口；搜索成功不会自动获得评分或行动资格。原 `us-public-model-required-paper-v1` 和更早 profile 保留历史回放。
+
+受控 v2 默认用 `focused` 扫描池：120 只内嵌核心高流动性标的。它是稳定的广覆盖起点，
+不是美股全量，也不等于最终研究范围；运行时仍按价格、20 日成交额、历史和波动率过滤，
+再结合相对强度、均线、波动收缩和接近新高排序。产业链行情会单独并入用于板块与风险
+上下文。需要对照广扫时可用 `extended`（480 只基础池，加链上补充标的后当前为 505 只），
+需要完整证券目录时用 `full`（Nasdaq Trader 官方清单）。历史 profile 继续按其冻结源码和
+合同读取，不能把今天的池子或结果回写到旧任务。
+
+受控入口提供 `doctor / describe / run / resume / supplement / cancel / status / receipt / verify`。`resume` 只恢复同一 stopped run 的原身份、源码、策略、账户 before-state 与 deadline；`supplement` 从已核验 pending candidate 新建完整研究 admission，不复用旧证据快照或交易批准；`cancel` 只持久化调度取消请求，未知外部调用保持预留。`status` 的 `data.research_status` 分开显示流程、证据、决策和账户四轴，receipt/verify 仍必须独立通过。
+
+文本语义仍固定 `deepseek-flash` + JSON mode，官方别名于 2026-10-26 观察为 `DeepSeek-V4.1-Flash-1017`，不宣称不可变快照。每次请求使用仓库内固定官方 tokenizer 对完整序列化输入计数，并申请全部合法剩余输出窗口；thinking 由场景策略决定：清洗/舆情非思考，风险/板块叙事 high，最终多空判断 max。工具请求/Fetch/字节/轮次/时限预算与模型窗口分别管理。可选 Brave、Tavily、Exa 仅用于发现资料，不替代文本模型；官方能力见 [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/)、[Token 用量](https://api-docs.deepseek.com/zh-cn/quick_start/token_usage/) 和 [Search & Fetch](https://api-docs.deepseek.com/guides/search/)。五个模型阶段真实完整且独立校验通过才算完成；disabled、passthrough、规则语义替代或任何失败都不能交付为成功。该配置不启用 active 实验。网站的人读研究包含为什么关注、入场/失效条件、风险及来源；资金和数值为明确标识的模拟参考，富途/老虎真实操作由人执行，实际收益只来自真实成交回报。
+
+独立来源同步/短时监测、原文证据查询和离线 100 题五类合同评测见 [情报采集指南](docs/INTELLIGENCE-ACQUISITION.md)。仓内评测是 synthetic_fixture，不代表真实供应商效果或生产 SLA。
 
 ### 治理外壳三端（模拟运行态）
 
@@ -314,9 +333,11 @@ pnpm setup && pnpm preview:all
 
 ---
 
-## 面向 AI Coding Agent
+## 面向 AI Coding Agent（治理外壳开发）
 
-治理外壳对 AI Coding Agent 原生友好（继承 WorkLoom IM 底座约定）：
+以下启动和页面验证要求用于 `governance/` 治理外壳开发。仅通过 CLI/MCP 操作 Tiger 后端时，按 [对话操作指南](docs/TIGER-OPERATOR.md) 执行，无需启动治理壳或官网。
+
+治理外壳开发沿用 WorkLoom IM 底座约定：
 
 1. 进仓先读 [`governance/README.md`](governance/README.md)；全量能力清单见 `governance/docs/capability-map.md`；
 2. **首启必跑 `pnpm preview:all`**（governance 目录下），未完成视为环境初始化未完成；
@@ -340,6 +361,7 @@ pnpm setup && pnpm preview:all
 | [research/02_frontline.html](research/02_frontline.html) | 调研二：投资团队一线作业与 know-how 调研 |
 | [docs/AGENT_CENSUS.md](docs/AGENT_CENSUS.md) | Agent 普查（20 个 Agent/模块分类） |
 | [docs/DATA_HYGIENE.md](docs/DATA_HYGIENE.md) | 数据卫生纪律 |
+| [docs/INTELLIGENCE-ACQUISITION.md](docs/INTELLIGENCE-ACQUISITION.md) | 受控来源采集、逐目标证据、冻结包、同步/监测及离线评测 |
 | [docs/PUBLIC_VERIFICATION.md](docs/PUBLIC_VERIFICATION.md) | 模拟盘公开验证章程 |
 
 ## 质量与验证（本机实测 · 2026-09-19）
@@ -359,10 +381,16 @@ pnpm setup && pnpm preview:all
 
 Apache-2.0。
 
-## 桌面 Agent 接入（Codex / DeepSeek Harness）
+## 桌面 Agent 接入（Codex / Qoder / DeepSeek Harness）
 
-本仓内置桌面 Agent 入口：`node scripts/workloom-agent.mjs list`（能力清单）与
-`node scripts/workloom-agent-mcp.mjs`（stdio MCP）。接入步骤、本仓可用能力与安全边界见
-[`docs/AGENT-CLIENTS.md`](docs/AGENT-CLIENTS.md)。
+完整后端研究使用 `node scripts/tiger-agent.mjs`（固定八操作 CLI）或
+`node scripts/tiger-agent-mcp.mjs`（独立 STDIO MCP）。通过
+`node scripts/tiger-agent-config.mjs --client codex` 生成 Codex 本机项目配置，默认只读；
+Qoder CLI 与 DSH 分别选择 `--client qoder` 和 `--client dsh`。
+给外层 Agent 的流程见 [TIGER-OPERATOR.md](docs/TIGER-OPERATOR.md)，
+客户端接入与真实模型条件见 [AGENT-CLIENTS.md](docs/AGENT-CLIENTS.md)。
+
+原 `node scripts/workloom-agent.mjs list` 和 `node scripts/workloom-agent-mcp.mjs`
+保留通用能力目录；目录中的仓库只读能力不会因此获得完整研究执行权限。
 
 `list` 证明仓内接口声明可发现；可调用性与结果验证须按实际环境、提交和运行回执分别取证。治理壳的自动导览见 `governance/docs/capabilities.auto.md`，缺少独立运行证据的条目保持“未验证”。模拟运行结果不得标成真实交易或客户生产通过。

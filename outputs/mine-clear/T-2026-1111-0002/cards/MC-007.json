@@ -1,0 +1,55 @@
+{
+  "id": "MC-007",
+  "kind": "problem",
+  "level": "L3",
+  "severity": "P0",
+  "batch": 1,
+  "state": "open",
+  "title": "大运行收尾重复重放完整 parent history，错过业务截止",
+  "evidence": [
+    {
+      "type": "code",
+      "ref": "trading_system/agent_supervisor.py:562@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "6cc144f9be71a97369c5fcbeb360a2d1318ab0aa1212c6e850709d4b77cc139f",
+      "note": "supervisor 在 seal_and_publish 前先发布一次 parent history。"
+    },
+    {
+      "type": "code",
+      "ref": "trading_system/agent_runtime.py:1256@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "2c09127be0dc2871b728a84daa645087d09041e100394695054d42873780443c",
+      "note": "seal_and_publish 随即再次重算 parent history；后续 prepared/final verify 又各自重放。"
+    }
+  ],
+  "root_cause": {
+    "file": "trading_system/agent_supervisor.py",
+    "line": 562,
+    "commit": "d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+    "symbol": "supervisor"
+  },
+  "trigger_path": "真实 v2 生成 2,768 个单元后，parent history 的首次完整验证耗时约 42 分钟；同一证明在收尾中继续重复，最终于 7,200 秒截止时进入 TIMEOUT。",
+  "assertions": [
+    {
+      "kind": "sample",
+      "given": "一次已经验证的 stage proof 与该 proof 绑定的 parent history",
+      "expect": "history 构建、receipt verify 和发布后 readback 复用同一证明，不再重复调用 verify_events 或重算 history。",
+      "command": ".venv/bin/python -B -m pytest tests/test_research_parent_resume.py -k 'parent_history_reuses or parent_history_verification' -q",
+      "exec": {
+        "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
+        "args": [
+          "-B",
+          "-m",
+          "pytest",
+          "tests/test_research_parent_resume.py",
+          "-k",
+          "parent_history_reuses or parent_history_verification",
+          "-q"
+        ]
+      },
+      "last_result": "not-run"
+    }
+  ],
+  "regression": {
+    "command": ".venv/bin/python -B -m pytest tests/test_research_parent_resume.py tests/test_agent_runtime.py -q"
+  },
+  "notes": "只复用同一锁定进程内、同一批不可变证据的证明；文件与 canonical events 仍逐字节核验。"
+}

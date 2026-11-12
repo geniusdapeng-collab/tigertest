@@ -33,11 +33,20 @@ class RiskManagerAgent(BaseAgent):
 
     def execute(self, context: dict) -> list[TradePick]:
         from ..gate import pass_gates
+        from ..activity import (enabled, execution_budgeted, gate_reasons, portfolio_reservations,
+                                rejection_report, risk_group, sector_evidence)
 
         mrs: MRSResult = context["mrs"]
         sectors: list[SectorScore] = context.get("sectors", [])
         candidates: list[StockCandidate] = context.get("watchlist", [])
         chain_map: dict[str, ChainState] = context.get("chain_map", {})
+        active = enabled(context)
+        budgeted = execution_budgeted(context)
+        diagnostics = {c.ticker: {"ticker": c.ticker, "status": "candidate", "reasons": []}
+                       for c in candidates}
+        existing_gross, existing_groups, existing_tickers, incomplete_budget = (
+            portfolio_reservations(context.get("portfolio_state"), self.account)
+            if budgeted else (0.0, {}, set(), False))
 
         main_sectors = [s for s in sectors if s.in_main_pool]
         sub_sectors = [s for s in sectors if s.in_sub_pool]
@@ -62,6 +71,9 @@ class RiskManagerAgent(BaseAgent):
 
         # ---- 闸门（MRS*<4.0 或 Kill Switch 触发 → 禁新开仓）----
         if not mrs.allow_new_positions:
+            for row in diagnostics.values():
+                row.update(status="rejected", reasons=["kill_switch" if mrs.shock else "market_block"])
+            context["rejections"] = rejection_report(list(diagnostics.values()))
             context["action"] = "AVOID"
             if mrs.shock:
                 view = (f"Kill Switch 触发：{mrs.shock_reason} — 停止新开仓，"
@@ -100,9 +112,25 @@ class RiskManagerAgent(BaseAgent):
 
         for c in candidates:
             # 所属板块 SHS：优先产业链映射 ETF，其次 chain ETF，最后中性
-            etf = CHAINS[c.chain_id]["etf"] if c.chain_id in CHAINS else ""
+            evidence = sector_evidence(c.ticker, c.chain_id, active=active)
+            etf = evidence["etf"]
             shs = sector_shs(etf) if etf else config.NEUTRAL_SCORE
             c.sector_etf = etf
+            row = diagnostics[c.ticker]
+            row.update(sector_evidence=evidence, mrs_star=mrs.mrs_star,
+                       shs=shs, tss_final=c.tss_final)
+            if budgeted and c.entry_template not in {"A", "B", "C"}:
+                row.update(status="rejected", reasons=["entry_template_missing"])
+                continue
+            if active and (not etf or not any(s.etf == etf for s in sectors)):
+                row.update(status="rejected", reasons=["sector_evidence_missing"])
+                continue
+            if budgeted and c.ticker in existing_tickers:
+                row.update(status="rejected", reasons=["existing_or_pending_position"])
+                continue
+            if budgeted and incomplete_budget:
+                row.update(status="rejected", reasons=["existing_budget_unverifiable"])
+                continue
 
             in_main = any(s.etf == etf for s in main_sectors)
             in_sub = any(s.etf == etf for s in sub_sectors)
@@ -113,11 +141,25 @@ class RiskManagerAgent(BaseAgent):
             decision = pass_gates(mrs.mrs_star, shs, c.tss_final,
                                   in_main, in_sub, chain_hot)
             if not decision.passed:
+                row.update(status="rejected", reasons=gate_reasons(
+                    mrs.mrs_star, shs, c.tss_final, in_main=in_main,
+                    in_sub=in_sub, chain_hot=chain_hot))
                 continue
             standard = decision.standard
 
             # ---- S4 合规围栏前置（D2）：市场规则校验先于仓位计算 ----
             entry = c.price
+            sector_row = next((s for s in sectors if s.etf == etf), None)
+            breadth = sector_row.breadth if sector_row is not None else None
+            no_chase = (isinstance(breadth, (int, float)) and math.isfinite(breadth)
+                        and breadth < config.BREADTH_NO_CHASE)
+            if budgeted and no_chase:
+                if not math.isfinite(c.key_level) or c.key_level <= 0:
+                    row.update(status="rejected", reasons=["sector_chase_evidence_missing"])
+                    continue
+                if entry > c.key_level:
+                    row.update(status="rejected", reasons=["sector_breadth_no_chase"])
+                    continue
             verdict = None
             if spec is not None:
                 sdf = context["market_data"].get("stock_ohlcv", {}).get(c.ticker)
@@ -128,6 +170,7 @@ class RiskManagerAgent(BaseAgent):
                 compliance.append({"ticker": c.ticker, "side": "buy",
                                    **verdict.to_dict()})
                 if not verdict.allowed:
+                    row.update(status="rejected", reasons=["compliance_rejected"])
                     notes.append(f"合规拒绝：{c.ticker} {verdict.reason}"
                                  f"（{verdict.rule_id}，围栏前置）")
                     continue
@@ -148,16 +191,23 @@ class RiskManagerAgent(BaseAgent):
 
             # 保留评分、原币价格和合规判定；不能用 USD 风险预算除原币价差。
             if currency_policy["execution_blocked"]:
+                row.update(status="rejected", reasons=["currency_blocked"])
                 continue
 
             # R 仓位反推（v6.0：结构化止损价优先，正则仅作历史数据兜底）
             stop = c.stop_price if c.stop_price > 0 else self._stop_price(c)
+            if budgeted and (not all(math.isfinite(v) for v in (entry, stop, c.tss_final, mrs.mrs_star, shs))
+                           or not 0 < stop < entry):
+                row.update(status="rejected", reasons=["invalid_entry_or_stop"])
+                continue
             risk_per_share = abs(entry - stop)
             if risk_per_share <= 0:
+                row.update(status="rejected", reasons=["invalid_stop_distance"])
                 continue
             r_usd = self.account * config.RISK_R_PCT * size_ratio
             shares = int(r_usd / risk_per_share)
             if shares <= 0:
+                row.update(status="rejected", reasons=["risk_budget_below_one_share"])
                 continue
             position_usd = shares * entry
             position_pct = position_usd / self.account
@@ -167,6 +217,9 @@ class RiskManagerAgent(BaseAgent):
                 shares = int(self.account * config.MAX_SINGLE_POSITION_PCT / entry)
                 position_usd = shares * entry
                 position_pct = position_usd / self.account
+            if budgeted and shares <= 0:
+                row.update(status="rejected", reasons=["position_budget_below_one_share"])
+                continue
 
             # v6.0 ATR 档位化时间止损（白皮书§10.3 资金效率口径）
             time_stop = next((d for cap_atr, d in config.TIME_STOP_BY_ATR
@@ -193,6 +246,13 @@ class RiskManagerAgent(BaseAgent):
                 "max_single_pct": config.MAX_SINGLE_POSITION_PCT,
                 "time_stop_days": time_stop,
                 "tos": c.tos,
+                "sector_evidence": evidence,
+                "risk_group": risk_group(c.chain_id, etf),
+                **({"signal_adv_usd": c.adv_usd} if budgeted else {}),
+                **({"entry_setup": {"template": c.entry_template,
+                    "sector_breadth": breadth, "no_chase": no_chase,
+                    "entry_ceiling": c.key_level if no_chase else None}}
+                   if budgeted else {}),
                 # S4：市场合规与轻仓通道毕业状态（全透传，报告层直接消费）
                 "market_grad": dict(grad),
                 "compliance_rule": verdict.rule_id if verdict is not None else "",
@@ -203,7 +263,11 @@ class RiskManagerAgent(BaseAgent):
                     "mrs": {"value": mrs.mrs_star, "threshold": config.OPEN_LONG["mrs"],
                             "threshold_probe_light": light_probe["mrs_lo"],
                             "ok": bool(mrs.mrs_star >= config.OPEN_LONG["mrs"]
-                                       or (decision.passed and not standard and mrs_light))},
+                                       or (decision.passed and not standard and
+                                           (mrs_light or (budgeted and in_sub and not in_main)))),
+                            **({"probe_channel": "mrs_light" if mrs_light else
+                                "qualified_sub_sector" if in_sub and not in_main else "none"}
+                               if budgeted else {})},
                     "shs": {"value": shs, "main_pool": bool(in_main),
                             "hot_channel": bool(chain_hot and shs >= config.SHS_SUB_POOL),
                             "threshold_main": config.SHS_MAIN_POOL,
@@ -228,9 +292,49 @@ class RiskManagerAgent(BaseAgent):
                 chain=c.chain_id, sector=etf, card=card,
                 time_stop_days=time_stop, event_note=event_note,
             ))
+            row.update(status="provisional", reasons=[])
 
         picks.sort(key=lambda p: p.tos, reverse=True)
-        picks = picks[: self.max_picks]
+        max_new = max(0, self.max_picks - len(existing_tickers)) if budgeted else self.max_picks
+        if not budgeted:
+            for discarded in picks[max_new:]:
+                diagnostics[discarded.ticker].update(status="rejected", reasons=["position_slots_exhausted"])
+            picks = picks[:max_new]
+
+        if budgeted:
+            # Budget the whole account, including previous holdings and pending
+            # signals. Scale a legal plan to remaining budget instead of raising
+            # a score/risk threshold or silently dropping a partially fundable plan.
+            used_gross, used_groups = existing_gross, dict(existing_groups)
+            funded = []
+            for pick in picks:
+                if len(funded) >= max_new:
+                    diagnostics[pick.ticker].update(status="rejected", reasons=["position_slots_exhausted"])
+                    continue
+                group = risk_group(pick.chain, pick.sector)
+                risk_per_share = abs(pick.entry_price - pick.stop_price)
+                max_chain = max(0.0, self.account * config.MAX_CHAIN_RISK_PCT - used_groups.get(group, 0.0))
+                max_gross = max(0.0, (gross_cap - used_gross) * self.account)
+                permitted = min(pick.shares, int(max_chain / risk_per_share),
+                                int(max_gross / pick.entry_price))
+                if permitted <= 0:
+                    reason = "group_risk_budget_exhausted" if max_chain < risk_per_share else "gross_budget_exhausted"
+                    diagnostics[pick.ticker].update(status="rejected", reasons=[reason])
+                    continue
+                pick.shares = permitted
+                pick.position_pct = round(permitted * pick.entry_price / self.account, 6)
+                pick.risk_usd = round(permitted * risk_per_share, 6)
+                used_groups[group] = used_groups.get(group, 0.0) + pick.risk_usd
+                used_gross += permitted * pick.entry_price / self.account
+                detail = rationale[pick.ticker]
+                detail.update(shares=permitted, position_pct=pick.position_pct,
+                              r_usd=pick.risk_usd, risk_group=group)
+                pick.card = self._trade_card(
+                    next(c for c in candidates if c.ticker == pick.ticker), mrs,
+                    detail["shs"], pick.entry_price, pick.stop_price, permitted,
+                    detail["size_ratio"], detail["mode"])
+                funded.append(pick)
+            picks = funded
 
         # ---- v6.0 组合层风控（白皮书§9/§10：仓位是风险预算的机器执行）----
         # 1) 产业链敞口上限：单链累计风险 ≤ MAX_CHAIN_RISK_PCT×账户
@@ -241,6 +345,7 @@ class RiskManagerAgent(BaseAgent):
             budget = self.account * config.MAX_CHAIN_RISK_PCT
             used = chain_risk.get(p.chain, 0.0)
             if p.chain and used + p.risk_usd > budget:
+                diagnostics[p.ticker].update(status="rejected", reasons=["group_risk_budget_exhausted"])
                 notes.append(f"产业链敞口上限：{p.ticker}（{p.chain}）跳过——"
                              f"该链累计风险 ${used:,.0f}+${p.risk_usd:,.0f} 超预算 "
                              f"${budget:,.0f}（白皮书§10：单链风险集中即同一个 R）")
@@ -254,6 +359,7 @@ class RiskManagerAgent(BaseAgent):
             total, gross_limited = 0.0, []
             for p in picks:
                 if total + p.position_pct > gross_cap + 1e-9:
+                    diagnostics[p.ticker].update(status="rejected", reasons=["gross_budget_exhausted"])
                     notes.append(f"总仓位上限执行：{p.ticker} 跳过——计划敞口 "
                                  f"{total:.0%}+{p.position_pct:.0%} 超上限 {gross_cap:.0%}"
                                  "（白皮书§4.4：仓位是风险预算，不是观点表达）")
@@ -264,6 +370,8 @@ class RiskManagerAgent(BaseAgent):
 
         # v5.4 修复：决策依据必须与最终放行标的【一一对应】
         kept = {p.ticker for p in picks}
+        for ticker in kept:
+            diagnostics[ticker].update(status="accepted", reasons=[])
         rationale = {t: info for t, info in rationale.items() if t in kept}
 
         if mrs.mrs_star < config.MRS_GATE_LIGHT:
@@ -282,6 +390,13 @@ class RiskManagerAgent(BaseAgent):
         context["pick_rationale"] = rationale
         context["gross_cap"] = gross_cap
         context["compliance"] = compliance
+        context["rejections"] = rejection_report(list(diagnostics.values()))
+        if budgeted:
+            context["entry_budget"] = {"schema": "tiger.entry-budget.v1", "gross_cap": gross_cap,
+                "single_cap": config.MAX_SINGLE_POSITION_PCT,
+                "group_risk_pct": config.MAX_CHAIN_RISK_PCT,
+                "risk_pct": config.RISK_R_PCT, "max_positions": self.max_picks,
+                "known_at": trade_date, "existing_gross_reserved": existing_gross}
         self.log.info("风控放行: action=%s picks=%s", action, [p.ticker for p in picks])
         return picks
 

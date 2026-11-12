@@ -11,6 +11,7 @@ LLM 不可用时透传"规则清洗后的文档"（degraded 标注），绝不�
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import unicodedata
@@ -41,24 +42,32 @@ def _fingerprint(doc: RawDocument) -> str:
     return hashlib.sha1(base.lower().encode("utf-8", "ignore")).hexdigest()[:16]
 
 
-def rule_base_clean(docs: list[RawDocument]) -> list[RawDocument]:
+def rule_base_clean(docs: list[RawDocument], *, preserve_source: bool = False) -> list[RawDocument]:
     """clean.rule_base 环节：格式校验 + 去重。仅此两项，规则不再多做一分。"""
     out: list[RawDocument] = []
     seen_id: set[str] = set()
     seen_fp: set[str] = set()
     for d in docs:
-        content = _normalize_text(d.content)[:MAX_CONTENT]
-        title = _normalize_text(d.title)[:200]
-        if not content or len(content) < 20:      # 格式校验：空/过短文档
+        if preserve_source:
+            # The native provider adapter already sanitized these values. Dedup
+            # over the whole body, so a common prefix cannot hide distinct evidence.
+            content, title = d.content, d.title
+            fp = hashlib.sha256(f"{d.url}\0{title}\0{content}".encode("utf-8")).hexdigest()
+            invalid_content = not content.strip()
+        else:
+            content = _normalize_text(d.content)[:MAX_CONTENT]
+            title = _normalize_text(d.title)[:200]
+            fp = _fingerprint(d)
+            invalid_content = len(content) < 20
+        if invalid_content:
             continue
-        fp = _fingerprint(d)
         if d.doc_id in seen_id or fp in seen_fp:  # 去重
             continue
         seen_id.add(d.doc_id)
         seen_fp.add(fp)
-        out.append(RawDocument(doc_id=d.doc_id, source=d.source, title=title,
-                               url=d.url, content=content, published=d.published,
-                               fetched_at=d.fetched_at, meta=d.meta))
+        out.append(d if preserve_source else RawDocument(
+            doc_id=d.doc_id, source=d.source, title=title, url=d.url,
+            content=content, published=d.published, fetched_at=d.fetched_at, meta=d.meta))
     return out
 
 
@@ -122,7 +131,7 @@ def llm_semantic_clean(docs: list[RawDocument], llm: LLMClient,
             out = llm.complete_json(
                 system=SYSTEM_ANALYST,
                 user=CLEAN_USER_TMPL.format(n=len(batch), docs=_docs_payload(batch)),
-                schema_hint=CLEAN_SCHEMA, max_tokens=2000)
+                schema_hint=CLEAN_SCHEMA)
             cleaned_all.extend(_apply_llm_annotations(batch, out))
         return cleaned_all
 

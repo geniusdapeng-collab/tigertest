@@ -59,19 +59,8 @@ class SectorAgent(BaseAgent):
         # v5.4 修复：广度【缺失】（NaN，如 IWM/XLRE 无产业链成分映射）旧代码
         # 视同通过——"广度≥60%"硬条件形同虚设。白皮书口径：无广度证据不得进
         # 主线池，降入次主线（观察/轻仓）并在证据中披露。
-        main_count = 0
-        for s in results:
-            if s.shs >= config.SHS_MAIN_POOL and not math.isnan(s.breadth) \
-                    and s.breadth >= config.BREADTH_HEALTHY:
-                if main_count < config.MAIN_POOL_MAX:
-                    s.in_main_pool = True
-                    main_count += 1
-            elif s.shs >= config.SHS_SUB_POOL:
-                s.in_sub_pool = True
-                if s.shs >= config.SHS_MAIN_POOL and math.isnan(s.breadth):
-                    s.evidence.append(
-                        f"{s.etf} SHS≥{config.SHS_MAIN_POOL} 但广度数据缺失 → "
-                        "不进主线池（白皮书：主线入池需广度≥60% 证据），降次主线")
+        from ..activity import assign_pools, enabled
+        assign_pools(results, active=enabled(context))
 
         context["sectors"] = results
         context["sector_map"] = {s.etf: s for s in results}
@@ -129,14 +118,16 @@ class SectorAgent(BaseAgent):
         #    LLM 不可用 → None 剔除再归一化，红线禁止规则估算）
         narr_llm = context.get("narrative_llm") or {}
         s_narr = None
-        if etf in narr_llm:
+        if etf in narr_llm and narr_llm[etf]["score"] is not None:
             s_narr = round(float(narr_llm[etf]["score"]), 1)
             evidence.append(
                 f"{etf} 叙事兑现: LLM 评分 {s_narr}（EPS修正 {narr_llm[etf].get('bias')}, "
                 f"指引 {narr_llm[etf].get('tone')}; {narr_llm[etf].get('evidence', '')[:60]}）"
             )
         else:
-            evidence.append(f"{etf} 叙事兑现: LLM 不可用/无产出 → 剔除后再归一化（红线透传）")
+            status = narr_llm.get(etf, {}).get("status", "unavailable")
+            note = narr_llm.get(etf, {}).get("evidence", "")
+            evidence.append(f"{etf} 叙事兑现: {status}，{note} → 缺失维剔除后再归一化")
 
         # 4) 微观催化（缺失 → None）
         s_micro = None

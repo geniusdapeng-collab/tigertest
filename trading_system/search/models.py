@@ -60,6 +60,22 @@ class CleanDocument:
 
 
 @dataclass
+class StructuredDocument(CleanDocument):
+    """V2 annotations and computed per-event uses; v1 snapshots stay unchanged.
+
+    The model supplies subjects/spans/events. Only the deterministic validator
+    supplies ``eligibility``. A document-level flag is not sufficient to grant
+    a particular target, claim or security scoring/action permission.
+    """
+    subjects: list[dict] = field(default_factory=list)
+    evidence_spans: list[dict] = field(default_factory=list)
+    event_records: list[dict] = field(default_factory=list)
+    claims: list[dict] = field(default_factory=list)
+    eligibility: dict = field(default_factory=dict)
+    annotation_contract: str = "typed-evidence/v2"
+
+
+@dataclass
 class SearchBatch:
     """一次搜索任务的产出。"""
     query: str

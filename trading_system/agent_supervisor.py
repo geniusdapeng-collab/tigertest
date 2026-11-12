@@ -30,9 +30,10 @@ from trading_system.agent_evidence import (
     read_bytes, read_json, safe_path, strict_json,
 )
 from trading_system.agent_runtime import (
-    POLICY_ID, dependency_identity, run_environment, seal_and_publish,
+    POLICY_ID, DEADLINE_SECONDS, dependency_identity, run_environment, seal_and_publish,
     validate_admission, verify_source,
 )
+from trading_system.admission_guards import BOOTSTRAP_SECONDS, PreparationDeadline, PreparationExpired
 from trading_system.redline.execution import (
     EvidenceWriteError, ExecutionContext, ExecutionContractError,
     ExecutionPolicy, RuntimePaths,
@@ -41,6 +42,8 @@ from trading_system.redline.execution import (
 LOG_LIMIT_BYTES = 8 * 1024 * 1024
 CONTROL_LIMIT_BYTES = 65536
 MAX_LOG_LINE_BYTES = 16384
+CLOSEOUT_RESERVE_SECONDS = 120.0
+GUARDIAN_DRAIN_GRACE_SECONDS = 0.15
 
 
 class SupervisorInterrupted(RuntimeError):
@@ -49,14 +52,15 @@ class SupervisorInterrupted(RuntimeError):
 
 def error_record(exc: BaseException, *, run_id: str, stage: str | None = None) -> dict:
     name = type(exc).__name__
-    if isinstance(exc, EvidenceInvalid):
+    if isinstance(exc, (EvidenceInvalid, PreparationExpired)):
         code = exc.code
         stage = exc.stage or stage
     elif (name, getattr(exc, "code", None)) in {
             ("StrictDataUnavailable", "DATA_UNAVAILABLE"),
             ("StrictObservationError", "DATA_UNAVAILABLE"),
             ("StrictDataStale", "DATA_STALE"),
-            ("StrictSourceSynthetic", "SOURCE_SYNTHETIC")}:
+            ("StrictSourceSynthetic", "SOURCE_SYNTHETIC"),
+            ("RequiredModelFailed", "MODEL_REQUIRED_FAILED")}:
         code = exc.code
     elif isinstance(exc, TimeoutError):
         code = "TIMEOUT"
@@ -103,6 +107,9 @@ class BoundedLog:
         self.discard_line: set[str] = set()
 
     def _write(self, label: str, content: bytes) -> None:
+        key = os.environ.get("LLM_API_KEY", "")
+        if key:
+            content = content.replace(key.encode(), b"[REDACTED]")
         safe = label.encode() + b": " + _safe_log_line(content) + b"\n"
         room = max(0, self.limit - self.retained)
         if len(safe) > room:
@@ -250,7 +257,7 @@ def guardian(run: Path, *, parent_fd: int, control_fd: int, deadline: float,
     normal = False
     try:
         child = subprocess.Popen(
-            command, cwd=run / "work", env=run_environment(run / "work"),
+            command, cwd=run / "work", env=run_environment(run / "work", model_required=(run / "policy.json").exists() and read_json(run, "policy.json")["execution"]["model_mode"] == "enabled"),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             close_fds=True, pass_fds=(), start_new_session=False,
         )
@@ -267,6 +274,7 @@ def guardian(run: Path, *, parent_fd: int, control_fd: int, deadline: float,
             for fd, label in streams.items():
                 os.set_blocking(fd, False)
                 selector.register(fd, selectors.EVENT_READ, label)
+            child_exit_at = None
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -289,10 +297,34 @@ def guardian(run: Path, *, parent_fd: int, control_fd: int, deadline: float,
                         streams.pop(key.fd, None)
                 # Child polling is safe here: guardian, not engine, remains the
                 # un-reaped process-group leader under supervisor ownership.
+                if child.poll() is not None:
+                    if child_exit_at is None:
+                        child_exit_at = time.monotonic()
+                    # A third-party descendant may inherit stdout/stderr and
+                    # keep the pipes open after the direct engine exits. Drain
+                    # only available bytes during a short grace, then stop
+                    # waiting and clean the owned group before reaping.
+                    if time.monotonic() - child_exit_at >= GUARDIAN_DRAIN_GRACE_SECONDS:
+                        for fd, label in list(streams.items()):
+                            try:
+                                while True:
+                                    chunk = os.read(fd, 8192)
+                                    if not chunk:
+                                        break
+                                    logger.consume(label, chunk)
+                            except (BlockingIOError, OSError):
+                                pass
+                            try:
+                                selector.unregister(fd)
+                            except KeyError:
+                                pass
+                            streams.pop(fd, None)
                 if not streams and child.poll() is not None:
                     code = child.wait()
                     log_summary = logger.finish()
                     logger = None
+                    log_summary["drain_grace_seconds"] = GUARDIAN_DRAIN_GRACE_SECONDS
+                    log_summary["stream_eof_not_required_after_engine_exit"] = True
                     atomic_json(run, "log-summary.json", log_summary, exclusive=True)
                     _send_control(control_fd, {"kind": "engine_finished", "exit_code": code})
                     normal = True
@@ -400,7 +432,7 @@ def supervise_group(run: Path, *, lock_fds: tuple[int, int], deadline: float) ->
         leader = subprocess.Popen(
             [sys.executable, "-I", "-B", str(entry), "guardian", str(run),
              str(parent_read), str(control_write), repr(deadline)],
-            cwd=run / "work", env=run_environment(run / "work"),
+            cwd=run / "work", env=run_environment(run / "work", model_required=(run / "policy.json").exists() and read_json(run, "policy.json")["execution"]["model_mode"] == "enabled"),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             close_fds=True, pass_fds=(*lock_fds, parent_read, control_write),
             start_new_session=True,
@@ -464,24 +496,34 @@ def _check_lock_descriptor(fd: int, path: Path) -> None:
 
 
 def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
-               ack_fd: int) -> int:
+               ack_fd: int, resume_mode: str | None = None) -> int:
     run = state / "runs" / run_id
     acknowledged = False
-    timer_started = False
+    bootstrap_guard = None
+    business_guard = None
     try:
+        bootstrap_guard = PreparationDeadline(BOOTSTRAP_SECONDS, stage="supervisor.bootstrap")
+        bootstrap_guard.__enter__()
         _check_lock_descriptor(account_fd, state / "account.lock")
         _check_lock_descriptor(run_fd, run / "run.lock")
-        admission, _policy, _source = validate_admission(run)
+        if resume_mode is None:
+            admission, _policy, _source = validate_admission(run)
+        else:
+            admission, _policy, _source = validate_admission(
+                run, validate_working_calendar=False)
         remaining = (datetime.fromisoformat(admission["clock"]["deadline_at_utc"])
                      - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
             raise TimeoutError("Admission deadline elapsed")
-        deadline = time.monotonic() + min(remaining, 2400)
-        def timed_out(_signum, _frame):
-            raise TimeoutError("Business deadline elapsed")
-        signal.signal(signal.SIGALRM, timed_out)
-        signal.setitimer(signal.ITIMER_REAL, min(remaining, 2400))
-        timer_started = True
+        # validate_admission re-derived this upper bound from the frozen
+        # runtime input; it never accepts a saved policy flag as authority.
+        business_remaining = min(remaining, _policy.get("business_deadline_seconds", DEADLINE_SECONDS))
+        deadline = time.monotonic() + business_remaining
+        closeout_reserve = min(CLOSEOUT_RESERVE_SECONDS, max(10.0, business_remaining / 5))
+        analysis_deadline = max(time.monotonic() + 0.001, deadline - closeout_reserve)
+        bootstrap_guard.__exit__(None, None, None)
+        business_guard = PreparationDeadline(business_remaining, stage="supervisor.business", deadline=deadline)
+        business_guard.__enter__()
         atomic_json(run, "processes.json", {"supervisor_pid": os.getpid(),
                                           "supervisor_process_group": os.getpgrp()},
                     exclusive=True)
@@ -491,6 +533,12 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
                     exclusive=True)
         atomic_json(run, "status.json", {"schema": "tiger.status.v1", "run_id": run_id,
                                         "status": "running", "error": None})
+        if _policy.get("research_work") is not None:
+            from trading_system.research_resume import begin_parent_attempt
+            if resume_mode is None:
+                begin_parent_attempt(run, admission, _policy)
+            elif resume_mode not in {"resume", "closeout"}:
+                raise EvidenceInvalid("RESULT_INVALID", "Unknown internal recovery role")
         try:
             _send_control(ack_fd, {"accepted": True, "run_id": run_id})
         except BrokenPipeError:
@@ -504,8 +552,12 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
             raise SupervisorInterrupted("Supervisor was interrupted")
         signal.signal(signal.SIGTERM, interrupted)
         signal.signal(signal.SIGINT, interrupted)
-        process_receipt = supervise_group(run, lock_fds=(account_fd, run_fd), deadline=deadline)
-        atomic_json(run, "process-exit.json", process_receipt, exclusive=True)
+        if resume_mode != "closeout":
+            process_receipt = supervise_group(run, lock_fds=(account_fd, run_fd),
+                                              deadline=analysis_deadline)
+            atomic_json(run, "process-exit.json", process_receipt, exclusive=True)
+        elif _policy.get("research_work") is not None:
+            read_json(run, "process-exit.json")
         verified = seal_and_publish(state, run, deadline=deadline)
         atomic_json(run, "status.json", {"schema": "tiger.status.v1", "run_id": run_id,
                                         "status": verified["status"], "error": None})
@@ -514,22 +566,41 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
         # If publication succeeded before a later status write failed, readers
         # prove commitment from the pointer/receipt chain, regardless of this.
         error = error_record(exc, run_id=run_id)
+        engine_succeeded = False
         engine_path = run / "engine-result.json"
         if not engine_path.exists():
             error["details_ref"] = None
         if engine_path.exists():
             try:
                 engine = read_json(run, "engine-result.json")
+                engine_succeeded = engine.get("success") is True
                 if engine.get("success") is False and isinstance(engine.get("error"), dict):
                     error = engine["error"]
             except (OSError, ValueError):
                 # Keep the original safe error if the partial engine evidence
                 # itself is unreadable; never promote it to success.
                 error["details_ref"] = None
+        if engine_succeeded and not (run / "publication-durability.json").exists():
+            closeout = {
+                "schema": "tiger.closeout-error.v1",
+                "run_id": run_id,
+                "phase": "publication",
+                "code": error.get("code", "RUNNER_FAILED"),
+                "stage": error.get("stage"),
+                "message": error.get("message", "Closeout failed"),
+                "engine_result_sha256": digest(read_bytes(run, "engine-result.json")),
+                "engine_result_success": True,
+                "retryable": False,
+            }
+            try:
+                atomic_json(run, "closeout-error.json", closeout, exclusive=True)
+                error["details_ref"] = "closeout-error.json"
+            except (OSError, ValueError):
+                error["details_ref"] = None
         try:
             atomic_json(run, "status.json", {
                 "schema": "tiger.status.v1", "run_id": run_id,
-                "status": "blocked" if error["code"] in {
+                "status": "cancelled" if error["code"] == "TASK_CANCELLED" else "blocked" if error["code"] in {
                     "DATA_UNAVAILABLE", "DATA_STALE", "SOURCE_SYNTHETIC", "CURRENCY_BLOCKED"
                 } else "interrupted" if isinstance(exc, (InterruptedError, SupervisorInterrupted)) else "failed",
                 "error": error, "acceptance_was_durable": acknowledged,
@@ -540,8 +611,10 @@ def supervisor(state: Path, run_id: str, *, account_fd: int, run_fd: int,
             sys.stderr.write("Unable to persist terminal status; inspect run evidence.\n")
         return 1
     finally:
-        if timer_started:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+        if business_guard is not None:
+            business_guard.__exit__(None, None, None)
+        if bootstrap_guard is not None:
+            bootstrap_guard.__exit__(None, None, None)
         for fd in (account_fd, run_fd, ack_fd):
             if fd >= 0:
                 os.close(fd)  # Never LOCK_UN an inherited open-file description.
@@ -572,11 +645,23 @@ def engine(run: Path) -> int:
         policy_args = dict(policy["execution"])
         policy_args["provider_names"] = tuple(policy_args["provider_names"])
         policy_args["search_source_names"] = tuple(policy_args["search_source_names"])
-        execution = ExecutionContext(
-            run_id=run.name, run_date=date.fromisoformat(admission["clock"]["run_date"]),
-            paths=paths, policy=ExecutionPolicy(**policy_args),
-            store=EvidenceStore(run, run.name),
-        )
+        context_args = {
+            "run_id": run.name, "run_date": date.fromisoformat(admission["clock"]["run_date"]),
+            "admitted_at": datetime.fromisoformat(admission["clock"]["admitted_at_utc"]),
+            "paths": paths, "policy": ExecutionPolicy(**policy_args),
+            "authoritative_paper": bool(policy.get("paper_ledger_contract")),
+            "account_version_before": (admission["parent"] or {}).get("version_sha256"),
+            "response_observation_contract": policy.get("model_contract", {}).get("response_observation_contract", ""),
+        }
+        if policy.get("research_work") is not None:
+            from trading_system.research_resume import execution_context
+            execution = execution_context(run, admission, policy, **context_args)
+        else:
+            execution = ExecutionContext(
+                store=EvidenceStore(run, run.name), **context_args)
+        if "research_work" in policy:
+            from trading_system.research_work import attach_research_work
+            attach_research_work(execution, admission, policy)
         main_file = run / "source" / "main.py"
         spec = importlib.util.spec_from_file_location("tiger_frozen_main", main_file)
         if spec is None or spec.loader is None:
@@ -586,7 +671,7 @@ def engine(run: Path) -> int:
         spec.loader.exec_module(module)
         from trading_system import config
         args = argparse.Namespace(
-            mode="daily", market="us", universe="extended", universe_file=None,
+            mode="daily", market="us", universe=policy.get("universe", "extended"), universe_file=None,
             top=config.SCAN_TOP_N, picks=config.MAX_PICKS_DEFAULT,
             account=100000.0, use_tuned=False, html=True, quiet=True,
             demo=False, out=str(paths.reports_dir),
@@ -636,11 +721,31 @@ def engine(run: Path) -> int:
         if execution is not None and execution.summary():
             stage = execution.summary()[-1]["stage"]
         error = error_record(exc, run_id=run.name, stage=stage)
+        failure = {"schema": "tiger.engine-result.v1", "run_id": run.name,
+                   "success": False, "error": error}
+        if execution is not None and execution.response_observation_contract:
+            try:
+                from trading_system.llm.intelligence_proof import verify_partial_intelligence_model
+                from trading_system.research_resume import current_parent_attempt
+                attempt = current_parent_attempt(run, admission)
+                accounting = verify_partial_intelligence_model(run, admission,
+                    scene_policy_path=run / "source" / "governance/bundles/trading/model-policy.yml",
+                    event_relative=attempt["events_path"])
+                accounting["runtime_network_diagnostic"] = {
+                    "fixed_provider_host": "api.deepseek.com",
+                    "trusted_proxy_bypass_configured": "api.deepseek.com" in os.environ.get("NO_PROXY", "").split(","),
+                    "actual_egress_route_verified": False,
+                }
+                atomic_json(run, "model-failure-accounting.json", accounting, exclusive=True)
+                failure["model_failure_accounting"] = file_ref(run, "model-failure-accounting.json", "application/json")
+            except Exception:
+                # Preserve the primary business failure. A rejected or unwritable
+                # accounting summary is explicit unknown evidence, never zero cost.
+                failure["model_failure_accounting_verification"] = {
+                    "status": "rejected", "code": "MODEL_FAILURE_ACCOUNTING_UNVERIFIED"}
+                sys.stderr.write("Partial model accounting could not be independently verified or persisted.\n")
         try:
-            atomic_json(run, "engine-result.json", {
-                "schema": "tiger.engine-result.v1", "run_id": run.name,
-                "success": False, "error": error,
-            }, exclusive=True)
+            atomic_json(run, "engine-result.json", failure, exclusive=True)
         except (OSError, ValueError):
             sys.stderr.write("Unable to persist engine failure evidence.\n")
         sys.stderr.write(error["message"] + "\n")
@@ -662,9 +767,12 @@ def _main() -> int:
         # requires settled search workers; failure must not wait forever for a
         # broken executor during Python interpreter shutdown.
         os._exit(code)
-    if role == "supervisor" and len(args) == 6:
+    if role in {"supervisor", "resume-supervisor", "closeout-supervisor"} and len(args) == 6:
         return supervisor(Path(args[1]), args[2], account_fd=int(args[3]),
-                          run_fd=int(args[4]), ack_fd=int(args[5]))
+                          run_fd=int(args[4]), ack_fd=int(args[5]),
+                          resume_mode=("resume" if role == "resume-supervisor"
+                                       else "closeout" if role == "closeout-supervisor"
+                                       else None))
     if role == "guardian" and len(args) == 5:
         return guardian(Path(args[1]), parent_fd=int(args[2]), control_fd=int(args[3]),
                         deadline=float(args[4]))

@@ -54,6 +54,13 @@ export type FallbackMode = "downgrade" | "passthrough-disclose" | "queue" | "rul
 
 /** 自动升级触发信号 */
 export type EscalateSignal = "low-confidence" | "thumbs-down" | "redteam-fail" | "parse-fail" | "gate-blocked";
+export type ThinkingEffort = "low" | "high" | "max";
+export type SceneThinking = "disabled" | ThinkingEffort | {
+  type: "disabled";
+} | {
+  type: "enabled";
+  effort: ThinkingEffort;
+};
 
 export interface ScenePolicy {
   /** 默认模型档 */
@@ -68,6 +75,8 @@ export interface ScenePolicy {
   billTo?: "tenant" | "platform";
   /** 调度窗口偏好：any / off-peak-only（非实时批量，可排队等谷时） */
   window?: "any" | "off-peak-only";
+  /** DeepSeek scene policy: disabled, low/high/max, or an explicit object. */
+  thinking?: SceneThinking;
 }
 
 /* ================= 套餐策略 ================= */
@@ -169,6 +178,16 @@ export function parseModelPolicy(text: string): { policy: ModelPolicy | null; is
     }
     if (sp.billTo && !["tenant", "platform"].includes(sp.billTo)) issues.push(`场景「${name}」billTo 非法：${String(sp.billTo)}`);
     if (sp.window && !["any", "off-peak-only"].includes(sp.window)) issues.push(`场景「${name}」window 非法：${String(sp.window)}`);
+    if (sp.thinking !== undefined) {
+      const validThinking = typeof sp.thinking === "string"
+        ? ["disabled", "low", "high", "max"].includes(sp.thinking)
+        : sp.thinking?.type === "disabled"
+          ? Object.keys(sp.thinking).length === 1
+          : sp.thinking?.type === "enabled"
+            && ["low", "high", "max"].includes(sp.thinking.effort)
+            && Object.keys(sp.thinking).length === 2;
+      if (!validThinking) issues.push(`场景「${name}」thinking 非法`);
+    }
   }
   const plans = (doc.plans ?? DEFAULT_MODEL_POLICY.plans) as Record<PlanId, PlanStrategy>;
   // 生效场景 = 底座默认 ∪ 行业声明：行业包只声明自己的场景、套餐沿用底座默认时，

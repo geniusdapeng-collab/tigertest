@@ -30,10 +30,10 @@ CORE_UNIVERSE = [
     "CRM", "BAC", "ORCL", "CVX", "MRK", "ABBV", "KO", "PEP", "WMT", "CSCO",
     "ACN", "MCD", "TMO", "ABT", "LIN", "ADBE", "DHR", "TXN", "PM", "NEE",
     "QCOM", "INTU", "AMGN", "IBM", "GS", "MS", "CAT", "GE", "BA", "HON",
-    "PLTR", "UBER", "SHOP", "SQ", "SNOW", "DDOG", "CRWD", "PANW", "ANET", "SMCI",
+    "PLTR", "UBER", "SHOP", "XYZ", "SNOW", "DDOG", "CRWD", "PANW", "ANET", "SMCI",
     "MU", "LRCX", "AMAT", "KLAC", "MRVL", "ON", "ARM", "TSM", "ASML", "DELL",
     "COIN", "MARA", "RIOT", "HOOD", "SOFI", "AFRM", "RBLX", "U", "TTD", "APP",
-    "ENPH", "SEDG", "FSLR", "RUN", "NOVA", "ARRY", "NXT", "CEG", "VST", "GEV",
+    "ENPH", "SEDG", "FSLR", "RUN", "MELI", "ARRY", "NXT", "CEG", "VST", "GEV",
     "OKLO", "SMR", "CCJ", "UUUU", "DNN", "LEU", "NNE", "BWXT", "PWR", "EME",
     "IONQ", "RGTI", "QBTS", "QUBT", "SOUN", "BBAI", "AI", "PATH", "UPST", "LMND",
     "RKLB", "LUNR", "ASTS", "SPCE", "JOBY", "ACHR", "EH", "ONDS", "RCAT", "KTOS",
@@ -95,9 +95,26 @@ EXTENDED_UNIVERSE = CORE_UNIVERSE + [
     "HOOD", "SOFI", "AFRM", "UPST", "LMND", "NU", "MQ", "FOUR", "TOST", "PAGS",
 ]
 
+# Symbols observed as absent from the current NASDAQ Trader common-stock
+# directory during the 2026-11-11 completed-session audit. They are removed
+# from embedded scan modes but remain visible here as an auditable snapshot;
+# explicit file/full-list modes are never silently filtered.
+RETIRED_UNIVERSE = frozenset({
+    "ALTM", "AVB", "BITF", "CFLT", "CTRA", "DFS", "EA", "EQR", "FI", "FSR",
+    "GPS", "HA", "HES", "K", "KVUE", "LTHM", "MAXN", "MRO", "PLL", "ROKU",
+    "SAVE", "SMAR", "SQ", "WBA", "WBD",
+})
+CORE_UNIVERSE = [ticker for ticker in CORE_UNIVERSE if ticker not in RETIRED_UNIVERSE]
+EXTENDED_UNIVERSE = [ticker for ticker in EXTENDED_UNIVERSE if ticker not in RETIRED_UNIVERSE]
+
 # 去重保序
 _seen: set[str] = set()
 EXTENDED_UNIVERSE = [t for t in EXTENDED_UNIVERSE if not (t in _seen or _seen.add(t))]
+
+# The production research scan keeps a focused, high-liquidity universe.
+# Chain tickers are still fetched separately for breadth, sector and risk
+# context, but they do not all become daily research candidates.
+FOCUSED_UNIVERSE = list(dict.fromkeys(CORE_UNIVERSE))
 
 
 # ============================================================
@@ -208,6 +225,8 @@ def load_full_universe(include_etfs: bool = False) -> tuple[list[str], str]:
 
 
 def load_universe(mode: str = "extended", file_path: str | None = None) -> list[str]:
+    if mode == "focused":
+        return list(FOCUSED_UNIVERSE)
     if mode == "core":
         return list(dict.fromkeys(CORE_UNIVERSE))
     if mode == "file":

@@ -28,9 +28,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
+from urllib.parse import urlsplit
 
 from .. import config
 from .models import CleanDocument, Evidence, RawDocument
+from .ontology import legacy_event_type
 
 log = logging.getLogger("search.credibility")
 
@@ -122,13 +124,8 @@ def _normalize(t: str) -> str:
 def _canonical_event(events: list[str], meta_hint: str = "") -> str | None:
     """把 LLM 事件标注/源 meta 提示归一到 config.KEY_EVENT_TYPES 规范型。
     纯规则：别名子串匹配（别名表在 config，可维护）。"""
-    haystacks = [_normalize(e) for e in events] + ([_normalize(meta_hint)] if meta_hint else [])
-    for canon in config.KEY_EVENT_TYPES:
-        aliases = (canon.lower(),) + tuple(a.lower() for a in config.KEY_EVENT_ALIASES.get(canon, ()))
-        for h in haystacks:
-            if h and any(a in h for a in aliases):
-                return canon
-    return None
+    return legacy_event_type(events, meta_hint, event_types=config.KEY_EVENT_TYPES,
+                             aliases=config.KEY_EVENT_ALIASES)
 
 
 def _entity_key(doc: CleanDocument) -> str:
@@ -138,6 +135,22 @@ def _entity_key(doc: CleanDocument) -> str:
         return "T:" + ",".join(sorted({t.upper() for t in doc.tickers}))
     base = _normalize(doc.raw.title)[:80]
     return "H:" + hashlib.sha1(base.encode("utf-8", "ignore")).hexdigest()[:12]
+
+
+def corroboration_source(doc: CleanDocument) -> str:
+    """Native search is a retriever; corroborate the original publisher hosts.
+
+    Preserve every legacy source identity. For the new provider, domains already
+    present in the reviewed tier table also consolidate their subdomains. An
+    unknown publisher is counted by its complete host, never by a model label.
+    """
+    if doc.raw.source != "deepseek_search":
+        return doc.raw.source
+    host = (urlsplit(doc.raw.url).hostname or "").lower().rstrip(".")
+    for suffix in sorted(config.DOMAIN_TIERS, key=len, reverse=True):
+        if host == suffix or host.endswith("." + suffix):
+            return "publisher:" + suffix
+    return "publisher:" + host.removeprefix("www.")
 
 
 @dataclass
@@ -194,7 +207,7 @@ class CrossValidator:
             groups.setdefault((_entity_key(d), canon), []).append(d)
 
         for (entity, canon), members in groups.items():
-            sources = {m.raw.source for m in members}
+            sources = {corroboration_source(m) for m in members}
             best_tier = min(SourceTier.of(m.evidence.tier) for m in members)
             ok = len(sources) >= self.min_sources and best_tier <= self.max_tier
             for m in members:

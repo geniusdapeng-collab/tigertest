@@ -4,19 +4,19 @@
 version: "v3.0"
 scenes:
   # —— 盘前批量语义标注（中坚档，谷时窗口） ——
-  news-labeling:     { tier: L2, window: off-peak-only }                # 新闻实体消歧/情感/事件抽取（批量）
-  tech-sentiment:    { tier: L2, window: off-peak-only }                # 科技子链舆情 heat×sentiment
-  tech-risk:         { tier: L2, window: off-peak-only }                # 供应链/政策/专利风险预警
+  news-labeling:     { tier: L2, window: off-peak-only, thinking: disabled }  # 新闻实体消歧/情感/事件抽取（批量）
+  tech-sentiment:    { tier: L2, window: off-peak-only, thinking: disabled }  # 科技子链舆情 heat×sentiment
+  tech-risk:         { tier: L2, window: off-peak-only, thinking: high }      # 供应链/政策/专利风险预警
   # —— 决策级语义（旗舰档 + 金融降级语义） ——
-  sector-narrative:  { tier: L3, noDowngrade: true, fallback: passthrough-disclose }  # 板块叙事兑现分（直接进决策分）
-  debate:            { tier: L3, noDowngrade: true, fallback: passthrough-disclose }  # 多空辩论（≤3 只/日，灰区标的）
+  sector-narrative:  { tier: L3, noDowngrade: true, fallback: passthrough-disclose, thinking: high }  # 板块叙事兑现分（直接进决策分）
+  debate:            { tier: L3, noDowngrade: true, fallback: passthrough-disclose, thinking: max }   # 多空辩论（≤3 只/日，灰区标的）
   # —— 治理面通用场景（继承底座默认即可，点名备查） ——
-  intent-classify:   { tier: L1, fallback: rule-template }
-  ask-synthesize:    { tier: L2, escalateOn: [thumbs-down] }
-  quest-plan:        { tier: L2 }
-  briefing:          { tier: L2 }
-  ceo-decision:      { tier: L2 }
-  ceo-deep-analysis: { tier: L3, noDowngrade: true, fallback: passthrough-disclose }
+  intent-classify:   { tier: L1, fallback: rule-template, thinking: disabled }
+  ask-synthesize:    { tier: L2, escalateOn: [thumbs-down], thinking: high }
+  quest-plan:        { tier: L2, thinking: high }
+  briefing:          { tier: L2, thinking: high }
+  ceo-decision:      { tier: L2, thinking: high }
+  ceo-deep-analysis: { tier: L3, noDowngrade: true, fallback: passthrough-disclose, thinking: max }
 plans:
   lite:     { defaultShift: -1 }
   standard: { defaultShift: 0 }

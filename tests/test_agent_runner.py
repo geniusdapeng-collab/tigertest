@@ -187,6 +187,58 @@ def test_failure_is_not_a_successful_replay_and_status_query_is_successful(tmp_p
     assert not receipt["operation_ok"] and receipt["summary"] is None
 
 
+def test_task_deadline_terminal_failure_is_queryable(tmp_path):
+    state = tmp_path / "state"
+    run_id = "run-" + "a" * 32
+    run = state / "runs" / run_id
+    run.mkdir(parents=True)
+    (run / "run.lock").touch()
+    error = {
+        "code": "TASK_DEADLINE",
+        "message": "Work-unit deadline has expired",
+        "run_id": run_id,
+        "stage": "clean.llm_semantic",
+        "retryable": False,
+        "details_ref": "engine-result.json",
+    }
+    atomic_json(run, "status.json", {
+        "schema": "tiger.status.v1",
+        "run_id": run_id,
+        "status": "failed",
+        "error": error,
+    })
+    observed = runner.execute("status", {"run_id": run_id}, mode="readonly", state=state)
+    assert observed["operation_ok"] is True
+    assert observed["status"] == "failed"
+    assert observed["data"]["error"] == error
+
+
+def test_scheduler_cancellation_is_queryable_as_a_terminal_state(tmp_path):
+    state = tmp_path / "state"
+    run_id = "run-" + "b" * 32
+    run = state / "runs" / run_id
+    run.mkdir(parents=True)
+    (run / "run.lock").touch()
+    error = {
+        "code": "TASK_CANCELLED",
+        "message": "Workflow stopped (WorkUnitError); inspect the bound run evidence.",
+        "run_id": run_id,
+        "stage": "clean.llm_semantic",
+        "retryable": False,
+        "details_ref": "engine-result.json",
+    }
+    atomic_json(run, "status.json", {
+        "schema": "tiger.status.v1",
+        "run_id": run_id,
+        "status": "cancelled",
+        "error": error,
+    })
+    observed = runner.execute("status", {"run_id": run_id}, mode="readonly", state=state)
+    assert observed["operation_ok"] is True
+    assert observed["status"] == "cancelled"
+    assert observed["data"]["error"] == error
+
+
 def test_lost_acceptance_reply_recovers_existing_identity_without_new_worker(tmp_path, monkeypatch):
     source = fixture_source(tmp_path / "source")
     state = tmp_path / "state"

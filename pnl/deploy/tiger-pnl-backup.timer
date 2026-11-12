@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified Tiger PnL ledger backup
+
+[Timer]
+OnCalendar=*-*-* 03:35:00 UTC
+Persistent=true
+RandomizedDelaySec=180
+Unit=tiger-pnl-backup.service
+
+[Install]
+WantedBy=timers.target

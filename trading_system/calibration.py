@@ -57,7 +57,7 @@ class CalibrationLayer:
 
     # ------------------------------------------------------------ 样本库
 
-    def collect_samples(self, records: list[dict]) -> list[dict]:
+    def collect_samples(self, records: list[dict], *, paper_only: bool = False) -> list[dict]:
         """从 journal 记录提取校准样本。【只读已结算记录】：
         status=="closed" 且 r 非空（未结算/作废/悬挂一律不进入样本库）。"""
         if not isinstance(records, list) or any(
@@ -73,6 +73,10 @@ class CalibrationLayer:
         for index, rec in enumerate(records):
             if rec.get("status") != "closed" or rec.get("r") is None:
                 continue
+            if paper_only and (rec.get("accounting_basis") != "paper_execution"
+                               or not rec.get("signal_id")
+                               or not {"filled", "closed"}.issubset(rec.get("paper_event_ids", {}))):
+                continue
             for field in ("r", "tss_final", "mrs_star"):
                 value = rec.get(field)
                 if value is None:  # 旧台账允许分数缺失，不能补造分数。
@@ -86,7 +90,7 @@ class CalibrationLayer:
                     raise ValueError(
                         f"校准历史 {self.journal_path} 第 {index + 1} 条 {field} "
                         "不是有限数值，已停止以保留原样本库")
-            key = (rec.get("date"), rec.get("ticker"))
+            key = rec["signal_id"] if paper_only else (rec.get("date"), rec.get("ticker"))
             if key in seen:
                 continue
             seen.add(key)
@@ -95,6 +99,8 @@ class CalibrationLayer:
                 "tss_final": rec.get("tss_final"),
                 "mrs_star": rec.get("mrs_star"),
                 "r": rec.get("r"), "win": bool(rec.get("r", 0) > 0),
+                **({"signal_id": rec["signal_id"], "accounting_basis": "paper_execution",
+                    "closing_event_id": rec["paper_event_ids"]["closed"]} if paper_only else {}),
             })
         return samples
 
@@ -104,7 +110,7 @@ class CalibrationLayer:
 
     # ------------------------------------------------------------ 摘要
 
-    def run(self) -> dict:
+    def run(self, *, paper_only: bool = False) -> dict:
         """读 journal → 验证并计算摘要 → 原子更新样本库，失败保留旧历史。"""
         try:
             records = json.loads(self.journal_path.read_text(encoding="utf-8"))
@@ -127,7 +133,7 @@ class CalibrationLayer:
             raise ValueError(
                 f"校准历史 {self.journal_path} 读取或解析失败"
                 f"（{type(exc).__name__}），已停止以保留原样本库") from exc
-        samples = self.collect_samples(records)
+        samples = self.collect_samples(records, paper_only=paper_only)
         summary = self.summarize(samples)
         self.save_samples(samples)
         return summary

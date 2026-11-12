@@ -13,6 +13,7 @@ from trading_system.llm.scene_policy import (  # noqa: E402
     load_policy,
     must_passthrough,
     scene_config,
+    scene_thinking,
     scene_tier,
     validate_coverage,
 )
@@ -44,6 +45,14 @@ def test_batch_scenes_in_offpeak_window():
     # 盘前批量天然谷时（×0.2 费率）
     assert scene_config("news-labeling")["window"] == "off-peak-only"
     assert scene_config("debate")["noDowngrade"] is True
+
+
+def test_kernel_steps_use_scene_specific_thinking():
+    assert scene_thinking("clean.llm_semantic") == {"type": "disabled"}
+    assert scene_thinking("tech.sentiment") == {"type": "disabled"}
+    assert scene_thinking("tech.risk") == {"type": "enabled", "effort": "high"}
+    assert scene_thinking("sector.narrative") == {"type": "enabled", "effort": "high"}
+    assert scene_thinking("decision.debate") == {"type": "enabled", "effort": "max"}
 
 
 def test_coverage_guard_full():

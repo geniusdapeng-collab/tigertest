@@ -1,0 +1,2 @@
+TEST_FIXTURE Alpha Holdings is a bank. Alpha Robotics is a separate company.
+Only Alpha Holdings reported a capital shortfall. No audited cash-flow statement for Alpha Robotics is supplied.

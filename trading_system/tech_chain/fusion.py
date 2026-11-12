@@ -15,6 +15,7 @@ fusion 是确定性合成（规则保留区：权重固定、无歧义）。
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 from ..redline import ExecutionTracer, Passthrough
@@ -32,7 +33,7 @@ class TechChainSignal:
     chain_id: str
     main_chain: str               # 映射到 chains.py 的主链
     prosperity: float | None      # 0..10（None=全部维度缺失）
-    risk_level: float             # 0..10（无预警=0）
+    risk_level: float | None      # 0..10（有证据且无预警=0，证据不足=None）
     alerts: list[dict] = field(default_factory=list)
     transmission: dict[str, dict[str, float]] = field(default_factory=dict)
     bonus_hint: float = 1.0       # 0.90..1.15，乘到 TSS chain_bonus 上
@@ -50,6 +51,19 @@ class TechChainSignal:
             "degraded_components": self.degraded_components,
             "evidence": self.evidence[:6],
         }
+
+
+@dataclass
+class StructuredTechChainSignal(TechChainSignal):
+    """V2 keeps an incomplete assessment separate from known severe alerts."""
+    known_alert_level: float | None = None
+    risk_assessment_status: str = "insufficient_evidence"
+    risk_evidence_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "known_alert_level": self.known_alert_level,
+                "risk_assessment_status": self.risk_assessment_status,
+                "risk_evidence_ids": list(self.risk_evidence_ids)}
 
 
 def _score_momentum(row: ChainMonitorRow) -> float | None:
@@ -107,15 +121,22 @@ class TechChainFusionAgent:
                 linkage: list[GlobalLinkageRow],
                 sentiment: dict[str, SentimentRow] | Passthrough,
                 alerts: list[RiskAlert] | Passthrough,
-                tracer: ExecutionTracer | None = None) -> list[TechChainSignal]:
+                tracer: ExecutionTracer | None = None, *,
+                risk_evidence_available: bool = True,
+                risk_coverage_by_chain: dict | None = None) -> list[TechChainSignal]:
         sent_map: dict[str, SentimentRow] = {}
         sent_degraded = isinstance(sentiment, Passthrough)
         if not sent_degraded:
             sent_map = sentiment
         alert_list: list[RiskAlert] = []
-        risk_degraded = isinstance(alerts, Passthrough)
-        if not risk_degraded:
+        risk_degraded = isinstance(alerts, Passthrough) or not risk_evidence_available
+        if not risk_degraded or risk_coverage_by_chain is not None and not isinstance(alerts, Passthrough):
             alert_list = alerts
+        if risk_coverage_by_chain is not None:
+            if not isinstance(risk_coverage_by_chain, dict) or set(risk_coverage_by_chain) - set(TECH_SUBCHAINS):
+                raise ValueError("Invalid per-chain risk coverage")
+            if any(alert.chain_id not in TECH_SUBCHAINS for alert in alert_list):
+                raise ValueError("V2 risk alerts must identify their own target")
 
         mon_map = {r.chain_id: r for r in monitor}
         signals: list[TechChainSignal] = []
@@ -149,13 +170,56 @@ class TechChainFusionAgent:
             else:
                 degraded.append("tech.sentiment")
 
-            s_risk, risk_level = _risk_penalty(cid, alert_list)
-            if risk_degraded:
-                degraded.append("tech.risk")
+            known_alert_level = None
+            risk_status, risk_refs = "insufficient_evidence", []
+            if risk_coverage_by_chain is None:
+                risk_level = 0.0 if risk_evidence_available else None
+                if risk_degraded:
+                    degraded.append("tech.risk")
+                else:
+                    s_risk, risk_level = _risk_penalty(cid, alert_list)
+                    parts["risk"] = (s_risk, W_RISK)
+                    if risk_level > 0:
+                        evidence.append(f"风险预警最高等级 {risk_level:.0f}/10")
             else:
-                parts["risk"] = (s_risk, W_RISK)
-                if risk_level > 0:
-                    evidence.append(f"风险预警最高等级 {risk_level:.0f}/10")
+                coverage = risk_coverage_by_chain.get(cid, {})
+                if not isinstance(coverage, dict):
+                    raise ValueError("Invalid chain risk coverage cell")
+                risk_status = coverage.get("status", "insufficient_evidence")
+                if risk_status not in {"available", "assessed", "insufficient_evidence", "conflicted"}:
+                    raise ValueError("Invalid chain risk assessment status")
+                source_ids = coverage.get("source_ids", [])
+                risk_refs = coverage.get("assessment_source_ids", [])
+                if (not isinstance(source_ids, list) or not isinstance(risk_refs, list)
+                        or len(source_ids) != len(set(source_ids))
+                        or not set(risk_refs) <= set(source_ids)):
+                    raise ValueError("Invalid chain risk evidence references")
+                mine = [alert for alert in alert_list if alert.chain_id == cid]
+                for alert in mine:
+                    if (type(alert.severity) not in {int, float} or not math.isfinite(alert.severity)
+                            or not 1 <= alert.severity <= 10 or not alert.evidence_ids
+                            or not set(alert.evidence_ids) <= set(source_ids)):
+                        raise ValueError("Known risk alert lacks its own qualified evidence")
+                known_alert_level = max((alert.severity for alert in mine), default=None)
+                declared_known = coverage.get("known_alert_level")
+                if declared_known is not None and declared_known != (known_alert_level or 0):
+                    raise ValueError("Known risk level differs from evidenced alerts")
+                risk_level = None
+                if risk_status == "assessed" and not risk_degraded:
+                    risk_level = coverage.get("risk_level")
+                    if (not risk_refs or type(risk_level) not in {int, float}
+                            or not math.isfinite(risk_level)
+                            or risk_level != (known_alert_level or 0)):
+                        raise ValueError("Complete chain assessment differs from known alerts")
+                    known_alert_level = known_alert_level or 0
+                    parts["risk"] = (10.0 - risk_level, W_RISK)
+                else:
+                    if coverage.get("risk_level") is not None and risk_status != "assessed":
+                        raise ValueError("Incomplete chain risk score must be null")
+                    degraded.append("tech.risk")
+                if known_alert_level is not None and known_alert_level > 0:
+                    evidence.append(f"已核风险预警最高等级 {known_alert_level:.0f}/10"
+                                    + ("；整体风险资料仍不足" if risk_level is None else ""))
 
             if parts:
                 wsum = sum(w for _, w in parts.values())
@@ -168,23 +232,30 @@ class TechChainFusionAgent:
                 bonus = 1.0
             else:
                 bonus = 0.90 + (prosperity / 10.0) * 0.25
-            if risk_level >= 8.0:
+            if risk_level is not None and risk_level >= 8.0:
+                bonus = min(bonus, 1.00)
+            if known_alert_level is not None and known_alert_level >= 8.0:
                 bonus = min(bonus, 1.00)
 
-            signals.append(TechChainSignal(
+            signal_class = StructuredTechChainSignal if risk_coverage_by_chain is not None else TechChainSignal
+            extra = ({"known_alert_level": known_alert_level, "risk_assessment_status": risk_status,
+                      "risk_evidence_ids": list(risk_refs)} if risk_coverage_by_chain is not None else {})
+            signals.append(signal_class(
                 chain_id=cid,
                 main_chain=SUBCHAIN_TO_MAIN.get(cid, "semis"),
                 prosperity=prosperity,
                 risk_level=risk_level,
                 alerts=[{"severity": a.severity, "type": a.type,
                          "headline_zh": a.headline_zh, "link": a.link,
-                         "transmission": a.transmission}
+                         "transmission": a.transmission,
+                         **({"evidence_ids": list(a.evidence_ids)} if risk_coverage_by_chain is not None else {})}
                         for a in alert_list if a.chain_id in (cid, "unknown")],
                 transmission=_transmission_graph(row) if row else {},
                 bonus_hint=round(bonus, 3),
                 leading_link=row.leading_link if row else None,
                 degraded_components=degraded,
                 evidence=evidence,
+                **extra,
             ))
         return signals
 
@@ -197,4 +268,10 @@ def signals_to_bonus_map(signals: list[TechChainSignal]) -> dict[str, float]:
         # 同一主链下多条子链：取偏离 1.0 最远者（最强信号优先）
         out[s.main_chain] = (s.bonus_hint
                              if abs(s.bonus_hint - 1.0) > abs(cur - 1.0) else cur)
+    # A severe v2 subchain warning cannot be overwritten by a different strong
+    # subchain when both are folded into the same main-chain bonus.
+    for signal in signals:
+        if (isinstance(signal, StructuredTechChainSignal) and signal.known_alert_level is not None
+                and signal.known_alert_level >= 8):
+            out[signal.main_chain] = min(out[signal.main_chain], 1.0)
     return out

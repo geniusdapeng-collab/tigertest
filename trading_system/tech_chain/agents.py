@@ -71,6 +71,13 @@ class SentimentRow:
 
 
 @dataclass
+class StructuredSentimentRow(SentimentRow):
+    """V2 preserves target citations/status without changing v1 snapshots."""
+    evidence_ids: list[str] = field(default_factory=list)
+    status: str = "insufficient_evidence"
+
+
+@dataclass
 class RiskAlert:
     severity: float              # 1..10
     chain_id: str
@@ -100,10 +107,11 @@ class TechChainMonitorAgent:
         return float(c[-1] / c[-win - 1] - 1.0)
 
     def execute(self, tracer: ExecutionTracer | None = None,
-                prefetched: dict[str, pd.DataFrame] | None = None) -> list[ChainMonitorRow]:
+                prefetched: dict[str, pd.DataFrame] | None = None, *,
+                excluded: frozenset[str] = frozenset()) -> list[ChainMonitorRow]:
         import time
         tickers = sorted({t for c in TECH_SUBCHAINS.values()
-                          for l in c["links"].values() for t in l})
+                          for l in c["links"].values() for t in l} - excluded)
         # 优先复用 pipeline 数据准备阶段已下载的数据（避免重复拉取卡墙钟）
         data: dict[str, pd.DataFrame] = {}
         missing: list[str] = []
@@ -179,28 +187,36 @@ class CycleLinkageAgent:
     def __init__(self, provider):
         self.provider = provider
 
-    def execute(self, tracer: ExecutionTracer | None = None) -> list[GlobalLinkageRow]:
+    def execute(self, tracer: ExecutionTracer | None = None, *,
+                prefetched: dict[str, pd.DataFrame] | None = None,
+                fetch=None) -> list[GlobalLinkageRow]:
         import time
         rows: list[GlobalLinkageRow] = []
         deadline = time.time() + 45.0
         try:
-            spy = self.provider.ohlcv("SPY", days=90)
+            spy = prefetched["SPY"] if prefetched is not None else self.provider.ohlcv("SPY", days=90)
         except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
             raise
         except Exception:
             spy = None
         spy_m20 = TechChainMonitorAgent._mom(spy, 20) if spy is not None else None
         for t in self.LEADERS:
-            if time.time() > deadline:
-                log.warning("tech.cycle_linkage 拉取预算耗尽，%d/%d 透传",
-                            len(rows), len(self.LEADERS))
-                break
-            try:
-                df = self.provider.ohlcv(t, days=90)
-            except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
-                raise
-            except Exception as e:
-                log.info("联动标的 %s 拉取失败: %s", t, e)
+            df = prefetched.get(t) if prefetched is not None else None
+            if df is None:
+                if time.time() > deadline:
+                    log.warning("tech.cycle_linkage 拉取预算耗尽，%d/%d 尚有可用",
+                                len(rows), len(self.LEADERS))
+                    if prefetched is None:
+                        break
+                    continue
+                try:
+                    df = fetch(t) if fetch is not None else self.provider.ohlcv(t, days=90)
+                except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+                    raise
+                except Exception as e:
+                    log.info("联动标的 %s 拉取失败: %s", t, e)
+                    continue
+            if prefetched is not None and df is None:
                 continue
             m20 = TechChainMonitorAgent._mom(df, 20)
             m60 = TechChainMonitorAgent._mom(df, 60)
@@ -226,7 +242,7 @@ class ChainSentimentAgent:
             out = self.llm.complete_json(
                 system=SYSTEM_ANALYST,
                 user=SENTIMENT_USER_TMPL.format(docs=payload),
-                schema_hint=SENTIMENT_SCHEMA, max_tokens=2000)
+                schema_hint=SENTIMENT_SCHEMA)
             rows: dict[str, SentimentRow] = {}
             for item in out.get("chains", []):
                 cid = str(item.get("chain_id") or "")
@@ -261,7 +277,7 @@ class ChainRiskAgent:
             out = self.llm.complete_json(
                 system=SYSTEM_ANALYST,
                 user=RISK_USER_TMPL.format(docs=payload),
-                schema_hint=RISK_SCHEMA, max_tokens=2000)
+                schema_hint=RISK_SCHEMA)
             alerts: list[RiskAlert] = []
             for a in out.get("alerts", []):
                 sev = _clamp(a.get("severity"), 1, 10)

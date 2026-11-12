@@ -16,12 +16,15 @@ agentgw → ifind_gw → tiingo）。TNX/VIX 本通道不承接（腾讯 VIX 数
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import re
-import urllib.request
+from threading import Lock
+import time
 
 import pandas as pd
+from curl_cffi import requests as curl_requests
 
 from .base import DataProvider
 from .cn_native import cn_native, hk_native
@@ -38,14 +41,23 @@ _QUOTE = "https://qt.gtimg.cn/q={native}"
 _UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 _SUFFIXES = (".OQ", ".N", ".AM", "")   # 探测：纳斯达克 → 纽交所 → 美交所/ARCA(ETF) → 无后缀
 _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+_SYMBOL_DIRECTORY_URLS = (
+    ("https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt", "nasdaq"),
+    ("https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt", "other"),
+)
+_EXCHANGE_SUFFIX = {"N": ".N", "A": ".AM", "P": ".AM", "Z": ".AM", "V": ".AM"}
+_exchange_cache: tuple[float, dict[str, str]] | None = None
+_exchange_lock = Lock()
 
 
 class TencentProvider(DataProvider):
     name = "tencent"
+    BATCH_WORKERS = 4
 
     def __init__(self, timeout: int = 20):
         self.timeout = timeout
         self._suffix: dict[str, str] = {}
+        self._exchange: dict[str, str] | None = None
 
     @staticmethod
     def available() -> bool:
@@ -56,9 +68,51 @@ class TencentProvider(DataProvider):
         headers = dict(_UA)
         if referer:
             headers["Referer"] = referer
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return resp.read().decode(encoding, errors="replace")
+        response = curl_requests.get(url, headers=headers, timeout=self.timeout,
+                                     impersonate="chrome")
+        response.raise_for_status()
+        return response.content.decode(encoding, errors="replace")
+
+    def _load_exchange_map(self) -> dict[str, str]:
+        global _exchange_cache
+        if self._exchange is not None:
+            return self._exchange
+        with _exchange_lock:
+            if _exchange_cache is None or time.time() - _exchange_cache[0] >= 7 * 86400:
+                symbols: dict[str, str] = {}
+                try:
+                    for url, kind in _SYMBOL_DIRECTORY_URLS:
+                        response = curl_requests.get(
+                            url,
+                            headers={**_UA, "Referer": "https://www.nasdaqtrader.com/"},
+                            timeout=max(self.timeout, 30), impersonate="chrome")
+                        response.raise_for_status()
+                        text = response.content.decode("utf-8", errors="replace")
+                        for line in text.splitlines()[1:]:
+                            if line.startswith("File Creation Time") or "|" not in line:
+                                continue
+                            fields = line.split("|")
+                            if kind == "nasdaq":
+                                if len(fields) < 4 or fields[3].strip() != "N":
+                                    continue
+                                symbol, suffix = fields[0].strip(), ".OQ"
+                            else:
+                                if len(fields) < 8 or fields[6].strip() != "N":
+                                    continue
+                                suffix = _EXCHANGE_SUFFIX.get(fields[2].strip().upper())
+                                if suffix is None:
+                                    continue
+                                symbol = fields[0].strip()
+                                alternate = fields[7].strip()
+                                if alternate and alternate != symbol:
+                                    symbols[alternate] = suffix
+                            if symbol:
+                                symbols[symbol] = suffix
+                except Exception as exc:
+                    logger.warning("腾讯交易所映射加载失败，回退后缀探测: %s", exc)
+                _exchange_cache = (time.time(), symbols)
+            self._exchange = _exchange_cache[1]
+        return self._exchange
 
     def _fetch_kline(self, sym: str, days: int, native: str | None = None) -> pd.DataFrame:
         """native 为完整源符号（usSPY.OQ / sh000300 / hk00700）；
@@ -106,8 +160,17 @@ class TencentProvider(DataProvider):
             if len(df) < min(days, 50):
                 raise RuntimeError(f"腾讯 {native} 数据不足（{len(df)} 行）")
             return df
-        cands = ([self._suffix[ticker]] if ticker in self._suffix
-                 else [f"{ticker}{s}" for s in _SUFFIXES])
+        suffix = self._suffix.get(ticker)
+        if suffix is None:
+            try:
+                suffix = self._load_exchange_map().get(ticker)
+            except Exception as exc:
+                logger.warning("腾讯交易所映射加载失败，回退后缀探测: %s", exc)
+        if suffix:
+            cands = [f"{ticker}{suffix}",
+                     *(f"{ticker}{s}" for s in _SUFFIXES if s != suffix)]
+        else:
+            cands = [f"{ticker}{s}" for s in _SUFFIXES]
         last_err: Exception | None = None
         for cand in cands:
             try:
@@ -130,6 +193,29 @@ class TencentProvider(DataProvider):
         if len(df) < max(30, days // 3):
             raise RuntimeError(f"腾讯 {ticker} 历史不足: {len(df)} 行")
         return df
+
+    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+        """Fetch independent symbols concurrently while preserving input order."""
+        requested = list(dict.fromkeys(tickers))
+        if not requested:
+            return {}
+        # Resolve the official directory once on the owner thread. Doing this
+        # inside every worker would serialize retries behind the module lock
+        # and turn one metadata failure into a long tail.
+        self._load_exchange_map()
+        result: dict[str, pd.DataFrame] = {}
+        with ThreadPoolExecutor(max_workers=min(self.BATCH_WORKERS, len(requested)),
+                                thread_name_prefix="tencent-batch") as pool:
+            futures = {pool.submit(self.ohlcv, ticker, days): ticker for ticker in requested}
+            for future in as_completed(futures):
+                ticker = futures[future]
+                try:
+                    frame = future.result()
+                except Exception:
+                    continue
+                if frame is not None and not frame.empty:
+                    result[ticker] = frame
+        return {ticker: result[ticker] for ticker in requested if ticker in result}
 
     def quote(self, ticker: str) -> dict | None:
         """腾讯实时行情（美股/沪深/港股，kind=realtime）。"""

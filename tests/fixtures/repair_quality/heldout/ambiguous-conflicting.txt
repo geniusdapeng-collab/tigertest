@@ -1,0 +1,4 @@
+TEST_FIXTURE Delta Semiconductor and Delta Airlines are different issuers.
+Wire One says Delta Semiconductor revenue grew 7% year over year; Site Two reproduces Wire One.
+The issuer later corrects growth to -2% year over year. Both versions must remain visible.
+An anonymous message alleges insolvency without evidence; it is an unverified risk lead, not a proven fact.

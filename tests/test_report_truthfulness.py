@@ -438,3 +438,88 @@ def test_json_roundtrip_preserves_report_facts_without_mutation(tmp_path):
     assert "缺失维度 1" in page and "2026-10-19" in page
     assert asdict(r) == before
     assert asdict(restored)["raw"] == json.loads(json.dumps(before["raw"]))
+
+
+def test_required_model_watch_is_complete_in_both_daily_reports():
+    r = _result(picks=False)
+    r.action = "WAIT"
+    r.market_view = "等待量价共同确认。"
+    r.raw.update(
+        model={"required": True, "all_required_completed": True, "model": "deepseek-flash",
+               "call_count": 6, "required_stages": ["a", "b", "c", "d", "e"], "search_count": 14},
+        execution_decisions=[{
+            "symbol": "AAPL", "action": "watch", "target_weight": 0,
+            "action_summary": "纸面观察苹果。", "why_this": "收入趋势有待交叉核实。",
+            "why_now": "观察日接近前期区间上沿。",
+            "entry_condition": "等待收盘站稳后复评。", "invalidation": "跌回区间中部则取消。",
+            "risk_note": "业绩消息尚未得到独立确认。",
+            "market_evidence": [{"symbol": "AAPL", "as_of": "2026-10-19", "close": 101.25}],
+            "sources": [{"id": "ds_1", "title": "AAPL & sector",
+                         "url": "https://example.com/company/filing", "published_at": None}],
+            "entry_price": None, "stop_price": None, "shares": None, "risk_usd": None,
+            "time_stop_days": None, "valid_for": "2026-10-21T16:00:00-04:00",
+            "reference_capital_usd": 100000,
+        }])
+    before = copy.deepcopy(asdict(r))
+    for report in (render_markdown(r), render_html(r)):
+        visible = _text(report)
+        for value in ("模型最终判断与执行条件", r.market_view, "纸面观察苹果。",
+                      "收入趋势有待交叉核实。", "观察日接近前期区间上沿。",
+                      "等待收盘站稳后复评。", "跌回区间中部则取消。",
+                      "业绩消息尚未得到独立确认。", "2026-10-19", "101.25",
+                      "2026-10-21T16:00:00-04:00", "AAPL & sector", "未提供下单价格或股数"):
+            assert value in visible
+        assert 'href="https://example.com/company/filing"' in report
+    assert asdict(r) == before
+
+
+def test_required_model_with_no_single_stock_instructions_still_reports_the_final_decision():
+    r = _result(picks=False)
+    r.action, r.market_view = "AVOID", "行业与个股证据不足，回避新增纸面信号。"
+    r.raw.update(
+        model={"required": True, "all_required_completed": True, "model": "deepseek-flash",
+               "call_count": 6, "required_stages": ["a", "b", "c", "d", "e"], "search_count": 14},
+        execution_decisions=[])
+    for report in (render_markdown(r), render_html(r)):
+        assert "本轮没有新增单票指令" in report
+        assert r.market_view in report
+
+
+@pytest.mark.parametrize(("candidates", "expected"), [
+    ({}, ["本轮没有标的通过数值风控，未启动按标的检索"]),
+    ({"AAPL": {"status": "filing_verified", "source_ids": ["ds_1"]}},
+     ["1 只标的通过数值风控，1 只取得合格的 SEC 公司文件"]),
+    ({"AAA": {"status": "filing_verified", "source_ids": ["ds_1"]},
+      "BBB": {"status": "no_results", "source_ids": []},
+      "CCC": {"status": "no_eligible_filing", "source_ids": []},
+      "DDD": {"status": "search_unavailable", "source_ids": []}},
+     ["4 只标的通过数值风控，1 只取得合格的 SEC 公司文件",
+      "检索零命中 1 只", "未取得合格文件 1 只", "检索不可用 1 只", "本轮仅可观察"]),
+    ({"AAA": {"status": ["<img src=x onerror=alert(1)>"]}},
+     ["公司证据检查记录不完整"]),
+])
+def test_required_model_reports_numeric_and_company_evidence_outcomes(candidates, expected):
+    from trading_system.llm.company_evidence import COMPANY_EVIDENCE_CONTRACT
+
+    r = _result(picks=False)
+    r.action = "WAIT"
+    r.raw.update(
+        model={"required": True, "all_required_completed": True, "model": "deepseek-flash",
+               "call_count": 5, "required_stages": [], "search_count": 14},
+        execution_decisions=[],
+        debate={"company_evidence": {"contract": COMPANY_EVIDENCE_CONTRACT, "candidates": candidates}},
+    )
+    before = copy.deepcopy(asdict(r))
+    markdown = render_markdown(r)
+    page = render_html(r)
+    for report in (markdown, page):
+        visible = _text(report)
+        assert all(fragment in visible for fragment in expected)
+        assert "<img src=x onerror=alert(1)>" not in report
+    assert "无达标标的，等待" not in markdown
+    assert asdict(r) == before
+
+    # Older reports have no SEC candidate outcome contract.
+    r.raw["debate"].pop("company_evidence")
+    assert "公司证据检查" not in render_markdown(r)
+    assert "公司证据检查" not in render_html(r)

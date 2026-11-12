@@ -176,12 +176,12 @@
   },
   "integrity": {
     "algorithm": "sha256",
-    "digest": "b21f258084d06a5c79dddc490362808c027eb292c27f79367874a822eed9ea92",
+    "digest": "0f4b24e9bfc8beec112f7f08a44c07a4ae1c46f3a9d0f7353977800a76e10f68",
     "assets": {
       "eval/questions.json": "38b9bb35fa3826e53d9a9ea0187074c1dd55fd879179990be494db747d634cf1",
       "feedback-enums.yml": "efd126b6b8d88d0464654e5217a5e1da798a71ce1d8247f6794418f696c7e548",
       "fences/trading-baseline.yml": "6453c367918d1aaa3af7765799ee83c257b62ce830ac685ecc15b437357779b0",
-      "model-policy.yml": "5834c591ae449bc0d1feabe21812fc4a29f35ddf63c1641054dac4cf1f914836",
+      "model-policy.yml": "fe22b25d7d8681d2fd4c43ca329fb6bb30efd90a3ddcb1e2fbf8ee5c301c8274",
       "presets/attribution-analyst.yml": "efc11fc22e045a5a006f974ef3062a04c430f848c479be90a8643e6411bc3f36",
       "presets/backtest-wfa.yml": "708eeca432a967240bb8d88b317a8abf795ce368b230026f537bb12a0df39fa2",
       "presets/bear-researcher.yml": "59258cf3201324acbb62e9ded71122f9ca548023f0ac428f02a7d1779ceecf3a",

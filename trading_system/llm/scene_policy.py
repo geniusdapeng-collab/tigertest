@@ -50,8 +50,27 @@ def load_policy(path: str | os.PathLike[str] | None = None) -> dict:
     return {"version": str(doc.get("version", "")), "scenes": scenes}
 
 
+_THINKING_EFFORTS = frozenset({"low", "high", "max"})
+
+
+def _thinking(raw: object, scene: str) -> dict:
+    if raw is None or raw == "disabled":
+        return {"type": "disabled"}
+    if isinstance(raw, str) and raw in _THINKING_EFFORTS:
+        return {"type": "enabled", "effort": raw}
+    if isinstance(raw, dict):
+        mode = raw.get("type")
+        effort = raw.get("effort")
+        if mode == "disabled" and set(raw) == {"type"}:
+            return {"type": "disabled"}
+        if (mode == "enabled" and set(raw) == {"type", "effort"}
+                and effort in _THINKING_EFFORTS):
+            return {"type": "enabled", "effort": effort}
+    raise ScenePolicyError(f"模型路由场景 {scene} 的 thinking 配置非法")
+
+
 def scene_config(scene: str, path: str | os.PathLike[str] | None = None) -> dict:
-    """场景配置 {tier, fallback, noDowngrade, window}；未点名场景回退 generic/L2。"""
+    """场景配置 {tier, fallback, noDowngrade, window, thinking}。"""
     scenes = load_policy(path)["scenes"]
     cfg = scenes.get(scene) or scenes.get("generic") or {"tier": "L2"}
     return {
@@ -59,6 +78,7 @@ def scene_config(scene: str, path: str | os.PathLike[str] | None = None) -> dict
         "fallback": cfg.get("fallback", "downgrade"),
         "noDowngrade": bool(cfg.get("noDowngrade", False)),
         "window": cfg.get("window", "any"),
+        "thinking": _thinking(cfg.get("thinking", "disabled"), scene),
     }
 
 
@@ -70,6 +90,13 @@ def scene_tier(kernel_step: str, path: str | os.PathLike[str] | None = None) -> 
 def must_passthrough(kernel_step: str, path: str | os.PathLike[str] | None = None) -> bool:
     """该环节失败是否只允许透传披露（金融铁律；与 LLMUnavailable 语义对齐）。"""
     return scene_config(KERNEL_SCENE_MAP[kernel_step], path)["fallback"] == "passthrough-disclose"
+
+
+def scene_thinking(kernel_step: str, path: str | os.PathLike[str] | None = None) -> dict:
+    """Return the exact DeepSeek thinking mode and effort for a kernel stage."""
+    if kernel_step not in KERNEL_SCENE_MAP:
+        raise ScenePolicyError(f"内核模型环节未登记：{kernel_step}")
+    return scene_config(KERNEL_SCENE_MAP[kernel_step], path)["thinking"]
 
 
 def validate_coverage(path: str | os.PathLike[str] | None = None) -> list[str]:

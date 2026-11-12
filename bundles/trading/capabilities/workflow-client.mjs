@@ -6,22 +6,33 @@ import { isAbsolute, resolve } from "node:path";
 
 export const ENGINE_ROOT = resolve(import.meta.dirname, "../../..");
 export const PROFILE = "us-public-paper-v1";
-export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "status", "receipt", "verify"]);
+export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
+export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
+export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
-  frameBytes: 131072, requestMs: 60000, waitMs: 2460000, pollMs: 1000, depth: 64, concurrent: 4,
-  terminateMs: 250, cleanupMs: 2000 });
+  frameBytes: 131072, requestMs: 60000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
+  terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 14400 });
 const RUN_ID = /^run-[0-9a-f]{32}$/u;
 const TERMINAL_OK = new Set(["completed", "completed_degraded"]);
 const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+// Client launchers forward these names only; values stay in the trusted process environment.
+export const MODEL_ENV_NAMES = Object.freeze(["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY", "TIGER_SEC_CONTACT",
+  "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
+  "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
+  "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT", "TIGER_AGENT_RUNTIME_POLICY_FILE"]);
 const EXIT_CODES = new Map([
   ...["INVALID_REQUEST", "INPUT_TOO_LARGE"].map((s) => [s, 2]),
   ...["READ_ONLY", "LIVE_FORBIDDEN", "UNAUTHORIZED"].map((s) => [s, 3]),
-  ...["IDEMPOTENCY_CONFLICT", "ACCOUNT_BUSY"].map((s) => [s, 5]),
+  ...["IDEMPOTENCY_CONFLICT", "ACCOUNT_BUSY", "ACCOUNT_VERSION_CONFLICT"].map((s) => [s, 5]),
   ...["DATA_UNAVAILABLE", "DATA_STALE", "SOURCE_SYNTHETIC", "CURRENCY_BLOCKED"].map((s) => [s, 6]),
   ...["RUNNER_FAILED", "RESULT_INVALID", "EVIDENCE_MISSING", "EVIDENCE_HASH_MISMATCH", "ARTIFACT_WRITE_FAILED", "RUN_NOT_FOUND"].map((s) => [s, 7]),
-  ...["STEP_ORDER_VIOLATION", "STEP_FAILED", "RUN_INCOMPLETE"].map((s) => [s, 8]),
+  ...["STEP_ORDER_VIOLATION", "STEP_FAILED", "RUN_INCOMPLETE", "MODEL_REQUIRED_FAILED"].map((s) => [s, 8]),
+  ...["RECONCILIATION_REQUIRED", "PARENT_ATTEMPT_FENCED"].map((s) => [s, 5]),
+  ...["RESUME_UNSUPPORTED", "RESUME_NOT_RETRYABLE", "RESEARCH_UNITS_INCOMPLETE", "CANCEL_UNSUPPORTED"].map((s) => [s, 8]),
+  ...["SUPPLEMENT_UNAVAILABLE"].map((s) => [s, 6]),
+  ...["SUPPLEMENT_SCOPE_INVALID", "CONTRACT_INVALID", "SEGMENTS_INVALID"].map((s) => [s, 2]),
   ["TIMEOUT", 9], ["INTERRUPTED", 9], ["CANCELLED", 130],
 ]);
 
@@ -121,7 +132,8 @@ export function parseJson(source, maxBytes = LIMITS.inputBytes) {
 }
 
 const SCHEMA_KEYS = new Set(["$schema", "$id", "$defs", "title", "description", "type", "properties", "required",
-  "additionalProperties", "items", "enum", "const", "pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"]);
+  "additionalProperties", "items", "enum", "const", "pattern", "minLength", "maxLength", "minimum", "maximum",
+  "minItems", "maxItems", "uniqueItems"]);
 const TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 /** Fail closed if a reviewed schema adds a keyword this validator does not implement. */
 export function validateSchemaDefinition(schema, depth = 0) {
@@ -143,6 +155,7 @@ export function validateSchemaDefinition(schema, depth = 0) {
     || new Set(schema.required).size !== schema.required.length)) throw invalid("Invalid schema required list.");
   if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== "boolean") throw invalid("Unsupported additionalProperties schema.");
   if (schema.items !== undefined) validateSchemaDefinition(schema.items, depth + 1);
+  if (schema.uniqueItems !== undefined && typeof schema.uniqueItems !== "boolean") throw invalid("Invalid schema uniqueness flag.");
   if (schema.enum !== undefined && (!Array.isArray(schema.enum) || !schema.enum.length
     || schema.enum.some((v) => v !== null && !["string", "boolean", "number"].includes(typeof v)))) throw invalid("Invalid scalar enum.");
   if ("const" in schema && schema.const !== null && !["string", "boolean", "number"].includes(typeof schema.const)) throw invalid("Unsupported non-scalar const.");
@@ -173,6 +186,7 @@ function validateValue(value, schema) {
     || (schema.pattern !== undefined && !new RegExp(schema.pattern, "u").test(value)))) throw invalid();
   if (Array.isArray(value)) {
     if ((schema.minItems !== undefined && value.length < schema.minItems) || (schema.maxItems !== undefined && value.length > schema.maxItems)) throw invalid();
+    if (schema.uniqueItems === true && new Set(value.map((item) => JSON.stringify(item))).size !== value.length) throw invalid();
     if (schema.items) for (const item of value) validateValue(item, schema.items);
   } else if (plain(value)) {
     for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) throw invalid();
@@ -212,6 +226,35 @@ export function safeEvidencePath(value) {
     && value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
+function validMarketDate(value) {
+  if (typeof value !== "string" || value.startsWith("0000-") || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/u.test(value)) return false;
+  const milliseconds = Date.parse(value + "T00:00:00Z");
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString().slice(0, 10) === value;
+}
+
+function validateModelInstructions(summary) {
+  const researchDate = summary.as_of.market_date;
+  if (!validMarketDate(researchDate)) throw invalid();
+  const symbols = new Set();
+  for (const row of summary.execution_decisions) {
+    const market = row.market_evidence[0];
+    const plan = ["entry_price", "stop_price", "shares", "risk_usd"];
+    if (symbols.has(row.symbol) || market.symbol !== row.symbol || market.close <= 0
+      || !validMarketDate(market.as_of) || market.as_of > researchDate
+      || market.id !== `md_${row.symbol}_${market.as_of.replaceAll("-", "")}_${market.series_sha256.slice(0, 24)}`
+      || row.reference_capital_usd <= 0 || !validMarketDate(row.valid_for.slice(0, 10))
+      || row.valid_for.slice(0, 10) <= researchDate || !Number.isFinite(Date.parse(row.valid_for))
+      || row.action === "buy" && (row.sources.length === 0 || row.target_weight <= 0
+        || plan.some(key => row[key] === null || row[key] <= 0) || row.stop_price >= row.entry_price)
+      || row.action === "watch" && (row.target_weight !== 0
+        || [...plan, "time_stop_days"].some(key => row[key] !== null))
+      || ["action_summary", "why_this", "why_now", "entry_condition", "invalidation", "risk_note"].some(
+        key => !row[key].trim() || /[<>\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/u.test(row[key]))
+      || new Set(row.sources.map(source => source.id)).size !== row.sources.length) throw invalid();
+    symbols.add(row.symbol);
+  }
+}
+
 export function validateEnvelope(envelope, operation, input = {}) {
   try {
     validateValue(envelope, RESULT_SCHEMA);
@@ -221,10 +264,13 @@ export function validateEnvelope(envelope, operation, input = {}) {
     if (envelope.error && envelope.error.run_id !== envelope.run_id) throw invalid();
     if (envelope.error?.details_ref !== null && envelope.error?.details_ref !== undefined && !safeEvidencePath(envelope.error.details_ref)) throw invalid();
     for (const ref of envelope.evidence_refs) if (!safeEvidencePath(ref.path)) throw invalid();
-    if (["run", "status", "doctor", "describe"].includes(operation)
+    if (["run", "resume", "supplement", "cancel", "status", "doctor", "describe"].includes(operation)
       && (envelope.summary !== null || envelope.verification !== null)) throw invalid();
-    if (operation === "run" && envelope.operation_ok
+    if (["run", "supplement"].includes(operation) && envelope.operation_ok
       && (!["accepted", "running"].includes(envelope.status) || !envelope.run_id || envelope.execution_mode !== "paper")) throw invalid();
+    if (operation === "resume" && envelope.operation_ok
+      && (!["accepted", "running", "completed", "completed_degraded"].includes(envelope.status)
+        || !envelope.run_id || envelope.execution_mode !== "paper")) throw invalid();
     if (envelope.summary !== null && (operation !== "receipt" || !envelope.operation_ok
       || !TERMINAL_OK.has(envelope.status) || envelope.verification?.ok !== true)) throw invalid();
     if (operation === "receipt" && envelope.operation_ok
@@ -234,6 +280,31 @@ export function validateEnvelope(envelope, operation, input = {}) {
       && (!envelope.run_id || envelope.execution_mode !== "paper" || !TERMINAL_OK.has(envelope.status)
         || envelope.verification?.ok !== true || !envelope.verification.receipt_sha256)) throw invalid();
     if (operation === "verify" && envelope.summary !== null) throw invalid();
+    if (envelope.summary?.disclosures?.model_mode === "enabled") {
+      const model = envelope.summary.model;
+      const stages = ["clean.llm_semantic", "tech.sentiment", "tech.risk", "sector.narrative", "decision.debate"];
+      if (envelope.status !== "completed" || envelope.summary.disclosures.model_required !== true
+        || !plain(model) || model.required_stages.join("|") !== stages.join("|")
+        || new Set(model.response_ids).size !== model.call_count || model.response_ids.length !== model.call_count
+        || Object.keys(model.stage_counts).sort().join("|") !== [...stages].sort().join("|")
+        || stages.some(stage => !Number.isSafeInteger(model.stage_counts[stage]) || model.stage_counts[stage] < 1)
+        || Object.values(model.stage_counts).reduce((sum, count) => sum + count, 0) !== model.call_count
+        || typeof envelope.summary.action_summary !== "string" || !envelope.summary.action_summary.trim()
+        || !Array.isArray(envelope.summary.execution_decisions)) throw invalid();
+      if (model.search_mode === "provider_native_search" && model.search_count !== 14) throw invalid();
+      if (model.search_mode === "intelligence_source_registry") {
+        const intelligence = envelope.summary.disclosures.intelligence;
+        if (intelligence?.contract !== "tiger.intelligence-acquisition.v2"
+          || model.acquisition_contract !== intelligence.contract
+          || model.bundle_id !== intelligence.bundle?.bundle_id
+          || !/^bundle_[0-9a-f]{32}$/u.test(model.bundle_id ?? "")
+          || !/^[0-9a-f]{64}$/u.test(intelligence.bundle?.manifest_sha256 ?? "")
+          || !Number.isSafeInteger(model.source_requests) || model.source_requests < 0
+          || model.source_requests !== intelligence.bundle?.usage?.requests
+          || !Number.isSafeInteger(model.fetch_count) || model.fetch_count < 0) throw invalid();
+      }
+      validateModelInstructions(envelope.summary);
+    }
   } catch (cause) { throw new WorkflowError("RESULT_INVALID", "Python returned an invalid or unverified result envelope.", { runId: input.run_id, cause }); }
   return envelope;
 }
@@ -268,8 +339,14 @@ export function failureEnvelope(operation, error, runId = null) {
 }
 export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_CODES.get(envelope.error?.code) ?? 7; }
 
-export function runtimeEnvironment(env = process.env) {
+export function runtimeEnvironment(env = process.env, modelRequired = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
+  // Read-only doctor/describe may inspect this non-secret trusted config;
+  // model credentials still cross only the explicit required-model boundary.
+  if (typeof env.TIGER_AGENT_RUNTIME_POLICY_FILE === "string") result.TIGER_AGENT_RUNTIME_POLICY_FILE = env.TIGER_AGENT_RUNTIME_POLICY_FILE;
+  if (modelRequired) for (const key of MODEL_ENV_NAMES) {
+    if (typeof env[key] === "string") result[key] = env[key];
+  }
   return { ...result, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1" };
 }
 export function startupOptions(options = {}) {
@@ -290,7 +367,7 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
   try {
     config = startupOptions(options);
     validateRequest(operation, input);
-    if (operation === "run" && config.mode !== "paper") throw new WorkflowError("READ_ONLY", "Run is unavailable in readonly deployment.");
+    if (["run", "resume", "supplement", "cancel"].includes(operation) && config.mode !== "paper") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
     if (signal?.aborted) throw new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id });
   } catch (error) { return failureEnvelope(operation, error, input?.run_id); }
   const args = ["-B", "-m", "trading_system.agent_runner", "--mode", config.mode, "--state-root", config.stateRoot, operation];
@@ -329,7 +406,9 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
         }, LIMITS.cleanupMs);
       }
       function onAbort() { stop(new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id })); }
-      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
+      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env,
+        operation === "resume" || operation === "supplement" || operation === "run" && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE].includes(input.profile)
+      ), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
       catch (cause) { finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })); return; }
       child.on("error", (cause) => finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })));
       child.stdout.on("data", (chunk) => {
@@ -398,6 +477,28 @@ export async function readRequestInput(file, stream = process.stdin, { signal } 
   }
 }
 
+export async function readOptionalRequestInput(stream = process.stdin, fallback = {}, { signal } = {}) {
+  const chunks = [];
+  let bytes = 0;
+  const onAbort = () => stream.destroy(new WorkflowError("CANCELLED", "Input reading was cancelled."));
+  try {
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) throw new WorkflowError("CANCELLED", "Input reading was cancelled.");
+    for await (const chunk of stream) {
+      const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += part.length;
+      if (bytes > LIMITS.inputBytes) throw new WorkflowError("INPUT_TOO_LARGE", "Input exceeds the byte limit.");
+      chunks.push(part);
+    }
+    return bytes === 0 ? fallback : parseJson(Buffer.concat(chunks));
+  } catch (error) {
+    if (error instanceof WorkflowError) throw error;
+    throw invalid("Unable to read a valid JSON request.");
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 export function abortableDelay(ms, signal) {
   return new Promise((done, reject) => {
     if (signal?.aborted) { reject(new WorkflowError("CANCELLED", "Observation was cancelled.")); return; }
@@ -407,9 +508,10 @@ export function abortableDelay(ms, signal) {
   });
 }
 
-export async function waitForReceipt(runId, options, { signal, waitMs = LIMITS.waitMs, pollMs = LIMITS.pollMs,
+export async function waitForReceipt(runId, options, { operation = "run", signal, waitMs = LIMITS.waitMs, pollMs = LIMITS.pollMs,
   invoke = invokeWorkflow } = {}) {
   const deadline = Date.now() + waitMs;
+  let retryDelay = pollMs;
   try {
     validateRequest("status", { run_id: runId });
     for (;;) {
@@ -417,18 +519,32 @@ export async function waitForReceipt(runId, options, { signal, waitMs = LIMITS.w
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new WorkflowError("TIMEOUT", "Waiting for the existing run exceeded the observation deadline.");
       const current = await invoke("status", { run_id: runId }, options, { signal, timeoutMs: Math.min(remaining, LIMITS.requestMs) });
-      if (!current.operation_ok) return current;
+      if (!current.operation_ok) {
+        const transientObservation = current.error?.code === "TIMEOUT" || current.error?.retryable === true;
+        if (!transientObservation) return current;
+        await abortableDelay(Math.min(retryDelay, Math.max(1, deadline - Date.now())), signal);
+        retryDelay = Math.min(retryDelay * 2, 30000);
+        continue;
+      }
+      retryDelay = pollMs;
       if (TERMINAL_OK.has(current.status)) {
-        const receipt = await invoke("receipt", { run_id: runId }, options, { signal, timeoutMs: Math.min(Math.max(1, deadline - Date.now()), LIMITS.requestMs) });
-        return receipt;
+        for (;;) {
+          const receipt = await invoke("receipt", { run_id: runId }, options,
+            { signal, timeoutMs: Math.min(Math.max(1, deadline - Date.now()), LIMITS.receiptMs) });
+          if (receipt.operation_ok) return receipt;
+          const transientProof = receipt.error?.code === "TIMEOUT" || receipt.error?.retryable === true;
+          if (!transientProof) return receipt;
+          await abortableDelay(Math.min(retryDelay, Math.max(1, deadline - Date.now())), signal);
+          retryDelay = Math.min(retryDelay * 2, 30000);
+        }
       }
       if (!["accepted", "running"].includes(current.status)) {
-        const failed = failureEnvelope("run", new WorkflowError("RUN_INCOMPLETE", "The existing run did not complete. Query its status; do not submit a replacement key."), runId);
+        const failed = failureEnvelope(operation, new WorkflowError("RUN_INCOMPLETE", "The existing run did not complete. Query its status; do not submit a replacement key."), runId);
         failed.status = ["failed", "blocked", "interrupted"].includes(current.status) ? current.status : "invalid";
         failed.data = { observed_status: current.status };
         return failed;
       }
       await abortableDelay(Math.min(pollMs, Math.max(1, deadline - Date.now())), signal);
     }
-  } catch (error) { return failureEnvelope("run", error, runId); }
+  } catch (error) { return failureEnvelope(operation, error, runId); }
 }

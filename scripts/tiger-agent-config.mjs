@@ -9,13 +9,15 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-import { ENGINE_ROOT, WorkflowError, parseJson, plain, runtimeEnvironment, sanitizeMessage } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { ENGINE_ROOT, MODEL_ENV_NAMES, WorkflowError, parseJson, plain, runtimeEnvironment, sanitizeMessage } from "../bundles/trading/capabilities/workflow-client.mjs";
 
 const require = createRequire(new URL("../governance/package.json", import.meta.url));
 const SERVER = "tiger-workflow";
 const PLUGIN = "mcp-tiger-workflow";
 const BEGIN = "# BEGIN TIGER AGENT MCP v1";
 const END = "# END TIGER AGENT MCP v1";
+const JSON_BEGIN = "// BEGIN TIGER AGENT MCP v1";
+const JSON_END = "// END TIGER AGENT MCP v1";
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const PYTHON_PARSE = `import sys,json
 if sys.version_info < (3,11): raise SystemExit(3)
@@ -52,7 +54,7 @@ function readConfig(project, file) {
     const data = readFileSync(fd);
     if (data.length > MAX_CONFIG_BYTES) fail("Configuration file exceeds the byte limit.");
     let text;
-    try { text = new TextDecoder("utf-8", { fatal: true }).decode(data); } catch { fail("Configuration is not valid UTF-8."); }
+    try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data); } catch { fail("Configuration is not valid UTF-8."); }
     noLinks(project, file);
     return { text, exists: true, mode: stat.mode & 0o777, ino: stat.ino, dev: stat.dev };
   } finally { closeSync(fd); }
@@ -104,9 +106,9 @@ function yaml(text) {
   }
   return { value, doc };
 }
-function blockRange(text) {
-  const starts = [...text.matchAll(/^# BEGIN TIGER AGENT MCP v1\r?$/gmu)];
-  const ends = [...text.matchAll(/^# END TIGER AGENT MCP v1\r?$/gmu)];
+function blockRange(text, json = false) {
+  const starts = [...text.matchAll(json ? /^[\t ]*\/\/ BEGIN TIGER AGENT MCP v1\r?$/gmu : /^# BEGIN TIGER AGENT MCP v1\r?$/gmu)];
+  const ends = [...text.matchAll(json ? /^[\t ]*\/\/ END TIGER AGENT MCP v1\r?$/gmu : /^# END TIGER AGENT MCP v1\r?$/gmu)];
   if (!starts.length && !ends.length) return null;
   if (starts.length !== 1 || ends.length !== 1 || starts[0].index >= ends[0].index) fail("Managed configuration markers are missing, duplicated or out of order.");
   return { start: starts[0].index, end: ends[0].index + ends[0][0].length,
@@ -117,6 +119,130 @@ function withoutCodex(value) {
   if (plain(copy.mcp_servers)) { delete copy.mcp_servers[SERVER]; if (!Object.keys(copy.mcp_servers).length) delete copy.mcp_servers; }
   return copy;
 }
+function withoutQoder(value) {
+  const copy = structuredClone(value);
+  if (plain(copy.mcpServers)) { delete copy.mcpServers[SERVER]; if (!Object.keys(copy.mcpServers).length) delete copy.mcpServers; }
+  return copy;
+}
+
+/** Preserve offsets and all original bytes; only the owned member is ever regenerated. */
+function jsonc(text) {
+  // Offsets below are UTF-16 string indices, including surrogate pairs in user comments.
+  // split("") keeps those offsets aligned with slice(), unlike code-point iteration.
+  const clean = text.split("");
+  let index = 0;
+  const stringEnd = (start) => {
+    let escaped = false;
+    for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+      const character = text[cursor];
+      if (!escaped && character === '"') return cursor + 1;
+      if (!escaped && character === "\\") escaped = true; else escaped = false;
+    }
+    fail("Qoder configuration contains an unterminated string.");
+  };
+  while (index < text.length) {
+    if (text[index] === '"') { index = stringEnd(index); continue; }
+    if (text.startsWith("//", index) || text.startsWith("/*", index)) {
+      const line = text[index + 1] === "/";
+      const lineEnd = line ? text.slice(index + 2).search(/[\n\r]/u) : -1;
+      const found = line ? lineEnd < 0 ? -1 : index + 2 + lineEnd : text.indexOf("*/", index + 2);
+      if (!line && found < 0) fail("Qoder configuration contains an unterminated comment.");
+      const end = found < 0 ? text.length : line ? found : found + 2;
+      for (; index < end; index += 1) if (!["\n", "\r"].includes(text[index])) clean[index] = " ";
+      continue;
+    }
+    index += 1;
+  }
+  let stripped = clean.join("");
+  const commentsClean = stripped;
+  // JSONC trailing separators are whitespace for strict duplicate-aware JSON validation.
+  for (index = 0; index < stripped.length; index += 1) {
+    if (stripped[index] === '"') { index = stringEnd(index) - 1; continue; }
+    if (stripped[index] !== ",") continue;
+    let next = index + 1;
+    while (/\s/u.test(stripped[next] ?? "x")) next += 1;
+    if (["}", "]"].includes(stripped[next])) clean[index] = " ";
+  }
+  stripped = clean.join("");
+  const empty = !stripped.trim();
+  let value;
+  try { value = empty ? {} : parseJson(stripped, MAX_CONFIG_BYTES); }
+  catch { fail("Qoder configuration must be valid JSONC without duplicate keys."); }
+  if (!plain(value) || value.mcpServers !== undefined && !plain(value.mcpServers)) fail("Qoder configuration must be an object with an mcpServers object.");
+  return { value, clean: stripped, commentsClean, empty };
+}
+function objectRange(source, property) {
+  const space = (offset) => { while (/\s/u.test(source[offset] ?? "x")) offset += 1; return offset; };
+  const endOfString = (start) => {
+    let escaped = false;
+    for (let index = start + 1; index < source.length; index += 1) {
+      if (!escaped && source[index] === '"') return index + 1;
+      if (!escaped && source[index] === "\\") escaped = true; else escaped = false;
+    }
+    fail("Invalid Qoder configuration string.");
+  };
+  const endOfValue = (start) => {
+    if (source[start] === '"') return endOfString(start);
+    if (["{", "["].includes(source[start])) {
+      let depth = 0;
+      for (let index = start; index < source.length; index += 1) {
+        if (source[index] === '"') { index = endOfString(index) - 1; continue; }
+        if (["{", "["].includes(source[index])) depth += 1;
+        else if (["}", "]"].includes(source[index]) && --depth === 0) return index + 1;
+      }
+      fail("Invalid Qoder configuration object.");
+    }
+    let index = start;
+    while (index < source.length && !/[,}\]\s]/u.test(source[index])) index += 1;
+    return index;
+  };
+  const rootStart = space(0);
+  if (property === undefined) return { start: rootStart, end: endOfValue(rootStart) };
+  let cursor = space(rootStart + 1);
+  while (source[cursor] !== "}") {
+    const keyEnd = endOfString(cursor);
+    const key = JSON.parse(source.slice(cursor, keyEnd));
+    const start = space(space(keyEnd) + 1);
+    const end = endOfValue(start);
+    if (key === property) return { start, end };
+    cursor = space(end);
+    if (source[cursor] === ",") cursor = space(cursor + 1);
+  }
+  return null;
+}
+function qoderConfiguration(text, range, server) {
+  const original = jsonc(text);
+  const entries = original.value.mcpServers ?? {};
+  if (Object.hasOwn(entries, SERVER) !== Boolean(range)) fail("Existing Tiger Qoder configuration is not owned by this generator; resolve the conflict explicitly.");
+  const bounds = original.empty ? null : objectRange(original.clean, "mcpServers");
+  const member = `${JSON.stringify(SERVER)}: ${JSON.stringify(server, null, 2)}`;
+  let proposed;
+  if (range) {
+    if (!bounds || range.start <= bounds.start || range.end >= bounds.end) fail("Managed Qoder block is outside mcpServers.");
+    const body = range.body.trim();
+    const owned = jsonc(`{${body.replace(/^,\s*/u, "")}}`).value;
+    if (Object.keys(owned).length !== 1 || !Object.hasOwn(owned, SERVER)) fail("Managed Qoder block contains unrelated configuration.");
+    proposed = appendBlock(text, [JSON_BEGIN, `${body.startsWith(",") ? ", " : ""}${member}`, JSON_END].join("\n"), range);
+  } else if (bounds) {
+    const prefix = Object.keys(entries).length && !original.commentsClean.slice(bounds.start + 1, bounds.end - 1).trim().endsWith(",") ? ", " : "";
+    const block = [JSON_BEGIN, `${prefix}${member}`, JSON_END].join("\n");
+    proposed = text.slice(0, bounds.end - 1) + "\n" + block + "\n" + text.slice(bounds.end - 1);
+  } else {
+    const block = [JSON_BEGIN, member, JSON_END].join("\n");
+    const inserted = `${JSON.stringify("mcpServers")}: {\n${block}\n}`;
+    if (original.empty) proposed = text + (text && !text.endsWith("\n") ? "\n" : "") + `{\n${inserted}\n}\n`;
+    else {
+      const root = objectRange(original.clean);
+      let previous = root.end - 2;
+      while (/\s/u.test(original.commentsClean[previous] ?? "x")) previous -= 1;
+      const prefix = Object.keys(original.value).length && text[previous] !== "," ? ", " : "";
+      proposed = text.slice(0, root.end - 1) + "\n" + prefix + inserted + "\n" + text.slice(root.end - 1);
+    }
+  }
+  const after = jsonc(proposed).value;
+  if (!isDeepStrictEqual(withoutQoder(original.value), withoutQoder(after)) || !isDeepStrictEqual(after.mcpServers?.[SERVER], server)) fail("Generated JSONC would alter unrelated configuration.");
+  return proposed;
+}
 function appendBlock(text, block, range) {
   if (range) return text.slice(0, range.start) + block + text.slice(range.end);
   return text + (text && !text.endsWith("\n") ? "\n" : "") + (text ? "\n" : "") + block + "\n";
@@ -124,7 +250,7 @@ function appendBlock(text, block, range) {
 
 export function prepareConfiguration(options = {}) {
   for (const name of Object.keys(options)) if (!["client", "project", "python", "stateRoot", "mode", "config", "check"].includes(name)) fail("Unknown generator option.");
-  if (!["codex", "dsh"].includes(options.client)) fail("Choose --client codex or --client dsh.");
+  if (!["codex", "dsh", "qoder"].includes(options.client)) fail("Choose --client codex, --client dsh or --client qoder (Qoder CLI).");
   const requested = resolve(options.project ?? ENGINE_ROOT);
   if (!existsSync(requested) || lstatSync(requested).isSymbolicLink() || !lstatSync(requested).isDirectory()) fail("Project must be an existing, non-symlink Tiger repository directory.");
   const project = realpathSync(requested);
@@ -136,17 +262,18 @@ export function prepareConfiguration(options = {}) {
   if (!["readonly", "paper"].includes(mode)) fail("Access mode must be readonly or paper.");
   const stateRoot = options.stateRoot ?? join(project, ".tiger-agent");
   if (!isAbsolute(stateRoot) || /[\x00-\x1f]/u.test(stateRoot)) fail("state-root must be an absolute directory.");
-  const relativeConfig = options.config ?? (options.client === "codex" ? ".codex/config.toml" : ".dsh/tiger-mcp.yaml");
+  const relativeConfig = options.config ?? ({ codex: ".codex/config.toml", dsh: ".dsh/tiger-mcp.yaml", qoder: ".qoder/settings.local.json" })[options.client];
   if (typeof relativeConfig !== "string" || !relativeConfig || isAbsolute(relativeConfig)
     || relativeConfig.split(/[\\/]/u).some((part) => ["", ".", ".."].includes(part))) fail("--config must be a project-relative file path without traversal.");
   const file = resolve(project, relativeConfig);
   noLinks(project, file);
   const before = readConfig(project, file);
-  const range = blockRange(before.text);
+  const range = blockRange(before.text, options.client === "qoder");
   const python = selectedPython(project, options.python);
   const probe = toml("", python, project);
   const server = { command: process.execPath, args: [entry, "--python", probe.python, "--state-root", resolve(stateRoot), "--mode", mode], cwd: project,
-    startup_timeout_sec: 15, tool_timeout_sec: 65 };
+    startup_timeout_sec: 15, tool_timeout_sec: 65,
+    ...(options.client === "codex" && mode === "paper" ? { env_vars: [...MODEL_ENV_NAMES] } : {}) };
   let proposed;
   if (options.client === "codex") {
     const original = toml(before.text, python, project).value;
@@ -161,6 +288,8 @@ export function prepareConfiguration(options = {}) {
     proposed = appendBlock(before.text, block, range);
     const after = toml(proposed, python, project).value;
     if (!isDeepStrictEqual(withoutCodex(original), withoutCodex(after)) || !isDeepStrictEqual(after.mcp_servers?.[SERVER], server)) fail("Generated TOML would alter unrelated configuration.");
+  } else if (options.client === "qoder") {
+    proposed = qoderConfiguration(before.text, range, { type: "stdio", command: server.command, args: server.args, cwd: project, timeout: 65000 });
   } else {
     const original = yaml(before.text);
     const ownedItems = original.value.filter((item) => item.id === PLUGIN);
@@ -273,7 +402,12 @@ export function main(argv = process.argv.slice(2)) {
     process.stdout.write(JSON.stringify({ schema_version: "tiger.agent-config/v1", ok: write.matches, client: prepared.client,
       project: prepared.project, config: prepared.file, mode: prepared.mode, python: prepared.python, python_version: prepared.pythonVersion,
       check: prepared.check, ...write, host_attached: false,
+      credentials_verified: false,
+      environment_requirements: prepared.mode === "paper" ? { source: "trusted host process environment", names: [...MODEL_ENV_NAMES],
+        required_for_model: ["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"], values_saved: false,
+        validation_scope: "Configuration syntax and Python version only; no credentials or provider requests were tested." } : null,
       next: prepared.client === "codex" ? "Use this trusted project configuration in a new or explicitly refreshed Codex connection; verify tools in the actual host."
+        : prepared.client === "qoder" ? "Qoder CLI: trust this project and reconnect using normal host controls; verify tools and doctor. For Qoder desktop, import a reviewed server through its connector UI. No user-global configuration was edited."
         : "Include this project plugin-list overlay in the selected DSH deployment configuration, then verify the actual host. No global configuration was edited." }) + "\n");
     process.exitCode = write.matches ? 0 : 2;
   } catch (error) {

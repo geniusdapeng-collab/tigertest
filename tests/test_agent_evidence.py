@@ -13,11 +13,13 @@ from trading_system.agent_evidence import (
     verify_events, verify_ref,
 )
 from trading_system.redline.execution import (
-    ExecutionContext, ExecutionPolicy, RuntimePaths, daily_stage_contract,
+    ExecutionContext, ExecutionContractError, ExecutionPolicy, RuntimePaths,
+    REQUIRED_POLICY_ID, daily_stage_contract,
 )
+from trading_system.redline.model_diagnostics import RequiredModelUnavailable
 
 
-def context(root):
+def context(root, *, model_required=False):
     reports = root / "work" / "reports"
     reports.mkdir(parents=True)
     paths = RuntimePaths(
@@ -29,7 +31,9 @@ def context(root):
     )
     return ExecutionContext(
         run_id="run-" + "1" * 32, run_date=date(2026, 10, 20), paths=paths,
-        policy=ExecutionPolicy(policy_id="test-evidence"),
+        policy=(ExecutionPolicy(policy_id=REQUIRED_POLICY_ID, model_mode="enabled",
+                                search_source_names=("deepseek_search",))
+                if model_required else ExecutionPolicy(policy_id="test-evidence")),
         store=EvidenceStore(root, "run-" + "1" * 32),
     )
 
@@ -227,6 +231,92 @@ def test_actual_controlled_io_error_payload_remains_valid(tmp_path, observed):
                           run_id=execution.run_id, stage="daily.preflight", role="output")
     assert error == {"error_type": "OSError", "message": "External call failed",
                      "outcome_observed": observed}
+
+
+def test_required_failure_persists_only_closed_diagnostic_and_remains_terminal(tmp_path):
+    execution = context(tmp_path, model_required=True)
+    failure = RequiredModelUnavailable("OUTPUT_SCHEMA_MISMATCH", schema_path="/chains/2/heat",
+                                       schema_keyword="maximum")
+    failure.untrusted_response = "fixture-secret model-output reasoning-content"
+    def fail():
+        raise failure
+    with pytest.raises(RequiredModelUnavailable):
+        with execution.step("daily.preflight", {"fixture": "terminal model failure"}):
+            execution.call_io("model.deepseek.chat", {"request": "keyless"}, fail)
+    snapshots = [json.loads(path.read_text()) for path in (tmp_path / "evidence").glob("*.json")]
+    errors = [item["value"] for item in snapshots
+              if item["role"] == "output" and "diagnostic" in item.get("value", {})]
+    assert errors == [{"error_type": "RequiredModelUnavailable", "message": "External call failed",
+                       "outcome_observed": True, "diagnostic": failure.diagnostic}]
+    assert "fixture-secret" not in json.dumps(snapshots)
+    assert execution.summary()[0]["status"] == "failed"
+    with pytest.raises(ExecutionContractError):
+        with execution.step("state.reset", {}):
+            pytest.fail("A failed execution cannot proceed")
+    with pytest.raises(ExecutionContractError):
+        execution.assert_complete()
+
+
+@pytest.mark.parametrize("required,method,trusted", [
+    (False, "model.deepseek.chat", True),
+    (True, "provider.yahoo.history", True),
+    (True, "model.deepseek.chat", False),
+])
+def test_diagnostic_is_not_copied_from_unrelated_policy_method_or_exception(
+        tmp_path, required, method, trusted):
+    execution = context(tmp_path, model_required=required)
+    failure = (RequiredModelUnavailable("NETWORK_TIMEOUT") if trusted else OSError("fixture-secret"))
+    if not trusted:
+        failure.diagnostic = {"content": "fixture-secret"}
+    def fail():
+        raise failure
+    with pytest.raises(type(failure)):
+        with execution.step("daily.preflight", {"fixture": "generic error compatibility"}):
+            execution.call_io(method, {"request": "keyless"}, fail)
+    errors = [json.loads(path.read_text())["value"] for path in (tmp_path / "evidence").glob("*.json")
+              if json.loads(path.read_text())["role"] == "output"]
+    assert errors == [{"error_type": type(failure).__name__, "message": "External call failed",
+                       "outcome_observed": True}]
+
+
+def test_valid_optional_diagnostic_is_independently_revalidated(tmp_path):
+    execution = complete(tmp_path)
+    payload = {"error_type": "RequiredModelUnavailable", "message": "External call failed",
+               "outcome_observed": True,
+               "diagnostic": RequiredModelUnavailable("HTTP_ERROR", http_status=429).diagnostic}
+    rewrite_first_io(tmp_path, lambda call: call.update(method="model.deepseek.chat"),
+                     payload, use_error=True)
+    assert verify_events(tmp_path, execution.run_id, daily_stage_contract())["stage_count"] == 39
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda p: p["diagnostic"].update(body="fixture-secret"),
+    lambda p: p["diagnostic"].update(http_status=True),
+    lambda p: p["diagnostic"].update(code="fixture-secret"),
+    lambda p: p["diagnostic"].update(schema_path="/chains/0", schema_keyword="type"),
+    lambda p: p.update(error_type="OSError"),
+    lambda p: p.update(diagnostic=None),
+])
+def test_rehashed_unsafe_model_error_diagnostic_is_rejected(tmp_path, mutate):
+    execution = complete(tmp_path)
+    payload = {"error_type": "RequiredModelUnavailable", "message": "External call failed",
+               "outcome_observed": True,
+               "diagnostic": RequiredModelUnavailable("HTTP_ERROR", http_status=401).diagnostic}
+    mutate(payload)
+    rewrite_first_io(tmp_path, lambda call: call.update(method="model.deepseek.chat"),
+                     payload, use_error=True)
+    with pytest.raises(EvidenceInvalid, match="I/O error diagnostic"):
+        verify_events(tmp_path, execution.run_id, daily_stage_contract())
+
+
+def test_model_diagnostic_cannot_be_attached_to_an_unrelated_io_method(tmp_path):
+    execution = complete(tmp_path)
+    payload = {"error_type": "RequiredModelUnavailable", "message": "External call failed",
+               "outcome_observed": True,
+               "diagnostic": RequiredModelUnavailable("NETWORK_TIMEOUT").diagnostic}
+    rewrite_first_io(tmp_path, lambda _call: None, payload, use_error=True)
+    with pytest.raises(EvidenceInvalid, match="I/O error diagnostic"):
+        verify_events(tmp_path, execution.run_id, daily_stage_contract())
 
 
 @pytest.mark.parametrize("relative", [

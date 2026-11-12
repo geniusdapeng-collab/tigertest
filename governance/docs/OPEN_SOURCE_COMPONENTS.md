@@ -5,7 +5,7 @@
 > 生成器：`scripts/oss-inventory.mjs`（离线事实）＋ `scripts/oss-watch.sh`（上游最新版本）
 > 仓库：workloom-ai/workroom-tiger ｜ 最近一次成功扫描：尚未记录已核实成功（运行 `pnpm oss:watch`） ｜ 最近尝试：未记录
 > 每项上游版本按成功时间、查询状态和 TTL 单独判定；历史缓存与失败查询不作本次最新版本结论。
-> 统计：登记组件 44 个 ｜ npm 直接依赖 155 个 ｜ Python 依赖 5 个 ｜ 容器镜像 1 个
+> 统计：登记组件 44 个 ｜ npm 直接依赖 156 个 ｜ Python 依赖 5 个 ｜ 容器镜像 1 个
 
 ## 0. 维护机制（四件事）
 
@@ -58,7 +58,7 @@
 | 34 | litestream | [github.com/benbjohnson/litestream](https://github.com/benbjohnson/litestream) | 选型在案（社区版备份） | —（未扫描） | — | 边缘节点 SQLite 备份 | Apache-2.0 |
 | 35 | browserskill | [github.com/Tencent/BrowserSkill](https://github.com/Tencent/BrowserSkill) | 观察项（2026-08-26 评估：Borrow 协议可借鉴） | —（未扫描） | — | 浏览器桥接对照组 | MIT；publish-rpa 真机发布的权限模型参照，暂不入运行时 |
 | 36 | browseract | [github.com/browser-act/skills](https://github.com/browser-act/skills) | 选型入库（技能市场执行面技能 · 可选） | —（未扫描） | — | skills/registry/browser-act（执行面技能，L2 审批安装） | MIT；freemium 云依赖（stealth>5/代理/打码付费）——适配纪律：proxyMode=custom-only、凭据客户本机、出站 api.browseract.com 全声明过三段瀑布；集成评估与适配见 skills/official/component-integration |
-| 37 | scrapling | [github.com/D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling) | 选型入库（技能市场执行面技能） | —（未扫描） | — | skills/registry/scrapling-collector | BSD-3-Clause；纯本地零出站；经 skill:forge 集成 |
+| 37 | scrapling | [github.com/D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling) · BSD-3-Clause | 历史签名技能包（本轮未升级或运行） | —（未扫描） | 观察项 | skills/registry/scrapling-collector | 保留技能市场 1.0.0 既有 HMAC 包与 registry manifest；目录登记不证明安装或执行。Tiger 根 Python requirements.txt 固定 scrapling==0.5.1，原生链路仅解析已获取 HTML 字节；普通 HTTP 采集由 Tiger transport 独立执行，动态浏览器/stealth/XHR/Spider/代理/MCP 未启用。旧 SKILL.md 中 DynamicFetcher、capture_xhr 等示例不作为本轮入口；不得从 egressDomains=[] 推断采集任务零出站。授权依赖来源继续按合同与真实凭据就绪状态披露。详见 skills/registry/scrapling-collector/NATIVE-INTEGRATION.md |
 | 38 | kaykit-adventurers | [github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0](https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0) | 运行时素材（真人风数字员工角色/动画/道具） | —（未扫描） | — | apps/web/public/models/kaykit（5 角色 GLB + 道具，CC0 可商用免署名） | CC0 许可证；76 组骨骼动画；贴图内嵌单文件；装备节点显隐做外观差异化 |
 | 39 | Kokoro-82M（织伴本机女声模型） | [github.com/hexgrad/kokoro](https://github.com/hexgrad/kokoro) · Apache-2.0 | 11751c087b4bbeed031e2b687b11dda698bd27ba0509472f960b57f835a999f7 | —（未扫描） | 素材/资产 | 本机可选织伴语音包（zf_001，已试听选定；不随基础客户端打包） | 固定 Kokoro-82M-v1.1-zh ONNX INT8 图与声线集 SHA-256；约 168 MB，配套 ZHG2P(version=1.1)，英文回调显式保留。产品所有者在 A/B/C 试听后选定 A / zf_001，旧小妮口音验收撤回。CPU 子进程推理，不支持任意情绪指令。导出器 MIT，模型 Apache-2.0；更新必须重跑听感、文本完整性、延迟与回退。 |
 | 40 | Misaki（织伴中文文本转发音） | [github.com/hexgrad/misaki](https://github.com/hexgrad/misaki) · Apache-2.0 | 0.9.4 | 0.9.4（历史记录；未核实或已过期） | 独立服务 | 已有语音工位 venv；scripts/install-loommate-voice.py 安装可选 zh 依赖 | 可选本机语音环境；固定 0.9.4 中的中文 1.1 发音前端与 EspeakFallback 英文回调。发音版本和依赖计入缓存，不混用旧模型发音。 |
@@ -69,11 +69,12 @@
 
 ## 2. 全量直接依赖（本仓事实，含上游最新）
 
-### 2.1 npm 直接依赖（155 个，解析自 pnpm-lock.yaml）
+### 2.1 npm 直接依赖（156 个，解析自 pnpm-lock.yaml）
 
 | 包 | 当前版本 | 声明 | 类型 | 出现位置 | 上游最新 |
 |---|---|---|---|---|---|
 | `@agentclientprotocol/sdk` | 1.4.0（声明） | 1.4.0 | 开发 | vendor/dsh/package.json | —（未扫描） |
+| `@axe-core/playwright` | 4.13.0 | 4.13.0 | 开发 | package.json | —（未扫描） |
 | `@deepseek-ai/cordis` | 4.0.2（声明） | ^4.0.2 | 生产 | vendor/dsh/package.json | —（未扫描） |
 | `@deepseek-ai/cordis-plugin-hmr` | 1.0.17（声明） | ^1.0.17 | 生产 | vendor/dsh/package.json | —（未扫描） |
 | `@deepseek-ai/cordis-plugin-include` | 1.0.7（声明） | ^1.0.7 | 生产 | vendor/dsh/package.json | —（未扫描） |

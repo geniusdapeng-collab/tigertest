@@ -2,7 +2,7 @@
   "meta": {
     "schema": "workloom.oss-components/v2",
     "name": "WorkLoom 开源组件登记表（oss-watch）",
-    "updated": "2026-09-27",
+    "updated": "2026-11-06",
     "doc": "docs/OPEN_SOURCE_COMPONENTS.md",
     "plan": "docs/oss-update-plan.md",
     "state": ".oss-watch-state.json",
@@ -1160,18 +1160,25 @@
       "name": "Scrapling",
       "repo": "https://github.com/D4Vinci/Scrapling",
       "license": "BSD-3-Clause",
-      "channel": "github",
-      "usage": "watch",
-      "current": "观察项（技能市场执行面技能）",
-      "currentSource": "skills/registry/scrapling-collector",
+      "channel": "pypi",
+      "usage": "runtime",
+      "currentSource": "requirements.txt",
       "scope": [
-        "skills/registry/scrapling-collector（纯本地零出站）"
+        "trading_system/intelligence/scrapling_parser.py（既有字节的可选 HTML 解析）",
+        "trading_system/intelligence/parse_worker.py（有界子进程）",
+        "governance/skills/registry/scrapling-collector（历史签名技能包，未升级）"
       ],
       "cadence": "monthly",
       "gate": "standard",
-      "notes": "纯本地零出站采集技能；经 skill:forge 集成，随技能市场分发",
-      "latest": "v0.4.15",
-      "latest_checked_at": "2026-09-18T16:00:21.000Z"
+      "notes": "Tiger 原生链路仅在可信 parser_policy 选择 scrapling 时解析既有 HTML 字节；普通 HTTP 由 Tiger transport 执行，解析器不自行联网。动态浏览器、stealth、XHR 捕获、Spider、代理轮换和 Scrapling MCP 未接入。技能市场 1.0.0 历史签名包未升级、未在本轮装配，不能作为新链路回执；旧 API 示例不适用本轮。官方 PyPI 本轮查得 0.5.1；oss-watch 成功状态未刷新。详见 governance/skills/registry/scrapling-collector/NATIVE-INTEGRATION.md",
+      "latest": "0.5.1",
+      "latest_checked_at": "2026-11-06T00:46:49.900Z",
+      "package": "scrapling",
+      "probe": {
+        "kind": "regex",
+        "file": "requirements.txt",
+        "pattern": "^scrapling==([0-9.]+)$"
+      }
     },
     {
       "name": "OpenAdapt",

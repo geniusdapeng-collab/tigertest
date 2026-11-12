@@ -74,12 +74,13 @@ describe("model-policy.yml（bundle 第⑦槽）解析校验", () => {
 version: "v3.0"
 scenes:
   cs-answer: { tier: L1, escalateOn: [low-confidence, thumbs-down] }
-  debate: { tier: L3, noDowngrade: true, fallback: passthrough-disclose }
+  debate: { tier: L3, noDowngrade: true, fallback: passthrough-disclose, thinking: max }
 plans:
   smart: { defaultShift: 1, tierOverrides: { cs-answer: L2 } }
 `);
     expect(issues).toEqual([]);
     expect(policy!.scenes["debate"]!.fallback).toBe("passthrough-disclose");
+    expect(policy!.scenes["debate"]!.thinking).toBe("max");
     expect(policy!.scenes["quest-plan"]).toBeDefined(); // 继承底座
     expect(resolveTier(policy!, "cs-answer", "smart")).toBe("L2");
   });
@@ -100,18 +101,20 @@ scenes:
     expect(resolveTier(policy!, "cs-answer", "smart")).toBe("L2");
   });
 
-  it("非法 tier / 非法 fallback / 覆盖未定义场景 → 逐条报错", () => {
+  it("非法 tier / 非法 fallback / thinking / 覆盖未定义场景 → 逐条报错", () => {
     const { policy, issues } = parseModelPolicy(`
 scenes:
   a: { tier: L9 }
   b: { tier: L1, fallback: whatever }
+  c: { tier: L1, thinking: extreme }
 plans:
   smart: { defaultShift: 1, tierOverrides: { ghost: L2 } }
 `);
     expect(policy).toBeNull();
-    expect(issues.length).toBe(3);
+    expect(issues.length).toBe(4);
     expect(issues.join()).toContain("L9");
     expect(issues.join()).toContain("ghost");
+    expect(issues.join()).toContain("thinking");
   });
 });
 

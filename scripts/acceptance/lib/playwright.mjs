@@ -7,29 +7,36 @@
  */
 import { createRequire } from "node:module";
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 export function loadChromium(repoRoot) {
-  const require = createRequire(join(repoRoot, "package.json"));
-  const tryLoad = (spec) => {
+  const requireFrom = createRequire(join(repoRoot, "package.json"));
+  const tryLoad = (spec, loader = requireFrom) => {
     try {
-      const mod = require(spec);
+      const mod = loader(spec);
       if (mod?.chromium) return mod.chromium;
     } catch { /* 继续尝试下一个来源 */ }
     return null;
   };
-  const direct = tryLoad("playwright") ?? tryLoad("@playwright/test");
-  if (direct) return direct;
-
-  const pnpmDir = join(repoRoot, "node_modules", ".pnpm");
-  if (existsSync(pnpmDir)) {
-    for (const dir of readdirSync(pnpmDir)) {
-      if (!dir.startsWith("playwright@") && !dir.startsWith("@playwright+test@")) continue;
-      for (const pkg of ["playwright", "@playwright/test"]) {
-        const candidate = join(pnpmDir, dir, "node_modules", pkg);
-        if (!existsSync(candidate)) continue;
-        const chromium = tryLoad(candidate);
-        if (chromium) return chromium;
+  const roots = [...new Set([repoRoot, join(repoRoot, "governance"),
+    join(repoRoot, "governance", "apps", "web"),
+    ...(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)])];
+  const loaders = roots.map((root) => [root, createRequire(join(root, "package.json"))]);
+  for (const [, loader] of loaders) {
+    const direct = tryLoad("playwright", loader) ?? tryLoad("@playwright/test", loader);
+    if (direct) return direct;
+  }
+  for (const [root, loader] of loaders) {
+    for (const pnpmDir of [join(root, "node_modules", ".pnpm"), join(root, ".pnpm")]) {
+      if (!existsSync(pnpmDir)) continue;
+      for (const dir of readdirSync(pnpmDir)) {
+        if (!dir.startsWith("playwright@") && !dir.startsWith("@playwright+test@")) continue;
+        for (const pkg of ["playwright", "@playwright/test"]) {
+          const candidate = join(pnpmDir, dir, "node_modules", pkg);
+          if (!existsSync(candidate)) continue;
+          const chromium = tryLoad(candidate, loader);
+          if (chromium) return chromium;
+        }
       }
     }
   }

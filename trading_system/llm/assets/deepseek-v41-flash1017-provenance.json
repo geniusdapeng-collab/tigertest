@@ -1,0 +1,39 @@
+{
+  "schema": "tiger.provider-prompt-artifacts/v1",
+  "provider": "deepseek",
+  "api_model": "deepseek-flash",
+  "observed_release": "DeepSeek-V4.1-Flash-1017",
+  "source_repository": "https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "source_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+  "files": [
+    {
+      "path": "deepseek-v41-flash1017-tokenizer.json",
+      "upstream_path": "tokenizer.json",
+      "sha256": "c90dfa01249db1be4245780a052ede752e1361c612ac6d08e2bdada7d599476b",
+      "bytes": 6367257
+    },
+    {
+      "path": "deepseek-v41-flash1017-encoding.py",
+      "upstream_path": "encoding/encoding.py",
+      "sha256": "13231c592e958fb39e2af6001dae69d90e7a36b265702b9b390236fb387599e2",
+      "bytes": 37962
+    },
+    {
+      "path": "deepseek-v41-flash1017-LICENSE.txt",
+      "upstream_path": "LICENSE",
+      "sha256": "f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040",
+      "bytes": 1084
+    }
+  ],
+  "strict_schema_normalization_source": {
+    "repository": "https://github.com/deepseek-ai/deepseek-recipe",
+    "revision": "935817c66f5d6e64838f419692545f06787e485f",
+    "paths": [
+      "deepseek-recipe/src/protocol/client_tools.rs",
+      "deepseek-recipe-encoding/src/v4/dsv41.rs",
+      "deepseek-recipe-encoding/src/tokenizer.rs"
+    ]
+  },
+  "legacy_tokenizer_retained": "deepseek-v4-tokenizer.json",
+  "counting_scope": "Pinned supported text-only Chat Completions framing, including JSON response format and strict tool definitions. Unsupported shapes fail closed. Provider usage remains authoritative for accounting."
+}

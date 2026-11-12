@@ -78,6 +78,21 @@ STEP_REGISTRY: tuple[StepSpec, ...] = (
 
 LLM_STEPS = {s.name for s in STEP_REGISTRY if s.driver == "llm"}
 
+
+def pipeline_steps(intelligence: bool = False) -> tuple[StepSpec, ...]:
+    """Versioned order; historical profiles retain their exact original stages."""
+    if not intelligence:
+        return STEP_REGISTRY
+    by_name = {step.name: step for step in STEP_REGISTRY}
+    acquisition = (
+        by_name["data.prepare"],
+        StepSpec("intelligence.frontier", "rules", "研究对象或行情绑定缺失则失败", "intelligence_workflow"),
+        *(by_name[name] for name in ("search.collect", "clean.rule_base", "clean.llm_semantic", "clean.cross_validate")),
+        StepSpec("intelligence.freeze", "rules", "证据不足显式partial；篡改或并发封存失败", "intelligence_workflow"),
+    )
+    moved = {step.name for step in acquisition}
+    return acquisition + tuple(step for step in STEP_REGISTRY if step.name not in moved)
+
 # 延迟环节：由 pipeline 之外的编排层执行并补账（当前仅 review.daily）。
 # assert_complete 不强制 pipeline 内打点；pipeline 末尾统一记 deferred 占位，
 # 外层（main.daily）执行后把 redline 中该环节改写为 executed 留痕。
@@ -120,7 +135,8 @@ class ExecutionTracer:
 
     @contextmanager
     def step(self, name: str, inputs: Any = None):
-        spec = next((s for s in STEP_REGISTRY if s.name == name), None)
+        registry = pipeline_steps(bool(self.execution and getattr(self.execution, "intelligence", False)))
+        spec = next((s for s in registry if s.name == name), None)
         if spec is None:
             raise RedlineViolation(f"未注册环节被调用: {name}（疑似擅自变更全链路）")
         if self.execution is not None:
@@ -167,7 +183,7 @@ class ExecutionTracer:
 
     def summary(self) -> list[dict]:
         if self.execution is not None:
-            names = {s.name for s in STEP_REGISTRY} - DEFERRED_STEPS
+            names = {s.name for s in pipeline_steps(getattr(self.execution, "intelligence", False))} - DEFERRED_STEPS
             actual = [{"step": r["stage"],
                        "status": "executed" if r["status"] == "completed" else r["status"],
                        "ms": r["ms"], "note": r["reason"]}
@@ -194,9 +210,14 @@ def llm_guard(step_name: str, fn: Callable[[], Any], fallback_payload: Any,
     """
     if step_name not in LLM_STEPS:
         raise RedlineViolation(f"llm_guard 用于非 LLM 环节: {step_name}")
+    required = bool(tracer is not None and tracer.execution is not None
+                    and tracer.execution.model_required)
     try:
         out = fn()
     except LLMUnavailable as e:
+        if required:
+            from .execution import RequiredModelFailed
+            raise RequiredModelFailed("Mandatory semantic model failed") from None
         if tracer is not None:
             tracer.mark_passthrough(step_name, f"LLM不可用: {e}")
         else:
@@ -204,8 +225,14 @@ def llm_guard(step_name: str, fn: Callable[[], Any], fallback_payload: Any,
         return Passthrough(payload=fallback_payload, origin=step_name,
                            reason=f"LLM不可用: {e}")
     if out is None:
+        if required:
+            from .execution import RequiredModelFailed
+            raise RequiredModelFailed("Mandatory semantic model returned no result")
         if tracer is not None:
             tracer.mark_passthrough(step_name, "LLM无有效产出")
         return Passthrough(payload=fallback_payload, origin=step_name,
                            reason="LLM无有效产出")
+    if required and isinstance(out, Passthrough):
+        from .execution import RequiredModelFailed
+        raise RequiredModelFailed("Mandatory semantic model cannot pass through")
     return out

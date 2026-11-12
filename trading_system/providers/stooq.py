@@ -20,6 +20,7 @@ import io
 import logging
 import re
 import time
+from collections import Counter
 
 import pandas as pd
 
@@ -123,8 +124,14 @@ class _StooqSession:
 class StooqProvider(DataProvider):
     name = "stooq"
 
-    def __init__(self, *, allow_challenge: bool = True):
+    def __init__(self, *, allow_challenge: bool = True,
+                 max_consecutive_no_output: int | None = None):
+        if (max_consecutive_no_output is not None and
+                (type(max_consecutive_no_output) is not int or max_consecutive_no_output < 1)):
+            raise ValueError("Stooq batch availability budget must be a positive integer or None")
         self._http = _StooqSession(allow_challenge=allow_challenge)
+        self.max_consecutive_no_output = max_consecutive_no_output
+        self.last_batch_status: dict | None = None
 
     def _fetch(self, symbol: str, days: int) -> pd.DataFrame:
         text = self._http.get_text(_BASE.format(symbol=symbol))
@@ -137,6 +144,55 @@ class StooqProvider(DataProvider):
 
     def ohlcv(self, ticker: str, days: int = 400) -> pd.DataFrame:
         return self._fetch(ticker.lower() + ".us", days)
+
+    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+        """Bound strict serial no-output probes, then let the existing chain fill gaps.
+
+        Exhaustion means this batch's availability budget was consumed. Ordinary
+        missing symbols are not proof that the remote service failed. No price
+        is synthesized and already observed frames remain unchanged.
+        """
+        from ..redline.execution import EvidenceWriteError, ExecutionContractError, StrictObservationError
+        symbols = [ticker for ticker in tickers if isinstance(ticker, str) and ticker.strip()]
+        status = {"schema": "tiger.source-availability.v1", "provider": self.name,
+                  "requested": len(tickers), "skipped_empty_symbols": len(tickers) - len(symbols),
+                  "attempted": 0, "returned": 0, "empty_observations": 0,
+                  "consecutive_no_output": 0, "limit": self.max_consecutive_no_output,
+                  "source_exhausted": False, "service_failure_asserted": False,
+                  "reason": "request_completed" if symbols else "empty_request",
+                  "unattempted_symbols": [], "errors": {}}
+        self.last_batch_status = status
+        out, errors = {}, Counter()
+        for index, ticker in enumerate(symbols):
+            status["attempted"] += 1
+            try:
+                frame = self.ohlcv(ticker, days=days)
+            except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
+                # Execution/observation/evidence faults must poison the strict
+                # stage rather than masquerade as a public-source outage.
+                raise
+            except Exception as exc:
+                errors[type(exc).__name__] += 1
+                frame = None
+            valid = (isinstance(frame, pd.DataFrame) and not frame.empty
+                     and not frame.dropna(how="all").empty)
+            if valid:
+                out[ticker] = frame
+                status["consecutive_no_output"] = 0
+            else:
+                status["empty_observations"] += 1
+                status["consecutive_no_output"] += 1
+            status.update(returned=len(out), errors=dict(errors))
+            if (self.max_consecutive_no_output is not None
+                    and status["consecutive_no_output"] >= self.max_consecutive_no_output
+                    and index + 1 < len(symbols)):
+                status.update(source_exhausted=True, reason="availability_budget_exhausted",
+                              unattempted_symbols=symbols[index + 1:])
+                logger.warning("stooq 批次连续 %d 次无有效观测，耗尽本源可用性探测预算；"
+                               "已尝试 %d/%d，其余交原可信回退链（不判定远端服务失败）",
+                               status["consecutive_no_output"], status["attempted"], len(symbols))
+                break
+        return out
 
     def tnx_yield(self, days: int = 400) -> pd.Series:
         # stooq 10 年期美债收益率（百分数）

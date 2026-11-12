@@ -1,0 +1,28 @@
+[Unit]
+Description=Tiger PnL public account ledger
+After=network.target
+
+[Service]
+Type=simple
+User=tiger-pnl
+Group=tiger-pnl
+WorkingDirectory=/opt/tiger-pnl/current
+EnvironmentFile=/etc/tiger-pnl/runtime.env
+ExecStart=/usr/bin/flock --nonblock /var/lib/tiger-pnl/.process.lock /opt/tiger-pnl/runtime/node pnl/server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tiger-pnl
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=2048
+
+[Install]
+WantedBy=multi-user.target

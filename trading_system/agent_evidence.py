@@ -19,6 +19,7 @@ import tempfile
 from typing import Any, Callable
 
 from .redline.execution import EvidenceWriteError
+from .redline.model_diagnostics import MODEL_IO_METHODS, validate_model_diagnostic
 
 MAX_FILE_BYTES = 256 * 1024 * 1024
 SNAPSHOT_SCHEMA = "tiger.snapshot.v1"
@@ -362,9 +363,9 @@ def read_snapshot(root: Path, ref: dict, *, run_id: str, stage: str,
     return blob["value"]
 
 
-def verify_events(root: Path, run_id: str, specs: list[dict]) -> dict:
+def verify_events(root: Path, run_id: str, specs: list[dict], *, event_relative: str = "events.jsonl") -> dict:
     """Recompute the ordered execution stream and all declared child I/O refs."""
-    raw = read_bytes(root, "events.jsonl", limit=16 * 1024 * 1024)
+    raw = read_bytes(root, event_relative, limit=16 * 1024 * 1024)
     if not raw.endswith(b"\n"):
         raise EvidenceInvalid("RUN_INCOMPLETE", "Unfinished execution stream")
     try:
@@ -415,7 +416,8 @@ def verify_events(root: Path, run_id: str, specs: list[dict]) -> dict:
         refs[begin["input_ref"]["path"]] = begin["input_ref"]
         state = end.get("status")
         if state == "passthrough":
-            if spec["driver"] != "llm" or not isinstance(end.get("reason"), str) or not end["reason"].strip():
+            if (spec["driver"] != "llm" or spec.get("allow_passthrough") is not True
+                    or not isinstance(end.get("reason"), str) or not end["reason"].strip()):
                 raise EvidenceInvalid("STEP_FAILED", "Illegal stage passthrough", stage=stage)
             degraded.append({"stage": stage, "reason": end["reason"]})
         elif state != "completed":
@@ -444,14 +446,51 @@ def verify_events(root: Path, run_id: str, specs: list[dict]) -> dict:
                 if name in call:
                     value = read_snapshot(root, call[name], run_id=run_id, stage=stage,
                                           role="input" if name == "input_ref" else "output")
-                    if name == "error_ref" and (
-                            not isinstance(value, dict)
-                            or set(value) != {"error_type", "message", "outcome_observed"}
-                            or not isinstance(value["error_type"], str) or not value["error_type"]
-                            or value["message"] != "External call failed"
-                            or not isinstance(value["outcome_observed"], bool)):
-                        raise EvidenceInvalid("RESULT_INVALID", "I/O error payload differs",
-                                              stage=stage)
+                    if name == "error_ref":
+                        base_fields = {"error_type", "message", "outcome_observed"}
+                        allowed_error_fields = {
+                            frozenset(base_fields),
+                            frozenset(base_fields | {"diagnostic"}),
+                            frozenset(base_fields | {"response_observation"}),
+                            frozenset(base_fields | {
+                                "diagnostic", "response_observation"}),
+                        }
+                        if (not isinstance(value, dict)
+                                or frozenset(value) not in allowed_error_fields
+                                or "response_observation" in value
+                                and "diagnostic" not in value
+                                or not isinstance(value["error_type"], str) or not value["error_type"]
+                                or value["message"] != "External call failed"
+                                or not isinstance(value["outcome_observed"], bool)):
+                            raise EvidenceInvalid("RESULT_INVALID", "I/O error payload differs",
+                                                  stage=stage)
+                        if "diagnostic" in value:
+                            try:
+                                if (call["method"] not in MODEL_IO_METHODS
+                                        or value["error_type"] != "RequiredModelUnavailable"):
+                                    raise ValueError("Untrusted model failure metadata")
+                                validate_model_diagnostic(value["diagnostic"])
+                            except ValueError as exc:
+                                raise EvidenceInvalid("RESULT_INVALID", "I/O error diagnostic differs",
+                                                      stage=stage) from exc
+                        if "response_observation" in value:
+                            try:
+                                from .llm.json_observation import validate_reference_observation
+                                if (call["method"] not in MODEL_IO_METHODS
+                                        or value["error_type"] != "RequiredModelUnavailable"):
+                                    raise ValueError("Untrusted model observation metadata")
+                                observation = validate_reference_observation(
+                                    value["response_observation"])
+                                for attempt in observation["attempts"]:
+                                    ref = attempt["observation_ref"]
+                                    read_snapshot(root, ref, run_id=run_id, stage=stage,
+                                                  role="output")
+                                    refs[ref["path"]] = ref
+                            except ValueError as exc:
+                                raise EvidenceInvalid(
+                                    "RESULT_INVALID",
+                                    "I/O error observation differs",
+                                    stage=stage) from exc
                     refs[call[name]["path"]] = call[name]
         previous_output = end["output_ref"]
     return {"event_count": len(events), "stage_count": len(specs),

@@ -1,0 +1,2 @@
+# Preserve exact captured HTTP bytes, including source table whitespace.
+heldout/fed-g17-capture.txt -text -whitespace

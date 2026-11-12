@@ -1,0 +1,6 @@
+TEST_FIXTURE Beta Devices
+Fiscal year ended 30 June 2026; values in EUR thousands.
+Revenue | 2500
+Operating cash flow | -900
+Footnote: Revenue includes 1100 of one-time settlement income.
+This release gives no USD conversion rate and no calendar-quarter results.

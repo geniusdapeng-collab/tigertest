@@ -141,7 +141,7 @@ class DebateAgent:
                 tss=target.get("tss_final"), template=target.get("template") or "无",
                 chain=target.get("chain") or "无", sector=target.get("sector") or "无",
                 draft=target.get("draft", ""), docs=payload),
-            schema_hint=DEBATE_SCHEMA, max_tokens=1600)
+            schema_hint=DEBATE_SCHEMA)
         bull = [str(x) for x in (out.get("bull_points") or []) if str(x).strip()][:5]
         bear = [str(x) for x in (out.get("bear_points") or []) if str(x).strip()][:5]
         fals = [str(x) for x in (out.get("falsification_conditions") or [])

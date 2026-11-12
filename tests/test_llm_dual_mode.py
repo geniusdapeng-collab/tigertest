@@ -28,10 +28,11 @@ def _chat_payload(text: str):
 def test_openai_compat_success(monkeypatch):
     seen = {}
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, data=None, headers=None, timeout=None):
         seen["url"] = url
         seen["auth"] = headers.get("Authorization")
-        seen["model"] = json["model"]
+        seen["payload"] = json.loads(data)
+        seen["model"] = seen["payload"]["model"]
         return _Resp(200, _chat_payload('{"score": 7, "reason": "ok"}'))
 
     monkeypatch.setattr("requests.post", fake_post)
@@ -41,7 +42,10 @@ def test_openai_compat_success(monkeypatch):
     assert out["score"] == 7
     assert seen["url"] == "https://api.deepseek.com/v1/chat/completions"
     assert seen["auth"] == "Bearer sk-x"
-    assert seen["model"] == "deepseek-chat"
+    assert seen["model"] == "deepseek-flash"
+    assert seen["payload"]["response_format"] == {"type": "json_object"}
+    assert seen["payload"]["thinking"] == {"type": "disabled"}
+    assert seen["payload"]["max_tokens"] > 300_000
 
 
 def test_openai_compat_unconfigured_raises(monkeypatch):
@@ -112,7 +116,7 @@ def test_default_client_backend_api(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
     c = default_client()
-    assert isinstance(c, OpenAICompatClient) and c.model == "deepseek-chat"
+    assert isinstance(c, OpenAICompatClient) and c.model == "deepseek-flash"
 
 
 def test_default_client_backend_local(monkeypatch):
@@ -124,14 +128,27 @@ def test_default_client_backend_local(monkeypatch):
 
 
 def test_default_client_auto_falls_to_api(monkeypatch):
-    """auto：kimi 不可用（无 SDK）→ 已配置 LLM_BASE_URL 时选 api。"""
+    """auto：已配置 LLM_BASE_URL 时直接选 DeepSeek API，不探测 Kimi。"""
     monkeypatch.delenv("LLM_BACKEND", raising=False)
     monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
     monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
     import sys
     monkeypatch.setitem(sys.modules, "agent_gw", None)  # 模拟 SDK 不存在
     c = default_client()
-    assert isinstance(c, OpenAICompatClient)
+    assert isinstance(c, OpenAICompatClient) and c.model == "deepseek-flash"
+
+
+def test_default_client_auto_never_falls_back_to_kimi(monkeypatch):
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_LOCAL_URL", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    LocalAgentClient._cache = None
+    monkeypatch.setattr("requests.get", lambda *a, **k: (_ for _ in ()).throw(ConnectionError()))
+    c = default_client()
+    assert c.__class__.__name__ == "DisabledLLMClient"
+    with pytest.raises(LLMUnavailable):
+        c.complete_json(system="s", user="u", schema_hint={})
 
 
 def test_redline_no_rule_fallback():

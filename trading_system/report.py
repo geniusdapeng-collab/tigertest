@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, fields, is_dataclass
+from html import escape
 from pathlib import Path
+import re
 
 from . import config
 from .data_models import PipelineResult
+from .research_status import AXIS_LABELS, GATE_LABELS, GATE_STATES, project_research_status, state_label
 
 
 def _market_name(raw: dict) -> str:
@@ -62,6 +65,14 @@ def _freshness_note(raw: dict) -> str:
     benchmarks = (raw.get("market") or {}).get("benchmarks") or {}
     label = benchmarks.get("index_label") or benchmarks.get("index") or "基准"
     latest = freshness.get("benchmark_last_bar")
+    session = freshness.get("market_close")
+    if session:
+        macro = session["macro_last_bars"]
+        return (f"已完成收盘交易日 {session['session']}（纽约），基准、已覆盖板块 ETF 和个股均按该日收盘对齐。"
+                f"缺该日可用收盘的板块 ETF {len(session['etf_missing'])} 只、个股 {len(session['stock_missing'])} 只。"
+                f"利率基准末根 {macro['tnx'] or '缺失'}，波动率基准末根 {macro['vix'] or '缺失'}，"
+                f"短期波动率末根 {macro['vix9d'] or '缺失'}。净值图的 SPY 来自同一基准序列，本轮未采集 QQQ 对照。"
+                "行情使用供应商报告的日线，可能延迟或修订。")
     note = (f"基准最新日K：{label} {latest}" if latest else "基准最新日K日期未知")
     lag = freshness.get("benchmark_lag_days")
     if lag is not None:
@@ -167,10 +178,259 @@ def _debate_card_section(ticker: str, debate: dict) -> str:
     return ""
 
 
+def model_instructions(raw: dict) -> list[dict] | None:
+    """Distinguish an assessed empty decision set from a legacy report."""
+    model = raw.get("model") or {}
+    if model.get("required") is True and model.get("all_required_completed") is True:
+        return raw["execution_decisions"]
+    return None
+
+
+def company_evidence_note(raw: dict) -> str:
+    """Explain the recorded SEC lookup outcomes without repeating model prose."""
+    debate = raw.get("debate")
+    company = debate.get("company_evidence") if isinstance(debate, dict) else None
+    if not isinstance(company, dict):
+        return ""
+    from .llm.company_evidence import COMPANY_EVIDENCE_CONTRACT
+
+    structured = company.get("contract") == "sec-frozen-typed-original/v3"
+    if company.get("contract") not in {COMPANY_EVIDENCE_CONTRACT, "sec-submission-original/v2", "sec-frozen-typed-original/v3"}:
+        return ""
+    candidates = company.get("candidates")
+    unavailable = "公司证据检查记录不完整。"
+    if not isinstance(candidates, dict):
+        return unavailable
+    if not candidates:
+        if structured:
+            return "本轮没有标的通过数值风控；评分前采集的公司资料仍保留在冻结证据中。"
+        return "公司证据检查显示，本轮没有标的通过数值风控，未启动按标的检索。"
+
+    labels = {"no_results": "检索零命中", "no_eligible_filing": "未取得合格文件",
+              "search_unavailable": "检索不可用", "verification_unavailable": "原文核验不可用",
+              **({"required_coverage_missing": "必需研究资料仍有缺口"} if structured else {})}
+    counts = dict.fromkeys(("filing_verified", *labels), 0)
+    for outcome in candidates.values():
+        status = outcome.get("status") if isinstance(outcome, dict) else None
+        if not isinstance(status, str) or status not in counts:
+            return unavailable
+        counts[status] += 1
+    eligible = counts["filing_verified"]
+    note = (f"公司证据检查显示，{len(candidates)} 只标的通过数值风控，"
+            f"{eligible} 只取得合格的 SEC 公司文件。")
+    if eligible < len(candidates):
+        gaps = "、".join(f"{label} {counts[status]} 只"
+                        for status, label in labels.items() if counts[status])
+        note += f"其余标的中，{gaps}。缺合格文件的标的本轮仅可观察。"
+    return note
+
+
+def model_instruction_fields(item: dict, *, exact: bool = False) -> list[tuple[str, str]]:
+    """Describe a verified plan without computing new execution values."""
+    def money(value):
+        return format(value, ",") if exact else format(value, ",.2f")
+    market = item["market_evidence"][0]
+    plan = "仅观察，未提供下单价格或股数。"
+    if item["action"] == "buy":
+        plan = (f"入场参考 USD {money(item['entry_price'])} · 止损 USD {money(item['stop_price'])} · "
+                f"{item['shares']} 股 · 目标仓位 {item['target_weight']:.1%} · "
+                f"计划风险 USD {money(item['risk_usd'])} · "
+                f"资金基准 USD {money(item['reference_capital_usd'])}")
+        if item["time_stop_days"] is not None:
+            plan += f" · 时间止损 {item['time_stop_days']} 个交易日"
+    return [
+        ("为什么关注", item["why_this"]), ("为什么现在", item["why_now"]),
+        ("行情依据", f"{market['symbol']} · {market['as_of']} 日线收盘 USD {money(market['close'])}"),
+        ("纸面计划", plan), ("入场条件", item["entry_condition"]),
+        ("失效条件", item["invalidation"]), ("主要风险", item["risk_note"]),
+        ("有效至（纽约时间）", item["valid_for"]),
+    ]
+
+
+def _markdown_text(value: str) -> str:
+    return re.sub(r"([\\`*_{}\[\]()#+!|~])", r"\\\1", escape(value))
+
+
+def model_source_html(source: dict, *, markdown: bool = False) -> str:
+    """Render a verified public citation without activating an unsafe URL."""
+    from .llm.deepseek_required import sanitize_url
+    format_text = _markdown_text if markdown else escape
+    title = format_text(source["title"])
+    url = source["url"]
+    published = format_text(source["published_at"] or "发布时间未知")
+    if sanitize_url(url) == url:
+        title = f'<a href="{escape(url)}" rel="noreferrer">{title}</a>'
+    return f"{title}（{published}）"
+
+
+def report_research_status(raw: dict, action: str | None = None) -> dict | None:
+    """A sealed report is an observation before publication, never a receipt."""
+    if not isinstance(raw.get("intelligence"), dict):
+        return None
+    return project_research_status({**raw, **({"action": action} if action is not None else {})}, report_ready=True)
+
+
+def research_status_notes(status: dict) -> list[str]:
+    counts = status["counts"]["securities"]
+    evidence = status["axes"]["evidence"]
+    return [
+        "这是封存报告；流程结束不等于证据充分，纸面计划也不等于账户已经提交。账户状态以同一任务的核验回执为准。",
+        f"冻结范围内必需问题 {evidence['required']} 项，已取得合格事实 {evidence['present']} 项，待补足 {evidence['missing']} 项。",
+        f"逐证券共 {counts['total']} 只：纸面买入计划 {counts['buy']}、合格观察 {counts['qualified_hold']}、"
+        f"等待证据 {counts['wait_evidence']}、待补查 {counts['pending_research']}、本轮未入选 {counts['not_selected']}、"
+        f"尚未完成判断 {counts['not_assessed']}。",
+        "合格观察只表示该证券的研究依据与判断已满足检查条件，不表示账户持有它。待补查的证券未完成本轮研究，不能计作研究后否决。",
+        "缺口补足后须重新完成相关检查；冻结范围外的候选需要新的明确研究任务、行情与账户检查，不能沿用本报告的交易许可。",
+    ]
+
+
+def research_source_anchor(identity: str) -> str:
+    import hashlib
+    return "research-source-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+
+
+def research_source_html(source: dict, *, markdown: bool = False) -> str:
+    """All original sources, including unused and partial ones, stay navigable."""
+    return model_source_html({"title": source.get("title") or source["id"],
+        "url": source.get("url") or "", "published_at": source.get("published_at")}, markdown=markdown)
+
+
+def research_security_fields(row: dict) -> list[tuple[str, str]]:
+    fields = [("证券身份", row.get("security_id") or "报告未提供"),
+              ("本轮状态", state_label(row["state"])), ("证据状态", state_label(row["evidence_state"]))]
+    if row["state"] == "PENDING_RESEARCH":
+        fields.append(("下一步", "另建明确的补充研究任务，重新取得行情、资料及账户检查；原决定保持不变。"))
+    if row["missing_required"]:
+        fields.append(("待补证据", "；".join(f"{item.get('target_label', item.get('target_id', ''))}："
+            f"{item.get('question', item['cell_id'])}（{_intelligence_gap_reason(item)}）"
+            for item in row["missing_required"])))
+    if row["block_reasons"]:
+        fields.append(("本轮限制记录", "；".join(row["block_reasons"])))
+    item = row["instruction"]
+    if item is not None:
+        fields.append(("原始判断", item["action_summary"]))
+        fields.extend(model_instruction_fields(item, exact=True))
+    else:
+        fields.append(("纸面计划", "未产生单票执行决定；报告不补算价格、股数或风险预算。"))
+    return fields
+
+
+def research_status_markdown(status: dict) -> list[str]:
+    lines = ["## 研究进度与交付状态", "", f"任务：{_markdown_text(status['run_id'] or '原始报告未提供任务编号')}", "",
+             "| 维度 | 本轮记录 |", "|---|---|"]
+    lines.extend(f"| {label} | {state_label(status['axes'][key]['state'])} |" for key, label in AXIS_LABELS.items())
+    lines.extend(["", *["- " + _markdown_text(note) for note in research_status_notes(status)], "",
+                  "## 逐证券证据与决策", ""])
+    if not status["securities"]:
+        lines.extend(["本报告没有逐证券记录；缺少记录不能解释为研究后否决或已经空仓。", ""])
+    for row in status["securities"]:
+        lines.extend([f"### {_markdown_text(row['symbol'])} · {state_label(row['state'])}", ""])
+        for label, value in research_security_fields(row):
+            lines.append(f"- **{label}**：{_markdown_text(value)}")
+        for gate, detail in row["gates"].items():
+            reasons = "；".join(detail["reasons"])
+            lines.append(f"- **{GATE_LABELS.get(gate, gate)}**：{GATE_STATES[detail['status']]}"
+                         + ("（" + _markdown_text(reasons) + "）" if reasons else ""))
+        if row["source_ids"]:
+            lines.append("- **原文导航**：" + "、".join(
+                f"[{_markdown_text(identity)}](#{research_source_anchor(identity)})" for identity in row["source_ids"]))
+        else:
+            lines.append("- **原文导航**：本证券未记录可引用原文。")
+        lines.append("")
+    lines.extend(["## 完整来源目录", "", "目录包含本报告提供的每一份冻结原文与执行引用，部分原文仍可能缺失或不合格。", ""])
+    if not status["sources"]:
+        lines.extend(["本报告未提供来源目录；不能据此认定没有相关信息。", ""])
+    for source in status["sources"]:
+        lines.extend([f'<a id="{research_source_anchor(source["id"])}"></a>', "",
+            f"- **{_markdown_text(source['id'])}**：{research_source_html(source, markdown=True)}",
+            f"  - 提取完整性：{_markdown_text(str(source.get('completeness') or '未知'))}；"
+            f"内容校验：{_markdown_text(str(source.get('content_sha256') or '本报告未提供'))}", ""])
+    return lines
+
+
+def _intelligence_gap_reason(row: dict) -> str:
+    reasons = {"no_qualified_material_for_this_question": "尚未取得能回答此问题的合格原文事实",
+               "qualified_material_observed": "已有通过原文、主体与时点核验的事实",
+               "HOLDINGS_NOT_CONNECTED": "尚未连接持仓资料，实际持仓保持未知",
+               "HOLDING_OUTSIDE_REVIEWED_ROSTER": "持仓证券不在审定池，须先核验证券身份",
+               "PENDING_OUTSIDE_REVIEWED_ROSTER": "待成交证券不在审定池，须先核验证券身份"}
+    reason = reasons.get(row["reason"], row["reason"])
+    source = row.get("source_reason")
+    if not source or source == row["reason"]:
+        return reason
+    labels = {"NO_REGISTERED_DISCOVERY_PROVIDER": "本轮没有启用可用于补查的搜索工具",
+              "SOURCE_AUTH_REQUIRED": "来源授权或所需凭据不可用",
+              "SOURCE_IDENTITY_REQUIRED": "来源要求的访问身份未配置",
+              "FETCH_DENIED": "来源拒绝原文访问", "RATE_LIMITED": "来源访问限速",
+              "SOURCE_UNAVAILABLE": "来源暂时不可用", "BUDGET_EXHAUSTED": "资料采集额度已用尽",
+              "TEXT_EXTRACTION_FAILED": "原文内容未能完整提取",
+              "SOURCE_CREDENTIAL_ECHO": "原文包含无法安全移除的敏感信息，已拒绝保存"}
+    return reason + "；来源：" + labels.get(source, source)
+
+
+def research_audit_tables(raw: dict) -> list[tuple[str, tuple, list]]:
+    audit = raw.get("research_audit")
+    if not audit:
+        return []
+    funnel = audit["funnel"]
+    labels = {"market_data": "行情可用", "hard_filter": "基础硬筛", "entry_setup": "A/B/C 形态",
+              "numeric_risk": "逐股数值资格", "portfolio": "组合批准", "company": "公司证据", "model": "模型终审"}
+    if "research" in funnel["gates"]:
+        labels = {key: label for key, label in [*list(labels.items())[:2],
+                  ("research", "评分前研究覆盖"), *list(labels.items())[2:]]}
+    status = {"passed": "通过", "rejected": "拒绝", "unknown": "未知", "not_applicable": "不适用"}
+    option_status = {"available": "可用", "missing": "缺失", "not_applicable": "不适用"}
+    rows = []
+    for item in funnel["rows"]:
+        cells = [item["ticker"], item["security_id"], item["entry_template"] or "—",
+                 option_status[item["options_evidence"]]]
+        for gate in labels:
+            detail = item["gates"][gate]
+            text = status[detail["status"]]
+            if detail["reasons"]:
+                text += "（" + "、".join(detail["reasons"]) + "）"
+            cells.append(text)
+        rows.append([*cells, item["model_action"] or "—", "、".join(item["company_source_ids"]) or "—"])
+    tables = [
+        ("逐关覆盖", ("关口", "分母", "通过", "拒绝", "未知", "不适用", "重叠原因"),
+         [[labels[gate], counts["denominator"], counts["passed"], counts["rejected"],
+           counts["unknown"], counts["not_applicable"], "、".join(
+               f"{reason} × {count}" for reason, count in counts["overlapping_reasons"].items()) or "—"]
+          for gate, counts in funnel["gates"].items()]),
+        ("逐股明细", ("股票", "证券标识", "形态", "期权证据", *labels.values(), "模型动作", "公司证据编号"), rows),
+        ("阶段证据", ("阶段", "执行", "尝试", "返回", "失败", "毫秒", "证据状态", "缺口", "证据 SHA-256"),
+         [[row["stage"], row["execution"], row["io_attempted"], row["io_returned"], row["io_failed"],
+           row["elapsed_ms"] if row["elapsed_ms"] is not None else "—",
+           row["evidence_status"], "、".join(row["gaps"]) or "—", row["output_ref"]["sha256"]]
+          for row in audit["stages"]]),
+        ("复盘规则证据", ("规则", "分母", "已查", "证据不足", "不适用", "已查命中"),
+         [[code, row["denominator"], row["checked"], row["insufficient_evidence"], row["not_applicable"],
+           row["violations"] if row["violations"] is not None else "—"]
+          for code, row in audit["rule_coverage"].items()]),
+    ]
+    intelligence = raw.get("intelligence")
+    if intelligence:
+        states = {"present": "已取得合格事实", "missing": "尚缺资料", "conflicting": "事实冲突待查",
+                      "unverifiable": "本轮无法核验", "source_unresolved": "来源发送未决",
+                      "model_unresolved": "模型回执未决", "not_connected": "未连接", "pending": "待核验"}
+        questions = {"issuer_financial": "财报与指引基线", "adverse_event": "重大不利事项",
+                     "counterevidence": "反证与更正", "macro_release": "宏观发布", "news": "事件与风险",
+                     "connection": "持仓连接状态"}
+        tables.insert(0, ("研究对象与资料缺口", ("对象", "研究问题", "是否必需", "本轮状态", "依据或缺口原因"), [
+            [row["target_label"], questions.get(row["material_type"], row["question"]),
+             "是" if row["required"] else "否", states[row["status"]], _intelligence_gap_reason(row)]
+            for row in intelligence["gaps"]]))
+    return tables
+
+
 def render_markdown(r: PipelineResult) -> str:
     m = r.mrs
     mk = r.raw.get("market") or {}
     mk_grad = r.raw.get("market_grad") or {}
+    instructions = model_instructions(r.raw)
+    mandatory_model = (r.raw.get("model") or {}).get("required") is True
+    company_note = company_evidence_note(r.raw) if instructions is not None else ""
+    research_status = report_research_status(r.raw, r.action)
     lines: list[str] = []
     lines.append(f"# AI 短线{_market_name(r.raw)}交易日报 — {r.trade_date}")
     lines.append("")
@@ -195,6 +455,8 @@ def render_markdown(r: PipelineResult) -> str:
     lines.append("")
 
     # ---- 老板版四行看板（白皮书 §2.7）----
+    if research_status is not None:
+        lines.extend(research_status_markdown(research_status))
     lines.append("## 一、四行看板")
     lines.append("")
     if m:
@@ -208,10 +470,29 @@ def render_markdown(r: PipelineResult) -> str:
         lines.append(f"4. **允许交易标的**：{len(r.picks)} 只 → " +
                      ("、".join(p.ticker for p in r.picks) if r.picks else
                       "币种执行边界受阻，仅供研究" if _execution_blocked(r.raw) else
+                      "本轮无新增纸面买入计划" if company_note else
                       "无达标标的，等待"))
     lines.append("")
-    lines.append(f"**系统指令**：`{r.action}` — {r.market_view}")
-    lines.append("")
+    overview = _markdown_text(r.market_view) if instructions is not None else r.market_view
+    lines.extend([f"**系统指令**：`{r.action}` — {overview}", ""])
+    if company_note:
+        lines.extend([_markdown_text(company_note), ""])
+    if instructions is not None and research_status is None:
+        lines.extend(["## 模型最终判断与执行条件（纸面研究）", ""])
+        if not instructions:
+            lines.extend(["本轮没有新增单票指令。", ""])
+        for item in instructions:
+            action = "纸面买入计划" if item["action"] == "buy" else "观察"
+            lines.extend([f"### {_markdown_text(item['symbol'])} · {action}", "",
+                          _markdown_text(item["action_summary"]), ""])
+            for label, value in model_instruction_fields(item):
+                lines.append(f"- **{label}**：{_markdown_text(value)}")
+            if item["sources"]:
+                lines.extend(f"- **新闻来源**：{model_source_html(source, markdown=True)}"
+                             for source in item["sources"])
+            else:
+                lines.append("- 本条未引用新闻。")
+            lines.append("")
 
     # ---- MRS 明细 ----
     if m:
@@ -275,6 +556,17 @@ def render_markdown(r: PipelineResult) -> str:
         lines.append("")
 
     # ---- TSS 精评 ----
+    audit_tables = research_audit_tables(r.raw)
+    if audit_tables:
+        lines.extend(["### 候选漏斗与证据覆盖", "",
+                      "日报中的阶段证据截至治理链校验。最终回执补齐日报生成和封存阶段。", ""])
+        for title, columns, rows in audit_tables:
+            lines.extend([f"<details><summary>{title}</summary>", "",
+                          "| " + " | ".join(columns) + " |",
+                          "| " + " | ".join("---" for _ in columns) + " |"])
+            for cells in rows:
+                lines.append("| " + " | ".join(_markdown_text(str(cell)) for cell in cells) + " |")
+            lines.extend(["", "</details>", ""])
     lines.append("## 六、TSS 精评（第三道门）")
     lines.append("")
     lines.append("| 标的 | TSS_final | 结构 | 动能 | 期权 | 模板 | 关键位 | 产业链 |")
@@ -295,7 +587,7 @@ def render_markdown(r: PipelineResult) -> str:
             lines.append(p.card)
             # v6.3 S2：交易卡片"第六段：多空辩论证据"（只读证据附加，
             # 辩论绝不修改任何分数与闸门输出；LLM 透传时如实标注）
-            sec = _debate_card_section(p.ticker, debate)
+            sec = _debate_card_section(p.ticker, debate) if instructions is None else ""
             if sec:
                 lines.append(sec)
             lines.append("```")
@@ -314,14 +606,20 @@ def render_markdown(r: PipelineResult) -> str:
     lines.append("")
     for n in r.notes:
         lines.append(f"- {n}")
-    lines.append("- 叙事兑现（EPS 修正/指引）自 v5.0 起由 LLM 驱动（NarrativeAgent）；"
+    lines.append("- 叙事兑现（EPS 修正/指引）由模型判断；本轮五个语义阶段均须取得完整有效回复，"
+                 "模型不可用或回复不合格会阻止本轮完成。" if mandatory_model else
+                 "- 叙事兑现（EPS 修正/指引）自 v5.0 起由 LLM 驱动（NarrativeAgent）；"
                  "LLM 不可用时按红线透传并剔除再归一化，绝不用规则估算。")
     lines.append("- 微观（GEX/0DTE/Skew）免费源缺失：缺失因子在聚合时【剔除并再归一化】，"
                  "期权维度（PCR/IV 分位）随信号日记逐日积累满 10 个样本后自动启用真实评分。")
-    lines.append(f"- 多空辩论证据层（v6.3 S2）：仅灰区标的触发（每日上限 "
-                 f"{config.DEBATE_MAX_PER_DAY} 场，HOLD 区高分线 "
-                 f"{config.DEBATE_HOLD_TSS_MIN}），辩论结论只作交易卡片第六段证据，"
-                 "不修改任何分数与闸门输出；回测路径禁用。")
+    if instructions is None:
+        lines.append(f"- 多空辩论证据层（v6.3 S2）：仅灰区标的触发（每日上限 "
+                     f"{config.DEBATE_MAX_PER_DAY} 场，HOLD 区高分线 "
+                     f"{config.DEBATE_HOLD_TSS_MIN}），辩论结论只作交易卡片第六段证据，"
+                     "不修改任何分数与闸门输出；回测路径禁用。")
+    else:
+        lines.append("- 本轮由模型在已通过风控的范围内作最终判断；"
+                     "行情、股数、止损和风险预算取自同一次纸面计划。")
     # ---- S4 多市场披露：市场标识 / 基准缺失 / 板块广度缺失 / 合规校验 / 链覆盖率 ----
     if mk:
         lines.append("")
@@ -368,13 +666,18 @@ def render_markdown(r: PipelineResult) -> str:
     if cv:
         lines.append("### 数据可信度与交叉验证（S3 Tiger Data Fabric）")
         lines.append("")
+        typed = cv.get("event_identity", {}).get("contract") == "point-in-time-typed-event/v2"
+        qualification = "逐事实原文、时点及来源资格通过" if typed else "≥2源且至少一个≤T2"
         lines.append(f"- 交叉验证统计：总文档 **{cv.get('total', 0)}** 篇 ｜ "
                      f"关键事件类 {cv.get('key_event_docs', 0)} 篇 ｜ "
-                     f"通过（≥2源且至少一个≤T2）**{cv.get('corroborated', 0)}** 篇 ｜ "
+                     f"通过（{qualification}）**{cv.get('corroborated', 0)}** 篇 ｜ "
                      f"被降级 **{cv.get('downgraded', 0)}** 篇")
-        lines.append(f"- 其中 LLM 语义标注缺失记未验证 {cv.get('llm_missing', 0)} 篇（红线透传，不阻塞管线）；"
+        missing_semantics = "标注失败会阻止本轮完成" if mandatory_model else "红线透传，不阻塞管线"
+        lines.append(f"- 其中 LLM 语义标注缺失记未验证 {cv.get('llm_missing', 0)} 篇（{missing_semantics}）；"
                      f"缺发布时间（Point-in-Time）{cv.get('missing_published_at', 0)} 篇")
-        lines.append("- 口径：来源可信度 T0 监管原文 > T1 主流媒体 > T2 聚合门户 > T3 社媒"
+        lines.append("- 口径：按逐条事实核验主体、原文、时点、来源与冲突；每条事实只在自己的允许用途和目标内使用。"
+                     "未通过的事件和事实保留作背景，不能由整篇文档状态推定合格。" if typed else
+                     "- 口径：来源可信度 T0 监管原文 > T1 主流媒体 > T2 聚合门户 > T3 社媒"
                      "（config.SOURCE_TIERS/DOMAIN_TIERS 可覆盖）；被降级文档不删除，"
                      "决策侧仅作背景参考，叙事/舆情打分只使用 corroborated=True 集合。")
         ah = r.raw.get("ah_topics_enabled", False)
@@ -382,6 +685,13 @@ def render_markdown(r: PipelineResult) -> str:
                      f"（config.AH_TOPICS_ENABLED={'True' if ah else 'False'}，"
                      "关闭时不产生任何抓取调用）。")
         lines.append("")
+        if typed:
+            intelligence = r.raw["intelligence"]
+            lines.extend([f"- 本轮研究资料状态：{'仍有缺口' if intelligence['state'] == 'partial' else '必需检查已完成'}；"
+                          f"纳入评分前研究 {len(intelligence['frontier']['symbols'])} 只证券。"
+                          "检查有状态并不代表资料齐全；缺证据或冲突的目标保留空评分。",
+                          "- 官方原文可以证明其自身发布的事实；企业展望保留预期属性，不能据此证明已实现结果。",
+                          "- 持仓未连接时保持未知；研究资料在评分前封存，之后出现的新材料须另建研究版本并重算。", ""])
 
     # ---- 统计校准（v6.3 S2 迭代层披露：只进报告，不改任何闸门）----
     cal = r.raw.get("calibration", {}) or {}
@@ -417,8 +727,9 @@ def render_markdown(r: PipelineResult) -> str:
     if tech:
         lines.append("## 九、科技产业链专项（子集群 → 主决策引擎）")
         lines.append("")
+        model_state = "缺失模型回复会阻止本轮完成" if mandatory_model else "红线透传"
         lines.append(f"- 采集 {r.raw.get('docs_collected', 0)} 篇 → 清洗 {r.raw.get('docs_cleaned', 0)} 篇"
-                     f"（语义标注缺失 {r.raw.get('docs_semantic_degraded', 0)} 篇，红线透传）")
+                     f"（语义标注缺失 {r.raw.get('docs_semantic_degraded', 0)} 篇，{model_state}）")
         lines.append("")
         lines.append("| 子链 | 景气度 | 风险 | 加成 | 领涨环节 | 传导图 | 降级环节 |")
         lines.append("|---|---|---|---|---|---|---|")
@@ -427,8 +738,10 @@ def render_markdown(r: PipelineResult) -> str:
                              for b, v in tg.items()) or "—"
             deg = ",".join(s.get("degraded_components", [])) or "—"
             pros = s.get("prosperity")
+            risk = s.get("risk_level", 0)
+            risk_label = f"{risk:.0f}" if risk is not None else "证据不足"
             lines.append(f"| {s.get('chain_id')} | {pros if pros is not None else '—'} "
-                         f"| {s.get('risk_level', 0):.0f} | ×{s.get('bonus_hint', 1.0)} "
+                         f"| {risk_label} | ×{s.get('bonus_hint', 1.0)} "
                          f"| {s.get('leading_link') or '—'} | {trans} | {deg} |")
         lines.append("")
         alerts_all = [a for s in tech for a in s.get("alerts", [])]

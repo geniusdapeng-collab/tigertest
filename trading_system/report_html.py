@@ -23,8 +23,12 @@ from .data_models import PipelineResult
 from .redline import STEP_REGISTRY
 from .report import (
     _accounting_note, _execution_blocked, _freshness_note, _market_currency,
-    _market_name, _universe_note,
+    _market_name, _universe_note, company_evidence_note, research_audit_tables,
+    model_instruction_fields, model_instructions, model_source_html,
+    report_research_status, research_security_fields, research_source_anchor,
+    research_source_html, research_status_notes,
 )
+from .research_status import AXIS_LABELS, GATE_LABELS, GATE_STATES, state_label
 
 try:  # AI 生成美术资源（老虎全球资产管理头图 / 产业链主题产品图，内嵌 base64，零外链）
     from .hero_art import HERO_ART_B64, THEME_ART_B64
@@ -56,7 +60,109 @@ def _action_style(action: str) -> tuple[str, str]:
         "HOLD": (BLUE, "持有观察"),
         "WAIT": (YELLOW, "等待信号"),
         "AVOID": (RED, "回避开仓"),
+        "WAIT_EVIDENCE": (YELLOW, "等待证据"),
     }.get(action, (MUTED, action))
+
+
+def _model_instruction_cards(instructions: list[dict]) -> str:
+    cards = ["<h2>模型最终判断与执行条件（纸面研究）</h2>"]
+    if not instructions:
+        cards.append("<p class='card'>本轮没有新增单票指令。</p>")
+    for item in instructions:
+        action = "纸面买入计划" if item["action"] == "buy" else "观察"
+        cards.append("<article class='card' style='margin-bottom:10px;overflow-wrap:anywhere'>"
+                     f"<h3>{_esc(item['symbol'])} · {action}</h3>"
+                     f"<p>{_esc(item['action_summary'])}</p><dl>")
+        for label, value in model_instruction_fields(item):
+            cards.append(f"<dt><b>{label}</b></dt><dd>{_esc(value)}</dd>")
+        cards.append("</dl>")
+        if item["sources"]:
+            cards.append("<details><summary>新闻来源</summary><ul>")
+            cards.extend(f"<li>{model_source_html(source)}</li>" for source in item["sources"])
+            cards.append("</ul></details>")
+        else:
+            cards.append("<p class='sub'>本条未引用新闻。</p>")
+        cards.append("</article>")
+    return "".join(cards)
+
+
+def _research_overview(status: dict) -> str:
+    parts = ["<section class='research-overview' aria-labelledby='research-status-heading'>",
+        "<div class='research-heading'><div><div class='eyebrow-l'>RESEARCH RECORD</div>"
+        "<h2 id='research-status-heading'>研究进度与交付状态</h2></div>"
+        "<span class='research-snapshot'>封存报告</span></div>",
+        f"<p class='sub research-identity'>任务：{_esc(status['run_id'] or '原始报告未提供任务编号')}</p>",
+        "<div class='research-axes'>"]
+    for key, label in AXIS_LABELS.items():
+        state = status["axes"][key]["state"]
+        parts.append(f"<div class='research-axis' data-axis='{key}'><div class='sub'>{label}</div>"
+                     f"<strong>{_esc(state_label(state))}</strong></div>")
+    parts.append("</div><div class='research-notes'>")
+    parts.extend(f"<p>{_esc(note)}</p>" for note in research_status_notes(status))
+    parts.append("</div></section>")
+    return "".join(parts)
+
+
+def _research_security_cards(status: dict) -> str:
+    rows = status["securities"]
+    parts = ["<section class='research-security-panel' aria-labelledby='research-securities-heading'>",
+        "<div class='research-heading'><div><div class='eyebrow-l'>EVERY SECURITY · 逐项留痕</div>"
+        "<h2 id='research-securities-heading'>逐证券证据与决策</h2></div>"
+        f"<span class='research-snapshot'>共 {len(rows)} 只</span></div>",
+        "<p class='sub'>筛选只改变本报告的显示，不会启动研究、重新计算或更改账户。"
+        "本页不能取消调度；停止观察与取消任务需要分别通过原任务入口处理。</p>",
+        "<div class='research-filters'><label>搜索证券<input id='research-security-search' type='search' "
+        "placeholder='输入代码或证券标识' oninput='filterResearchSecurities()'></label>"
+        "<label>本轮状态<select id='research-security-filter' onchange='filterResearchSecurities()'>"
+        "<option value='all'>显示全部</option>"]
+    for state in ("WAIT_EVIDENCE", "PENDING_RESEARCH", "BUY", "HOLD", "NOT_SELECTED", "NOT_ASSESSED"):
+        parts.append(f"<option value='{state}'>{_esc(state_label(state))}</option>")
+    parts.append("</select></label><button class='research-reset' id='research-security-reset' "
+                 "type='button' disabled onclick='resetResearchSecurities()'>清除筛选</button></div>"
+                 f"<p class='sub' id='research-security-count' aria-live='polite'>显示 {len(rows)} / {len(rows)} 只证券</p>"
+                 "<div id='research-security-empty' class='research-empty' hidden>没有符合筛选条件的证券。"
+                 "清除筛选可恢复全部原始记录。</div>")
+    if not rows:
+        parts.append("<div class='research-empty'>本报告没有逐证券记录；缺少记录不能解释为研究后否决或已经空仓。</div>")
+    for row in rows:
+        state = row["state"]
+        parts.append(f"<article class='research-security-card' data-research-security data-state='{_esc(state)}' "
+                     f"data-search='{_esc(row['symbol'] + ' ' + (row['security_id'] or ''))}'>"
+                     f"<div class='research-card-heading'><h3>{_esc(row['symbol'])}</h3>"
+                     f"<span class='research-state state-{_esc(state.lower())}'>{_esc(state_label(state))}</span></div>"
+                     "<dl class='research-fields'>")
+        for label, value in research_security_fields(row):
+            parts.append(f"<dt>{_esc(label)}</dt><dd>{_esc(value)}</dd>")
+        parts.append("</dl>")
+        if row["gates"]:
+            parts.append("<details class='research-details'><summary>查看逐关依据</summary>"
+                         "<div class='research-gates'>")
+            for gate, detail in row["gates"].items():
+                parts.append(f"<div><strong>{_esc(GATE_LABELS.get(gate, gate))}</strong>"
+                             f"<span>{_esc(GATE_STATES[detail['status']])}</span>"
+                             f"<p class='sub'>{_esc('；'.join(detail['reasons']) or '未记录其他原因')}</p></div>")
+            parts.append("</div></details>")
+        if row["source_ids"]:
+            parts.append("<div class='research-source-links'><b>原文导航</b>：" + " · ".join(
+                f"<a href='#{research_source_anchor(identity)}'>{_esc(identity)}</a>" for identity in row["source_ids"]) + "</div>")
+        else:
+            parts.append("<p class='sub'>原文导航：本证券未记录可引用原文。</p>")
+        parts.append("</article>")
+    parts.append("<div class='research-source-directory'><h2>完整来源目录</h2>"
+                 "<p class='sub'>保留本报告提供的每一份冻结原文与执行引用；部分原文仍可能缺失或不合格。"
+                 "来源目录不会把摘要升级为完整原文。</p>")
+    if not status["sources"]:
+        parts.append("<div class='research-empty'>本报告未提供来源目录；不能据此认定没有相关信息。</div>")
+    for source in status["sources"]:
+        parts.append(f"<article class='research-source' id='{research_source_anchor(source['id'])}'>"
+                     f"<h3>{_esc(source['id'])}</h3><p>{research_source_html(source)}</p>"
+                     "<dl class='research-fields'>"
+                     f"<dt>来源</dt><dd>{_esc(source.get('source_id') or '本报告未提供')}</dd>"
+                     f"<dt>提取完整性</dt><dd>{_esc(source.get('completeness') or '未知')}</dd>"
+                     f"<dt>内容校验</dt><dd class='research-hash'>{_esc(source.get('content_sha256') or '本报告未提供')}</dd>"
+                     "</dl></article>")
+    parts.append("</div></section>")
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------- SVG 组件
@@ -1517,6 +1623,9 @@ def _stock_deep_annex(r: "PipelineResult", pick) -> str:
 
 def _stock_tab(r: "PipelineResult") -> str:
     """页签·个股深度报告：今日放行标的的完整档案（多标的二级切换）。"""
+    research_status = report_research_status(r.raw or {}, r.action)
+    if research_status is not None:
+        return _research_security_cards(research_status)
     P: list[str] = []
     currency = _esc(_market_currency(r.raw))
     P.append(f"<div class='card' style='border-color:{BLUE}66;margin-bottom:12px'>"
@@ -2341,6 +2450,57 @@ pre.card-block {{ background:#e6eecd; border:1px solid {BORDER}; border-radius:1
 .subbtn:hover {{ border-color:{GOLD}88; color:{FG}; }}
 .subbtn.active {{ background:#ccff0030; color:#4d7c0f; border-color:#a8d400;
   font-weight:700; }}
+.research-overview,.research-security-panel {{ margin:16px 0; min-width:0; }}
+.research-heading,.research-card-heading {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }}
+.research-heading h2 {{ margin:0; }}
+.research-snapshot {{ border:1px solid {BORDER}; color:{MUTED}; background:{CARD}; padding:4px 12px; border-radius:999px; font-size:12px; }}
+.research-identity {{ margin:9px 0; overflow-wrap:anywhere; }}
+.research-axes {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }}
+.research-axis {{ padding:14px 16px; border:1px solid {BORDER}; border-radius:12px; background:{CARD}; min-width:0; }}
+.research-axis strong {{ display:block; margin-top:4px; line-height:1.45; font-size:16px; }}
+.research-notes {{ margin:10px 0; color:{MUTED}; font-size:12px; line-height:1.75; }}
+.research-notes p {{ margin:4px 0; }}
+.research-filters {{ display:flex; align-items:end; flex-wrap:wrap; gap:12px; margin:16px 0 8px; }}
+.research-filters label {{ display:grid; gap:5px; min-width:0; flex:1; font-size:12px; font-weight:600; color:{MUTED}; }}
+.research-filters input,.research-filters select,.research-reset {{ min-height:42px; border:1px solid {BORDER}; background:{CARD}; border-radius:9px; color:{FG}; font:inherit; padding:9px 12px; width:100%; }}
+.research-filters input:hover,.research-filters select:hover,.research-reset:hover:enabled {{ border-color:{GOLD}; }}
+.research-filters input:focus-visible,.research-filters select:focus-visible,.research-reset:focus-visible,.research-details summary:focus-visible {{ outline:2px solid {BLUE}; outline-offset:3px; }}
+.research-reset {{ width:auto; font-size:13px; cursor:pointer; }}
+.research-reset:active:enabled {{ background:#e1edc3; }}
+.research-reset:disabled {{ opacity:.5; cursor:not-allowed; }}
+.research-security-card,.research-source {{ background:{CARD}; border:1px solid {BORDER}; border-radius:12px; padding:18px; margin:12px 0; min-width:0; }}
+.research-card-heading h3,.research-source h3 {{ margin:0; font-size:20px; }}
+.research-state {{ display:inline-block; border:1px solid {BORDER}; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:700; background:#f0f4e8; }}
+.state-wait_evidence,.state-pending_research {{ color:#875600; border-color:#dec27d; background:#fff7dd; }}
+.state-hold {{ color:#2354a0; border-color:#b4c7e8; background:#edf3ff; }}
+.state-buy {{ color:#23602d; border-color:#aecb9e; background:#eaf7e5; }}
+.research-fields {{ display:grid; grid-template-columns:minmax(100px,132px) minmax(0,1fr); gap:8px 16px; margin:16px 0; line-height:1.7; }}
+.research-fields dt {{ color:{MUTED}; font-size:12px; }}
+.research-fields dd {{ margin:0; min-width:0; overflow-wrap:anywhere; }}
+.research-details {{ border-top:1px solid {BORDER}; padding-top:10px; }}
+.research-details summary {{ cursor:pointer; padding:5px 0; font-size:13px; font-weight:600; }}
+.research-details summary:hover {{ color:{GOLD}; }}
+.research-details summary:active {{ color:#355b00; }}
+.research-gates {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }}
+.research-gates>div {{ padding:10px; background:#f1f6e5; border-radius:8px; min-width:0; }}
+.research-gates span {{ margin-left:10px; font-size:12px; }}
+.research-gates p {{ margin:4px 0 0; font-size:11px; overflow-wrap:anywhere; }}
+.research-source-links {{ padding-top:10px; margin-top:10px; border-top:1px solid {BORDER}; font-size:12px; }}
+.research-source a,.research-source-links a {{ color:#225baa; text-underline-offset:3px; }}
+.research-source a:hover,.research-source-links a:hover {{ color:#174077; }}
+.research-source:target {{ border-color:{BLUE}; box-shadow:0 0 0 2px #2563eb33; }}
+.research-hash {{ font:11px/1.6 monospace; }}
+.research-empty {{ border:1px dashed {BORDER}; padding:22px; border-radius:12px; color:{MUTED}; background:{CARD}; }}
+[hidden] {{ display:none!important; }}
+@media(max-width:820px) {{ .research-axes {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+@media(max-width:560px) {{
+ .research-axes,.research-gates {{ grid-template-columns:minmax(0,1fr); }}
+ .research-fields {{ grid-template-columns:minmax(0,1fr); gap:3px; }}
+ .research-fields dd {{ margin-bottom:8px; }}
+ .research-filters {{ display:grid; grid-template-columns:minmax(0,1fr); }}
+ .research-reset {{ width:100%; }}
+ .research-security-card,.research-source {{ padding:14px; }}
+}}
 .hero {{ position:relative; overflow:hidden; border:1px solid #d4af3755;
   border-radius:18px; margin:0 0 16px; background:#0a0a0c;
   box-shadow:0 8px 40px #0a0a0c40; }}
@@ -2429,6 +2589,28 @@ function showStock(id){
     el.classList.toggle('active', el.id === 'stock-btn-'+id);
   });
 }
+function filterResearchSecurities(){
+  var search = document.getElementById('research-security-search');
+  var filter = document.getElementById('research-security-filter');
+  if (!search || !filter) return;
+  var query = search.value.trim().toLocaleLowerCase(), state = filter.value, shown = 0;
+  var cards = document.querySelectorAll('[data-research-security]');
+  cards.forEach(function(card){
+    var matches = (state === 'all' || card.dataset.state === state) &&
+      card.dataset.search.toLocaleLowerCase().includes(query);
+    card.hidden = !matches;
+    if(matches) shown++;
+  });
+  document.getElementById('research-security-count').textContent = '显示 ' + shown + ' / ' + cards.length + ' 只证券';
+  document.getElementById('research-security-empty').hidden = shown !== 0;
+  document.getElementById('research-security-reset').disabled = !query && state === 'all';
+}
+function resetResearchSecurities(){
+  document.getElementById('research-security-search').value = '';
+  document.getElementById('research-security-filter').value = 'all';
+  filterResearchSecurities();
+  document.getElementById('research-security-search').focus();
+}
 """
 
 
@@ -2442,11 +2624,14 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     must save this HTML there and preserve the declared PDF when distributing it.
     """
     raw = r.raw or {}
+    research_status = report_research_status(raw, r.action)
     accounting_blocked = _execution_blocked(raw)
     accounting_note = _esc(_accounting_note(raw))
     market = _esc(_market_name(raw))
     currency = _esc(_market_currency(raw))
-    color, action_zh = _action_style(r.action)
+    display_action = ("WAIT_EVIDENCE" if research_status is not None
+                      and research_status["axes"]["decision"]["state"] == "WAIT_EVIDENCE" else r.action)
+    color, action_zh = _action_style(display_action)
     mrs = r.mrs
     P: list[str] = []
     P.append(f"<html><head><meta charset='utf-8'><meta name='viewport' "
@@ -2485,7 +2670,7 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     n_closed = (journal_stats or {}).get("closed", 0)
     win_r = (journal_stats or {}).get("win_rate")
     chips = [f"<div class='hchip'><div class='sub'>今日状态</div>"
-             f"<div class='v' style='color:{color}'>{r.action} · {_esc(action_zh)}</div></div>"]
+             f"<div class='v' style='color:{color}'>{_esc(display_action)} · {_esc(action_zh)}</div></div>"]
     if eq and not accounting_blocked:
         chips.append(f"<div class='hchip'><div class='sub'>小虎模拟盘净值</div>"
                      f"<div class='v'>${eq:,.0f}</div></div>")
@@ -2526,22 +2711,37 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     P.append(f"<div class='tape-wrap'><div class='tape'>{tape_html}{tape_html}</div></div>")
     P.append("</div></div>")  # /hero-inner /hero
     P.append("<div id='tab-daily'>")
+    if research_status is not None:
+        P.append(_research_overview(research_status))
 
     # ---- 决策日报门面：今日行动摘要 + 行情脉搏图 + 数据源公示（提升公信力）----
     P.append(f"<div class='card' style='margin:10px 0 14px;display:flex;gap:14px;"
              f"align-items:flex-start;justify-content:space-between;flex-wrap:wrap'>"
              f"<div style='flex:1;min-width:min(260px,100%)'>"
              f"<span class='badge' style='background:{color}22;color:{color};"
-             f"border:1px solid {color}66'>{_esc(r.action)} · {action_zh}</span>")
+             f"border:1px solid {color}66'>{_esc(display_action)} · {action_zh}</span>")
     if mrs:
         P.append(f"<span class='tag'>市场环境 {mrs.mrs_star}/10（{mrs.regime}）</span>")
     if raw.get("universe_mode"):
         ss0 = raw.get("scan_stats", {})
         P.append(f"<span class='tag'>池 {ss0.get('universe_size', '?')} → "
                  f"精评 {ss0.get('selected', '?')}</span>")
-    P.append(f"<div style='margin-top:8px;font-size:14.5px'>{_esc(r.market_view)}</div>"
-             f"</div>"
-             f"<div style='flex:0 0 auto;opacity:0.95'>{_pulse_svg()}</div>")
+    instructions = model_instructions(raw)
+    company_note = company_evidence_note(raw) if instructions is not None else ""
+    P.append(f"<div style='margin-top:8px;font-size:14.5px'>{_esc(r.market_view)}</div>")
+    if company_note:
+        P.append(f"<p class='sub'>{_esc(company_note)}</p>")
+    audit_tables = research_audit_tables(raw)
+    if audit_tables:
+        P.append("<p class='sub'>阶段证据截至治理链校验。最终回执补齐日报生成和封存阶段。</p>")
+        for title, columns, rows in audit_tables:
+            P.append(f"<details><summary>{_esc(title)}</summary><table><thead><tr>"
+                     + "".join(f"<th scope='col'>{_esc(col)}</th>" for col in columns)
+                     + "</tr></thead><tbody>")
+            for cells in rows:
+                P.append("<tr>" + "".join(f"<td>{_esc(cell)}</td>" for cell in cells) + "</tr>")
+            P.append("</tbody></table></details>")
+    P.append(f"</div><div style='flex:0 0 auto;opacity:0.95'>{_pulse_svg()}</div>")
     # —— 数据源公示：配置主源 + 本轮实际拉取血缘，真实可审计 ——
     prov_zh = _PROVIDER_ZH.get(r.provider, _esc(r.provider))
     lineage0 = raw.get("source_lineage", [])
@@ -2595,45 +2795,53 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
 
     # ---- 今日决策（基金经理视角：放行谁、为什么、怎么进怎么出）----
     P.append("<h2>今日决策</h2>")
-    # —— 今日作战三句话：天气 / 方向 / 刀口（大白话翻译层）——
-    cap = (mrs.position_cap if mrs and isinstance(mrs.position_cap, (tuple, list))
-           else (0.0, mrs.position_cap if mrs else 0.0))
-    if mrs:
-        if mrs.mrs_star >= 7.5:
-            w_line = f"天气不错。环境 {mrs.mrs_star}/10，系统给自己开了 {cap[1]:.0%} 弹药上限。"
-        elif mrs.mrs_star >= 6.0:
-            w_line = (f"能动手，但别上头。环境 {mrs.mrs_star}/10，"
-                      f"弹药上限 {cap[1]:.0%}——不是每一天都值得满仓。")
+    if research_status is not None:
+        P.append("<div class='card'><b>逐证券判断与原文</b><p class='sub'>"
+                 "每只证券分别列出证据是否充分、为何等待、是否待补查及原始纸面计划。"
+                 "价格、股数和风险预算直接来自本轮执行决定。</p>"
+                 "<button class='subbtn' onclick='showDaily(\"stock\")'>查看全部证券与来源 →</button></div>")
+    elif instructions is not None:
+        P.append(_model_instruction_cards(instructions))
+    else:
+        # —— 今日作战三句话：天气 / 方向 / 刀口（大白话翻译层）——
+        cap = (mrs.position_cap if mrs and isinstance(mrs.position_cap, (tuple, list))
+               else (0.0, mrs.position_cap if mrs else 0.0))
+        if mrs:
+            if mrs.mrs_star >= 7.5:
+                w_line = f"天气不错。环境 {mrs.mrs_star}/10，系统给自己开了 {cap[1]:.0%} 弹药上限。"
+            elif mrs.mrs_star >= 6.0:
+                w_line = (f"能动手，但别上头。环境 {mrs.mrs_star}/10，"
+                          f"弹药上限 {cap[1]:.0%}——不是每一天都值得满仓。")
+            else:
+                w_line = f"今天收着来。环境 {mrs.mrs_star}/10 没过关，空仓也是一种仓位。"
         else:
-            w_line = f"今天收着来。环境 {mrs.mrs_star}/10 没过关，空仓也是一种仓位。"
-    else:
-        w_line = "环境数据缺席，按纪律收着来。"
-    main_secs = [s for s in r.sectors if s.in_main_pool]
-    hot_chains = [c for c in r.chains if c.hot]
-    d_parts = []
-    if main_secs:
-        d_parts.append("钱在往 " + "、".join(_ETF_ZH.get(s.etf, s.etf) for s in main_secs) + " 走")
-    if hot_chains:
-        d_parts.append("产业链里 " + "、".join(c.name for c in hot_chains[:2]) + " 最烫")
-    d_line = "；".join(d_parts) + "。" if d_parts else "今天没有明确主线，方向不明就不硬做。"
-    if r.picks:
-        k_line = ("刀口看清了，放出 "
-                  + "、".join(f"<b>{p.ticker}</b>" for p in r.picks)
-                  + f" 这 {len(r.picks)} 枪——每笔都写清认错线，跌破就走，不商量。")
-    elif accounting_blocked:
-        k_line = "本轮仅保留研究；USD 交易记账暂停，原有账本保持原样。"
-    else:
-        k_line = "今日无新放行标的；既有持仓继续按出场规则管理。"
-    P.append(f"<div class='card' style='border-color:#d4af3766;margin-bottom:12px'>"
-             f"<div class='eyebrow-l'>TODAY'S BATTLE PLAN · 今日作战三句话</div>"
-             f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:4px'>"
-             f"<div style='flex:1;min-width:min(220px,100%)'><b>① 天气</b>"
-             f"<div class='sub' style='margin-top:2px'>{w_line}</div></div>"
-             f"<div style='flex:1;min-width:min(220px,100%)'><b>② 方向</b>"
-             f"<div class='sub' style='margin-top:2px'>{d_line}</div></div>"
-             f"<div style='flex:1;min-width:min(220px,100%)'><b>③ 刀口</b>"
-             f"<div class='sub' style='margin-top:2px'>{k_line}</div></div></div></div>")
-    if r.picks:
+            w_line = "环境数据缺席，按纪律收着来。"
+        main_secs = [s for s in r.sectors if s.in_main_pool]
+        hot_chains = [c for c in r.chains if c.hot]
+        d_parts = []
+        if main_secs:
+            d_parts.append("钱在往 " + "、".join(_ETF_ZH.get(s.etf, s.etf) for s in main_secs) + " 走")
+        if hot_chains:
+            d_parts.append("产业链里 " + "、".join(c.name for c in hot_chains[:2]) + " 最烫")
+        d_line = "；".join(d_parts) + "。" if d_parts else "今天没有明确主线，方向不明就不硬做。"
+        if r.picks:
+            k_line = ("刀口看清了，放出 "
+                      + "、".join(f"<b>{p.ticker}</b>" for p in r.picks)
+                      + f" 这 {len(r.picks)} 枪——每笔都写清认错线，跌破就走，不商量。")
+        elif accounting_blocked:
+            k_line = "本轮仅保留研究；USD 交易记账暂停，原有账本保持原样。"
+        else:
+            k_line = "今日无新放行标的；既有持仓继续按出场规则管理。"
+        P.append(f"<div class='card' style='border-color:#d4af3766;margin-bottom:12px'>"
+                 f"<div class='eyebrow-l'>TODAY'S BATTLE PLAN · 今日作战三句话</div>"
+                 f"<div style='display:flex;gap:12px;flex-wrap:wrap;margin-top:4px'>"
+                 f"<div style='flex:1;min-width:min(220px,100%)'><b>① 天气</b>"
+                 f"<div class='sub' style='margin-top:2px'>{w_line}</div></div>"
+                 f"<div style='flex:1;min-width:min(220px,100%)'><b>② 方向</b>"
+                 f"<div class='sub' style='margin-top:2px'>{d_line}</div></div>"
+                 f"<div style='flex:1;min-width:min(220px,100%)'><b>③ 刀口</b>"
+                 f"<div class='sub' style='margin-top:2px'>{k_line}</div></div></div></div>")
+    if r.picks and research_status is None:
         bull = THEME_ART_B64.get("tech", "")
         bull_img = (f"<img src='data:image/jpeg;base64,{bull}' width='96' height='96' "
                     f"alt='电路金牛插图' style='border-radius:14px;border:1.5px solid "
@@ -2655,14 +2863,14 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
                  f"——每一笔都公开留痕，亏赚如实。</div>"
                  f"<button class='subbtn' style='margin-top:8px' "
                  f"onclick='showDaily(\"history\")'>查看完整验证 →</button></div>")
-    else:
+    elif not r.picks:
         ledger_note = ("本轮未更新交易账本，未执行持仓或待成交信号的模拟结算。"
                        if accounting_blocked else
                        "新的推荐信号与既有持仓分开管理，实际持仓和待成交记录见台账。")
         P.append(f"<div class='card'><b>今日无新放行标的</b><div class='sub' style='margin-top:6px'>"
                  f"{_esc(r.market_view)}；{ledger_note}</div></div>")
         # —— 开门条件（业务化，告诉投资者"等什么"）——
-        if mrs:
+        if instructions is None and mrs:
             weak = []
             dims = mrs.dimensions
             for key, cond_zh in (
@@ -2684,7 +2892,7 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
                     P.append(f"<div class='sub'>· {_esc(w_)}</div>")
                 P.append("</div>")
         # —— 预备观察名单（环境开门后的第一梯队）——
-        if r.watchlist:
+        if instructions is None and r.watchlist:
             watch_note = ("个股质量与原币价位仅供研究；币种执行边界解除前不生成交易指令。"
                           if accounting_blocked else
                           "个股质量已评估完毕，等待市场环境开门——开门后按此优先级复核入场：")
@@ -2804,7 +3012,16 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
                          f"<span class='sub'>（影响环节: {trans or '—'}）</span></div>")
 
     # ---- 今日选股漏斗 ----
-    if ss:
+    if research_status is not None:
+        counts = research_status["counts"]["securities"]
+        P.append("<h2>五、今日选股漏斗</h2><div class='card'><p>逐证券状态按原记录展示；"
+                 "未完成研究、缺证据与已完成判断分别计数。</p><div class='research-gates'>")
+        for key, label in (("buy", "纸面买入计划"), ("qualified_hold", "合格观察"),
+                           ("wait_evidence", "等待证据"), ("pending_research", "待补查"),
+                           ("not_selected", "本轮未入选"), ("not_assessed", "尚未完成判断")):
+            P.append(f"<div><strong>{label}</strong><span>{counts[key]} 只</span></div>")
+        P.append("</div></div>")
+    elif ss:
         rej = ss.get("rejected", {})
         total = ss.get("universe_size", 0) or 0
         passed, selected = ss.get("passed", 0), ss.get("selected", 0)

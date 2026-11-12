@@ -33,6 +33,13 @@ Tiger Global Asset Management (TGAM) uses the [Caishen AI trading system](docs/C
 
 ## Quick Start (Trading Kernel)
 
+For dialogue-only operation through Codex or Qoder, start with the
+[operator guide](docs/TIGER-OPERATOR.md) and [client setup](docs/AGENT-CLIENTS.md).
+The outer agent prepares fixed CLI/MCP requests, preserves the original task
+identity through reconnects, and reports completion only after independent
+receipt verification. Keep one trusted state root for a continuing paper account
+and profile; a new daily task changes its logical idempotency key.
+
 ```bash
 pip install -r requirements.txt
 python3 -m pytest tests/ -q          # 252 tests
@@ -44,6 +51,26 @@ python3 main.py --review-list                              # list WFA parameter 
 python3 main.py --review-approve <id>                      # approve → effective next day, disclosed
 python3 main.py --review-reject <id> --reason "..."        # reject (reason required)
 ```
+
+## Controlled Research and Evidence Acquisition
+
+New controlled AI research explicitly selects `us-public-intelligence-paper-v2`
+through the Tiger CLI/MCP workflow. It binds a separately frozen numeric research
+frontier, registered-source acquisition, original documents/attachments, typed
+subject/event/time evidence, target-specific eligibility and an immutable bundle.
+Missing evidence remains a gap with null semantic scores. All five semantic
+stages still require the admitted DeepSeek model; optional discovery providers
+do not replace that text model or numeric risk gates. Historical profiles and
+their original receipts retain their original verification rules.
+
+The independent `node scripts/tiger-intelligence.mjs sync|monitor|status|evidence`
+entry defaults to read-only access and has bounded, trusted startup options. It
+does not call a text model, connect an account or place an order. The offline
+benchmark ships 100 explicitly synthetic contract fixtures across five strata;
+these are not human-labelled financial gold or measurements of real providers.
+See [the acquisition guide](docs/INTELLIGENCE-ACQUISITION.md) and
+[the Agent guide](docs/AGENT-CLIENTS.md) for requests, credentials, limits,
+failure states and production-validation boundaries.
 
 ## The Ten Iron Rules of the White Paper (highest discipline; no upgrade may violate them)
 
@@ -71,6 +98,7 @@ python3 main.py --review-reject <id> --reason "..."        # reject (reason requ
 | [research/02_frontline.html](research/02_frontline.html) | Research 2: frontline investment-team workflows and know-how |
 | [docs/AGENT_CENSUS.md](docs/AGENT_CENSUS.md) | Agent census (20 agents/modules classified) |
 | [docs/DATA_HYGIENE.md](docs/DATA_HYGIENE.md) | Data hygiene discipline |
+| [docs/INTELLIGENCE-ACQUISITION.md](docs/INTELLIGENCE-ACQUISITION.md) | Registered-source acquisition, evidence bundles and offline evaluation |
 | [docs/PUBLIC_VERIFICATION.md](docs/PUBLIC_VERIFICATION.md) | Public paper-trading verification charter |
 
 ## Compliance Statement

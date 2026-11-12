@@ -13,6 +13,8 @@ from threading import get_ident
 from time import perf_counter
 from typing import Any, Callable, Mapping, Protocol
 
+from .model_diagnostics import MODEL_IO_METHODS, model_failure_diagnostic
+
 
 class EvidenceWriteError(RuntimeError):
     """Evidence could not be durably recorded; never a provider fallback."""
@@ -38,6 +40,24 @@ class StrictSourceSynthetic(ExecutionContractError):
     code = "SOURCE_SYNTHETIC"
 
 
+class RequiredModelFailed(ExecutionContractError):
+    code = "MODEL_REQUIRED_FAILED"
+
+
+REQUIRED_PROFILE = "us-public-model-required-paper-v1"
+REQUIRED_POLICY_ID = "tiger.public-model-required-paper-policy.v1"
+INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2"
+INTELLIGENCE_POLICY_ID = "tiger.public-intelligence-paper-policy.v2"
+MODEL_REQUIRED_POLICIES = frozenset({REQUIRED_POLICY_ID, INTELLIGENCE_POLICY_ID})
+INTELLIGENCE_SEARCH_SOURCES = (
+    "deepseek_search", "brave_news", "tavily_search", "exa_search",
+    "sec_submissions", "issuer_ir", "fed", "fred", "bls", "cboe", "fda", "ecb",
+)
+REQUIRED_MODEL_STAGES = ("clean.llm_semantic", "tech.sentiment", "tech.risk",
+                         "sector.narrative", "decision.debate")
+DAILY_MACRO_OBSERVATION_CONTRACT = "source-midnight-macro-label/v1"
+
+
 PUBLIC_PROVIDER_NAMES = ("yahoo", "stooq", "official", "tencent", "sina", "eastmoney")
 PUBLIC_SEARCH_SOURCE_NAMES = (
     "google_news", "reddit", "edgar", "patentsview", "federal_register",
@@ -54,13 +74,16 @@ class ExecutionPolicy:
     market_timezone: str = "America/New_York"
 
     def __post_init__(self):
-        if not self.policy_id or self.model_mode != "disabled":
+        required = self.policy_id in MODEL_REQUIRED_POLICIES
+        if not self.policy_id or self.model_mode != ("enabled" if required else "disabled"):
             raise ExecutionContractError("Strict public paper requires a disabled model policy")
         if self.market_timezone != "America/New_York":
             raise ExecutionContractError("Strict public paper has a fixed market timezone")
         for values, allowed, label in (
             (self.provider_names, PUBLIC_PROVIDER_NAMES, "provider"),
-            (self.search_source_names, PUBLIC_SEARCH_SOURCE_NAMES, "search source"),
+            (self.search_source_names, INTELLIGENCE_SEARCH_SOURCES
+             if self.policy_id == INTELLIGENCE_POLICY_ID else
+             ("deepseek_search",) if required else PUBLIC_SEARCH_SOURCE_NAMES, "search source"),
         ):
             if (not values or len(set(values)) != len(values)
                     or any(name not in allowed for name in values)):
@@ -100,21 +123,25 @@ class DailyStageSpec:
     allow_passthrough: bool = False
 
 
-def daily_stage_specs() -> tuple[DailyStageSpec, ...]:
+def daily_stage_specs(model_required: bool = False, *,
+                      authoritative_paper: bool = False,
+                      intelligence: bool = False) -> tuple[DailyStageSpec, ...]:
     """The sole strict daily order: 3 setup + 20 registered pipeline + 16 tail."""
-    from . import DEFERRED_STEPS, STEP_REGISTRY
+    from . import DEFERRED_STEPS, pipeline_steps
     setup = (
         DailyStageSpec("daily.preflight", "rules", "main"),
         DailyStageSpec("state.reset", "rules", "state"),
         DailyStageSpec("pipeline.prepare", "rules", "pipeline"),
     )
-    pipeline = tuple(DailyStageSpec(s.name, s.driver, s.owner, s.driver == "llm")
-                     for s in STEP_REGISTRY if s.name not in DEFERRED_STEPS)
+    pipeline = tuple(DailyStageSpec(s.name, s.driver, s.owner, s.driver == "llm" and not model_required)
+                     for s in pipeline_steps(intelligence) if s.name not in DEFERRED_STEPS)
+    paper = (("paper.step", "simulator"), ("paper.persist", "simulator"))
+    journal = (("journal.log", "journal"), ("journal.settle", "journal"),
+               ("journal.stats", "journal"))
     tail = tuple(DailyStageSpec(name, "rules", owner) for name, owner in (
         ("accounting.validate", "main"), ("report.initial", "report"),
-        ("journal.log", "journal"), ("journal.settle", "journal"),
-        ("journal.stats", "journal"), ("paper.step", "simulator"),
-        ("paper.persist", "simulator"), ("governance.initialize", "governance_bridge"),
+        *(paper + journal if authoritative_paper else journal + paper),
+        ("governance.initialize", "governance_bridge"),
         ("review.daily", "review.chief"), ("governance.emit", "governance_bridge"),
         ("governance.verify", "governance_bridge"), ("report.final_json", "report"),
         ("report.plan", "triggers"), ("report.markdown", "report"),
@@ -123,8 +150,10 @@ def daily_stage_specs() -> tuple[DailyStageSpec, ...]:
     return setup + pipeline + tail
 
 
-def daily_stage_contract() -> list[dict]:
-    return [asdict(spec) for spec in daily_stage_specs()]
+def daily_stage_contract(model_required: bool = False, *, authoritative_paper: bool = False,
+                         intelligence: bool = False) -> list[dict]:
+    return [asdict(spec) for spec in daily_stage_specs(
+        model_required, authoritative_paper=authoritative_paper, intelligence=intelligence)]
 
 
 class EvidenceStore(Protocol):
@@ -198,14 +227,41 @@ class StageScope:
 
 class ExecutionContext:
     def __init__(self, *, run_id: str, run_date: date, paths: RuntimePaths,
-                 policy: ExecutionPolicy, store: EvidenceStore):
+                 policy: ExecutionPolicy, store: EvidenceStore, admitted_at: datetime | None = None,
+                 authoritative_paper: bool = False, account_version_before: str | None = None,
+                 response_observation_contract: str = ""):
         if not isinstance(run_id, str) or not run_id:
             raise ExecutionContractError("run_id is required")
         if not isinstance(run_date, date) or isinstance(run_date, datetime):
             raise ExecutionContractError("run_date must be the frozen admission-market date")
         self.run_id, self.run_date = run_id, run_date
         self.paths, self.policy, self.store = paths, policy, store
-        self._specs = daily_stage_specs()
+        self.model_required = policy.policy_id in MODEL_REQUIRED_POLICIES
+        self.intelligence = policy.policy_id == INTELLIGENCE_POLICY_ID
+        if type(response_observation_contract) is not str:
+            raise ExecutionContractError("Invalid model response observation contract")
+        if response_observation_contract:
+            from ..llm.json_observation import SUPPORTED_CONTRACTS
+            if not self.intelligence or response_observation_contract not in SUPPORTED_CONTRACTS:
+                raise ExecutionContractError("Invalid model response observation contract")
+        self.response_observation_contract = response_observation_contract
+        self._model_format_retry_used = False
+        self.admitted_at = admitted_at
+        self.authoritative_paper = authoritative_paper
+        self.account_version_before = account_version_before
+        if authoritative_paper and (not self.model_required or admitted_at is None):
+            raise ExecutionContractError("Authoritative paper requires the admitted model workflow")
+        self.completed_session_close = None
+        if self.model_required and admitted_at is not None:
+            from ..market_close import completed_session
+            from zoneinfo import ZoneInfo
+
+            self.completed_session_close = completed_session(admitted_at)
+            if admitted_at.astimezone(ZoneInfo(policy.market_timezone)).date() != run_date:
+                raise ExecutionContractError("Admission timestamp differs from the frozen market date")
+        self.signal_benchmark_chart = None
+        self._specs = daily_stage_specs(self.model_required, authoritative_paper=authoritative_paper,
+                                        intelligence=self.intelligence)
         self._cursor = 0
         self._sequence = 0
         self._owner_thread = get_ident()
@@ -300,6 +356,13 @@ class ExecutionContext:
                 scope.elapsed_ms = (perf_counter() - scope.started) * 1000
                 scope.status = "failed"
                 try:
+                    if self.response_observation_contract and scope.output_ref is None:
+                        from ..llm.json_observation import contract_schemas
+                        scope.output_ref = self._snapshot(name, "output", {
+                            "schema": contract_schemas(self.response_observation_contract)["failed_stage"],
+                            "response_observation_contract": self.response_observation_contract,
+                            "io_calls": sorted(scope.io_calls, key=lambda call: call["index"]),
+                        })
                     self._event(scope, "end", "failed", type(original).__name__)
                 except EvidenceWriteError as evidence_error:
                     raise evidence_error from original
@@ -338,6 +401,31 @@ class ExecutionContext:
         scope._handles.append(handle)
         return handle
 
+    def model_attempt_snapshot(self, value: object) -> dict:
+        """Persist a native attempt while its exact model IO is still active."""
+        self._check_thread()
+        scope = self._active
+        if not self.response_observation_contract or scope is None:
+            self._reject("Native model observation requires its admitted active stage")
+        scope._check_active()
+        pending = [handle for handle in scope._handles
+                   if not handle.completed and handle.method == "model.deepseek.chat"]
+        if scope.output_ref is not None or len(pending) != 1:
+            self._reject("Native model observation requires one unfinished model IO")
+        return self._snapshot(scope.spec.name, "output", value)
+
+    def claim_model_format_retry(self) -> bool:
+        """Share the single admitted format reanswer across all client instances."""
+        self._check_thread()
+        scope = self._active
+        if not self.response_observation_contract or scope is None:
+            self._reject("Model format reanswer requires its admitted active stage")
+        scope._check_active()
+        if self._model_format_retry_used:
+            return False
+        self._model_format_retry_used = True
+        return True
+
     def finish_io(self, handle: _IOHandle, *, output: object = None,
                   error: BaseException | None = None,
                   outcome_observed: bool = True) -> None:
@@ -351,6 +439,15 @@ class ExecutionContext:
         value = ({"error_type": type(error).__name__, "message": "External call failed",
                   "outcome_observed": outcome_observed}
                  if error is not None else output)
+        if error is not None and self.model_required and handle.method in MODEL_IO_METHODS:
+            diagnostic = model_failure_diagnostic(error)
+            if diagnostic is not None:
+                value["diagnostic"] = diagnostic
+            if self.response_observation_contract:
+                from .model_diagnostics import model_failure_observation
+                observation = model_failure_observation(error)
+                if observation is not None:
+                    value["response_observation"] = observation
         ref = self._snapshot(scope.spec.name, "output", value)
         scope.io_calls.append({"index": handle.index, "method": handle.method,
                                "input_ref": handle.input_ref,
@@ -376,8 +473,8 @@ class ExecutionContext:
         self._active.passthrough(reason)
 
     def assert_pipeline_complete(self) -> None:
-        from . import DEFERRED_STEPS, STEP_REGISTRY
-        required = [s.name for s in STEP_REGISTRY if s.name not in DEFERRED_STEPS]
+        from . import DEFERRED_STEPS, pipeline_steps
+        required = [s.name for s in pipeline_steps(self.intelligence) if s.name not in DEFERRED_STEPS]
         actual = [r["stage"] for r in self._records if r["stage"] in required]
         if self._failed or actual != required:
             self._reject("Pipeline subsequence is incomplete")
@@ -425,6 +522,37 @@ def market_observation(value, *, run_date: date, market_timezone: str):
     return value
 
 
+def daily_macro_observation(value, *, run_date: date, market_timezone: str):
+    """Project an explicit daily macro label without changing its calendar date.
+
+    A source-local midnight is a label for a source session, not an intraday
+    instant. Converting Chicago midnight to New York produces 01:00; converting
+    UTC midnight can even move it to the previous day. Only the two registered
+    rate/volatility daily methods use this versioned rule. Validate every raw
+    row before dropping its timezone; ordinary aware observations keep their
+    original instant semantics. The caller has already persisted the raw return.
+    """
+    import pandas as pd
+
+    if value is None or isinstance(value, pd.Series) and value.empty:
+        return value
+    if not isinstance(value, pd.Series):
+        raise StrictObservationError("Macro daily feed must be a typed series")
+    index = value.index
+    if (not isinstance(index, pd.DatetimeIndex) or index.hasnans
+            or not index.is_monotonic_increasing or not index.is_unique
+            or not index.equals(index.normalize())):
+        raise StrictObservationError("Macro daily feed contains unverifiable source-session labels")
+    local_labels = index.tz_localize(None) if index.tz is not None else index
+    if any(day > run_date for day in local_labels.date):
+        raise StrictObservationError("Macro source-session label is later than the frozen market date")
+    if value.index.tz is None:
+        return value
+    projected = value.copy()
+    projected.index = local_labels
+    return projected
+
+
 class RecordingProvider:
     """Record public provider calls without changing their internal algorithms."""
     def __init__(self, provider, execution: ExecutionContext):
@@ -452,8 +580,22 @@ class RecordingProvider:
                 lambda: value(*args, **kwargs),
             )
             try:
-                return market_observation(raw, run_date=self.execution.run_date,
-                                          market_timezone=self.execution.policy.market_timezone)
+                close = self.execution.completed_session_close
+                projector = (daily_macro_observation if close is not None and name in {
+                    "rate_yield_for", "vol_index_for",
+                } else market_observation)
+                observed = projector(raw, run_date=self.execution.run_date,
+                                     market_timezone=self.execution.policy.market_timezone)
+                stage = self.execution._active.spec.name
+                if close is not None and stage == "tech.monitor":
+                    from ..market_close import close_observation
+
+                    if name == "ohlcv":
+                        return close_observation(observed, close.date(), exact=True)
+                    if name == "ohlcv_batch" and isinstance(observed, dict):
+                        return {symbol: aligned for symbol, frame in observed.items()
+                                if (aligned := close_observation(frame, close.date(), exact=True)) is not None}
+                return observed
             except StrictObservationError as error:
                 # A caught boundary violation still poisons this stage before
                 # another provider, ledger write, or output can be started.

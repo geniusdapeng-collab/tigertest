@@ -4,6 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { REQUEST, RUN_ID, collectProcess, eventually, runnerFixture } from "./tiger-agent-test-support.mjs";
+import { parseArgs } from "./tiger-agent.mjs";
 
 function launch(fixture, operation, extra = []) {
   return collectProcess("scripts/tiger-agent.mjs", [operation, "--python", fixture.python,
@@ -26,13 +27,47 @@ test("CLI doctor/describe use fixed defaults and emit exactly one JSON envelope"
   assert.equal(existsSync(fixture.stateRoot), false);
 });
 
-test("CLI P01: readonly rejects run before opening request file or spawning Python", async (t) => {
+test("CLI P01: readonly rejects every paper mutation before opening input or spawning Python", async (t) => {
   const fixture = await runnerFixture(t);
-  const proc = collectProcess("scripts/tiger-agent.mjs", ["run", "--python", fixture.python,
-    "--state-root", fixture.stateRoot, "--input-file", join(fixture.dir, "absent.json")]);
-  proc.child.stdin.end();
-  assert.equal(envelope(await proc.closed, 3).error.code, "READ_ONLY");
+  for (const operation of ["run", "resume", "supplement", "cancel"]) {
+    const proc = collectProcess("scripts/tiger-agent.mjs", [operation, "--python", fixture.python,
+      "--state-root", fixture.stateRoot, "--input-file", join(fixture.dir, "absent.json")]);
+    proc.child.stdin.end();
+    assert.equal(envelope(await proc.closed, 3).error.code, "READ_ONLY");
+  }
   assert.deepEqual(await fixture.calls(), []); assert.equal(existsSync(fixture.stateRoot), false);
+});
+
+test("CLI resume observes the original run and supplement waits on its new identity", async (t) => {
+  const fixture = await runnerFixture(t);
+  const resume = launch(fixture, "resume", ["--input-file", "-"]);
+  resume.child.stdin.end(JSON.stringify({ run_id: RUN_ID }));
+  const resumed = envelope(await resume.closed, 0);
+  assert.equal(resumed.operation, "resume"); assert.equal(resumed.status, "running");
+  assert.equal(resumed.run_id, RUN_ID);
+  const supplement = launch(fixture, "supplement", ["--input-file", "-", "--wait"]);
+  supplement.child.stdin.end(JSON.stringify({
+    schema_version: "tiger.research-supplement-request/v1",
+    parent_run_id: RUN_ID,
+    symbols: ["NVDA"],
+    idempotency_key: "supplement-cli-0001",
+  }));
+  const completed = envelope(await supplement.closed, 0);
+  assert.equal(completed.operation, "receipt"); assert.equal(completed.verification.ok, true);
+  assert.deepEqual((await fixture.calls()).map((call) => call.operation),
+    ["resume", "supplement", "status", "receipt"]);
+});
+
+test("CLI cancel forwards only the original run identity", async (t) => {
+  const fixture = await runnerFixture(t);
+  const proc = launch(fixture, "cancel", ["--input-file", "-"]);
+  proc.child.stdin.end(JSON.stringify({ run_id: RUN_ID }));
+  const value = envelope(await proc.closed, 0);
+  assert.equal(value.operation, "cancel");
+  assert.equal(value.status, "cancelled");
+  assert.equal(value.run_id, RUN_ID);
+  assert.deepEqual((await fixture.calls()).map((call) => [call.operation, call.input]),
+    [["cancel", { run_id: RUN_ID }]]);
 });
 
 test("CLI N06: run --wait submits once, polls original identity, then returns verified receipt", async (t) => {
@@ -95,4 +130,21 @@ test("CLI input files with spaces/nonASCII work and failed status is only a quer
   const file = join(fixture.dir, "输入 request.json"); await writeFile(file, JSON.stringify({ run_id: RUN_ID }));
   const proc = launch(fixture, "status", ["--input-file", file]); proc.child.stdin.end();
   const value = envelope(await proc.closed, 0); assert.equal(value.status, "failed"); assert.equal(value.summary, null);
+});
+
+test("CLI wait covers the business deadline plus bounded receipt proof", async (t) => {
+  assert.equal(parseArgs(["run", "--wait", "--wait-timeout-seconds", "14400"]).waitMs, 14_400_000);
+  assert.throws(() => parseArgs(["run", "--wait", "--wait-timeout-seconds", "14401"]),
+    (error) => error.code === "INVALID_REQUEST");
+});
+
+test("CLI reads ordinary stdin without --input-file and forwards status card pagination", async (t) => {
+  const fixture = await runnerFixture(t, "send(result(operation,{status:'failed'}));");
+  const proc = launch(fixture, "status", ["--detail", "cards", "--limit", "20"]);
+  proc.child.stdin.end(JSON.stringify({ run_id: RUN_ID }));
+  const value = envelope(await proc.closed, 0);
+  assert.equal(value.status, "failed");
+  assert.deepEqual((await fixture.calls()).map((call) => [call.operation, call.input]), [
+    ["status", { run_id: RUN_ID, detail: "cards", limit: 20 }],
+  ]);
 });

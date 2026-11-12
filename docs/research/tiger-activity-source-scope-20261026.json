@@ -1,0 +1,36 @@
+{
+  "schema": "tiger.activity-source-scope.v1",
+  "evaluation_report": "tiger-activity-evaluation-20261026.json",
+  "evaluation_report_sha256": "690dca5413a2ec98c272498053190e688062290e0b3c13c42f58cc01ebf4f992",
+  "unchanged_files": 94,
+  "added_or_removed_replay_files": [],
+  "changed_files": [
+    {
+      "path": "trading_system/pipeline.py",
+      "replay_source_sha256": "afaf9dbc410e8778e917c20dfc8eb81ce282718e8bea6c30e3c3795543f362aa",
+      "current_sha256": "ab63a99769bbaa5dd983b8a955a06a3c88c37a5b323bdf7f244b70437afc0d76",
+      "scope": "Network collection only; no scoring, gating, accounting or evaluator changes."
+    },
+    {
+      "path": "trading_system/providers/stooq.py",
+      "replay_source_sha256": "6d7988062de45b2db2b2743f7824bf33529498aebe4e7ae272103cde742e0e20",
+      "current_sha256": "b758c78c27bc093efe6660ee4d659dd4dba47715eaf1f7bada350a2b1a32e4e6",
+      "scope": "Network collection only; no scoring, gating, accounting or evaluator changes."
+    }
+  ],
+  "reason_no_new_historical_replay": "The replay reads hash-verified recorded snapshots and blocks network; actual MRS/Sector/ICS/Scanner/TSS/RiskManager, paper_policy, SimEngine and evaluator bytes are unchanged. Only trusted-source availability budget and its disclosure hook changed. Task coordinator explicitly approved scoped regression instead of rerunning identical historical computation.",
+  "regression": {
+    "log": "work/research-run/stooq-tests-final.txt",
+    "result": "212 passed in 30.08s"
+  },
+  "independent_verification": {
+    "reviewer": "pnl_frontend independent reviewer",
+    "result": "47 passed in 3.48s; full read of both source changes and tests, plus five independent scenarios",
+    "scope": "Partial observation then fatal evidence/execution/observation errors poison stage; preserve original frames and fill only missing symbols; never serialize error body; reset batch budget; no strategy/scoring/executor changes."
+  },
+  "full_regression": {
+    "log": "work/research-run/python-full-regression-availability-absolute.txt",
+    "result": "1361 passed in 122.36s",
+    "python_invocation": "Absolute configured Python executable; unchanged application source."
+  }
+}

@@ -42,7 +42,7 @@ class NarrativeAgent:
             out = self.llm.complete_json(
                 system=SYSTEM_ANALYST,
                 user=NARRATIVE_USER_TMPL.format(etfs=" ".join(etfs), docs=payload),
-                schema_hint=NARRATIVE_SCHEMA, max_tokens=2000)
+                schema_hint=NARRATIVE_SCHEMA)
             result: dict[str, dict] = {}
             for item in out.get("sectors", []):
                 etf = str(item.get("etf") or "").upper()

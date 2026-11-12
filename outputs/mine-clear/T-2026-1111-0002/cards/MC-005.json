@@ -1,0 +1,47 @@
+{
+  "id": "MC-005",
+  "kind": "problem",
+  "level": "L3",
+  "severity": "P1",
+  "batch": 2,
+  "state": "open",
+  "title": "批量行情达到最低比例后不再补洞，活动标的仍被记为缺失",
+  "evidence": [
+    {
+      "type": "code",
+      "ref": "trading_system/pipeline.py:419@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "b7b3f9041a9e91d0e62602fe02d909d54023d6706acb3aed224e0c568888b846",
+      "note": "主批量结果一旦达到 minimum（默认约三分之一）就直接返回，不尝试补齐少量缺失标的。"
+    },
+    {
+      "type": "code",
+      "ref": "trading_system/universe.py:84@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "69ad9cb6a2bb6df326fbed68419eb3b231c1dc309a4c8818e58f3d8fe80ee62d",
+      "note": "静态扩展池同时保留已退市、被收购或改名的历史代码，缺少活动上市清单隔离。"
+    }
+  ],
+  "root_cause": {
+    "file": "trading_system/pipeline.py",
+    "line": 419,
+    "commit": "d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+    "symbol": "_batch_with_fallback"
+  },
+  "trigger_path": "506 个扫描标的中少量批量缺失时，minimum 早退阻止下游补洞；静态池又未剔除失效代码，形成 481/506。",
+  "assertions": [
+    {
+      "kind": "sample",
+      "given": "主源返回 481/506，剩余 25 中包含活动标的与失效代码",
+      "expect": "对少量缺口执行有界补洞；活动标的可恢复；失效代码进入显式 pruned 清单，最终覆盖率分母只计活动/可验证标的。",
+      "command": "python -m pytest tests/test_runtime_reliability_release.py -k market_gap_fill -q",
+      "exec": {
+        "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
+        "args": ["-B", "-m", "pytest", "tests/test_runtime_reliability_release.py", "-k", "market_gap_fill", "-q"]
+      },
+      "last_result": "not-run"
+    }
+  ],
+  "regression": {
+    "command": "python -m pytest tests/test_runtime_reliability_release.py -k market_gap_fill -q"
+  },
+  "notes": "不得用合成数据补洞，也不得把真实缺失静默改为存在。"
+}
