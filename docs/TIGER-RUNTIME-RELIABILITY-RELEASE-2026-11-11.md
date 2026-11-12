@@ -84,7 +84,7 @@
 
 ### 8. 429 有界重试与未决尝试隔离
 
-- 同一 durable chat attempt 对完整 HTTP 429 响应做一次 5 秒冷却后的有界重试；
+- 同一 durable chat attempt 对 HTTP 429 和可重试传输失败做最多两次指数退避；
   同一 wire 不重复生成 `dispatch_started` 事件。
 - 全局并发 chat 发送上限为 8，仍高于旧的 4-worker 上限，但避免 16 个文档
   worker 同时冲击提供方 rate limit。

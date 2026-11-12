@@ -385,7 +385,7 @@ def test_rate_limit_retry_is_one_durable_dispatch_and_terminal_zero_usage(observ
         with child.step("clean.llm_semantic", {"TEST_FIXTURE": "whole original"}):
             invoke(child)
     attempts = store.attempts_for_unit("extract")
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert len(attempts) == 1 and attempts[0]["state"] == "settled"
     assert attempts[0]["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     assert store.status()["unknown_attempts"] == 0

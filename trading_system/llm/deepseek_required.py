@@ -711,11 +711,11 @@ class DeepSeekRequiredClient:
                     _fail("RESPONSE_CLOSE_FAILURE")
 
     def _post_chat_bounded(self, request: dict):
-        """Retry one documented/connection/presence failure, with no loop.
+        """Retry at most two documented/connection/presence failures.
 
         The durable dispatch still precedes this call. A read timeout can
-        duplicate provider work, so it is capped at one explicit retry and its
-        original failure remains in the execution evidence.
+        duplicate provider work, so retries stay explicitly capped and the
+        final failure remains in the execution evidence.
         """
         try:
             return self._post_json("/chat/completions", request)
@@ -738,11 +738,12 @@ class DeepSeekRequiredClient:
                 hasattr(self.execution, "store")
                 and callable(getattr(self.execution.store, "reserve", None))
             )
-            if topic_reservation or not retryable or self._chat_route_retries >= 1:
+            if topic_reservation or not retryable or self._chat_route_retries >= 2:
                 raise
+            retry_index = self._chat_route_retries
             self._chat_route_retries += 1
-            time.sleep(5.0 if status == 429 else 1.0)
-            return self._post_json("/chat/completions", request)
+            time.sleep((5.0, 10.0)[retry_index] if status == 429 else (1.0, 3.0)[retry_index])
+            return self._post_chat_bounded(request)
 
     def _native_transport_usage(self):
         limits = self._native_io_limits

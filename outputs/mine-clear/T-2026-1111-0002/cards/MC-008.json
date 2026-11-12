@@ -31,7 +31,7 @@
     {
       "kind": "sample",
       "given": "同一 durable chat attempt 第一次收到完整 HTTP 429，冷却后第二次成功",
-      "expect": "只记录一个 dispatch_started；第二次发送允许成功，429 不再形成未决 attempt。",
+      "expect": "只记录一个 dispatch_started；重试发送允许成功，429 不再形成未决 attempt。",
       "command": ".venv/bin/python -B -m pytest tests/test_deepseek_required.py tests/test_task_child_context.py -k 'chat_rate_limit or rate_limit_retry' -q",
       "exec": {
         "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
@@ -71,5 +71,5 @@
   "regression": {
     "command": ".venv/bin/python -B -m pytest tests/test_deepseek_required.py tests/test_task_child_context.py -q"
   },
-  "notes": "429 只允许一次有界重试；并发发送上限为 8，仍高于旧 4-worker 上限；读取超时 240 秒、总响应预算 900 秒。"
+  "notes": "429/可重试传输失败最多两次指数退避；并发发送上限为 8，仍高于旧 4-worker 上限；读取超时 240 秒、总响应预算 900 秒。"
 }
