@@ -10,7 +10,8 @@
 
 修复默认 `us-public-intelligence-paper-v2` 在大文档工作图和 7,200 秒业务预算下暴露的六项运行问题。改动仍只服务公开数据、本地 paper 研究和可恢复执行，不开放真实券商、实盘或交易阈值变更。
 
-真实 2,768-unit 验收又发现并修复了收尾阶段的重复证明放大，因此发布共闭环七项问题。
+真实大工作图验收又发现并修复了收尾阶段的重复证明放大，以及 HTTP 429
+未决尝试的级联阻断，因此发布共闭环八项问题。
 
 ## 修复
 
@@ -80,6 +81,16 @@
   内对同一批不可变证据的重复重放，不是完整性检查。
 - 回归断言确认对已准备好的 stage proof 和 parent history 不会再次调用
   `verify_events` 或完整 history proof。
+
+### 8. 429 有界重试与未决尝试隔离
+
+- 同一 durable chat attempt 对完整 HTTP 429 响应做一次 5 秒冷却后的有界重试；
+  同一 wire 不重复生成 `dispatch_started` 事件。
+- 全局并发 chat 发送上限为 8，仍高于旧的 4-worker 上限，但避免 16 个文档
+  worker 同时冲击提供方 rate limit。
+- 重试后仍收到完整非 2xx envelope 时，按“未产生模型 completion”的零 usage
+  结算，只影响本单元，不再让全局未决检查把其他并发单元级联打成
+  `ATTEMPT_UNKNOWN`。
 
 ## 兼容与回滚
 

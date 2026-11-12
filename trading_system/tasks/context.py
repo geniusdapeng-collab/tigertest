@@ -127,6 +127,7 @@ class UnitExecutionContext(ExecutionContext):
         self.work_store, self.lease, self.child_root = work_store, lease, root
         self._task_attempt = None
         self._task_request = None
+        self._dispatch_recorded = False
 
     def _check_thread(self):
         super()._check_thread()
@@ -159,6 +160,7 @@ class UnitExecutionContext(ExecutionContext):
         attempt = self.work_store.begin_attempt(self.lease, self._task_request,
             operation=method, ordinal=1, reservation={"output_tokens": inputs["output_ceiling"]})
         self._task_attempt = attempt
+        self._dispatch_recorded = False
         try:
             return super().call_io(method, self._task_request, fn)
         finally:
@@ -185,11 +187,14 @@ class UnitExecutionContext(ExecutionContext):
         if (self._task_attempt is None or self._task_request is None
                 or detached(request) != self._task_request.get("request")):
             raise WorkUnitError("ATTEMPT_MISMATCH", "Transport wire differs from its durable model intent")
+        if self._dispatch_recorded:
+            return
         scope = self._active
         if scope is None or len([handle for handle in scope._handles
                 if not handle.completed and handle.method == "model.deepseek.chat"]) != 1:
             raise WorkUnitError("CHILD_IO_FORBIDDEN", "Transport requires its active unfinished model IO")
         self.work_store.mark_dispatch(self.lease, self._task_attempt.attempt_id)
+        self._dispatch_recorded = True
 
     def model_replay_attempt(self, ordinal, inputs):
         """Return the original settled native to the admitted client loop.
@@ -293,6 +298,15 @@ class UnitExecutionContext(ExecutionContext):
             return super().model_attempt_snapshot(value)
         amount = None if native is None else {key: native["usage"][key]
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+        diagnostic = value.get("transport_diagnostic")
+        http_error = (value.get("transport") or {}).get("http_error")
+        if (native is None and type(diagnostic) is dict
+                and diagnostic.get("code") == "HTTP_ERROR"
+                and type(http_error) is dict and http_error.get("body_complete") is True):
+            # A complete non-2xx envelope proves that no model completion was
+            # produced. Account it as a zero-token rejection so one rate limit
+            # cannot poison the global unresolved-attempt gate for every worker.
+            amount = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.work_store.record_response(self.lease, self._task_attempt.attempt_id, value, usage=amount)
         if amount is not None:
             if not self.work_store.attempt(self._task_attempt.attempt_id)["state"] == "dispatched":
@@ -316,6 +330,7 @@ class UnitExecutionContext(ExecutionContext):
                 operation="model.deepseek.chat", ordinal=2,
                 reservation={"output_tokens": self._task_request["output_ceiling"]})
             self._task_attempt = next_attempt
+            self._dispatch_recorded = False
         return admitted
 
     def seal(self):

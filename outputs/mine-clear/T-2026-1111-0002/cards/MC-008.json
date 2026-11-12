@@ -1,0 +1,75 @@
+{
+  "id": "MC-008",
+  "kind": "problem",
+  "level": "L3",
+  "severity": "P0",
+  "batch": 1,
+  "state": "open",
+  "title": "模型 429 被记为未决 attempt 并级联阻断整个工作图",
+  "evidence": [
+    {
+      "type": "code",
+      "ref": "trading_system/llm/deepseek_required.py:722@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "7eca9f031232640faa3448dba328093ffbc5b904d1f81dc032d6e077cf5a502d",
+      "note": "chat 有界重试只覆盖 503/传输超时，不覆盖明确可重试的 429。"
+    },
+    {
+      "type": "code",
+      "ref": "trading_system/tasks/context.py:294@d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+      "sha256": "f7dfe80f4f4cd3fd549d07adf9e62da72144e15e025e1c91fc459b366ece32f7",
+      "note": "完整非 2xx envelope 的 usage 为 None，attempt 保持 observed，随后全局未决检查让其他 worker 级联失败。"
+    }
+  ],
+  "root_cause": {
+    "file": "trading_system/llm/deepseek_required.py",
+    "line": 722,
+    "commit": "d0176e8b98dff575e5638e43c203b64c6aab1dc9",
+    "symbol": "DeepSeekRequiredClient._post_chat_bounded"
+  },
+  "trigger_path": "16 个文档 worker 同时发送模型请求，两个请求收到完整 HTTP 429 后 attempt 停在 observed；后续所有 begin_attempt 都因全局未决状态报 ATTEMPT_UNKNOWN。",
+  "assertions": [
+    {
+      "kind": "sample",
+      "given": "同一 durable chat attempt 第一次收到完整 HTTP 429，冷却后第二次成功",
+      "expect": "只记录一个 dispatch_started；第二次发送允许成功，429 不再形成未决 attempt。",
+      "command": ".venv/bin/python -B -m pytest tests/test_deepseek_required.py tests/test_task_child_context.py -k 'chat_rate_limit or rate_limit_retry' -q",
+      "exec": {
+        "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
+        "args": [
+          "-B",
+          "-m",
+          "pytest",
+          "tests/test_deepseek_required.py",
+          "tests/test_task_child_context.py",
+          "-k",
+          "chat_rate_limit or rate_limit_retry",
+          "-q"
+        ]
+      },
+      "last_result": "not-run"
+    },
+    {
+      "kind": "property",
+      "given": "429 重试后仍收到完整非 2xx envelope",
+      "expect": "attempt 以零模型 completion 的已知 usage 结算，unknown_attempts=0，其他 worker 不被级联阻断。",
+      "command": ".venv/bin/python -B -m pytest tests/test_task_child_context.py -k rate_limit_retry -q",
+      "exec": {
+        "file": "/Users/mac/Library/Application Support/CodexTigerRuns/runs/2026-11-11/20261111T151542Z-tiger-runtime-reliability-release-718915/code/.venv/bin/python",
+        "args": [
+          "-B",
+          "-m",
+          "pytest",
+          "tests/test_task_child_context.py",
+          "-k",
+          "rate_limit_retry",
+          "-q"
+        ]
+      },
+      "last_result": "not-run"
+    }
+  ],
+  "regression": {
+    "command": ".venv/bin/python -B -m pytest tests/test_deepseek_required.py tests/test_task_child_context.py -q"
+  },
+  "notes": "429 只允许一次有界重试；并发发送上限为 8，仍高于旧 4-worker 上限。"
+}

@@ -7,7 +7,7 @@ No raw response body, authorization header or unsafe source URL is persisted.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import html
 import ipaddress
@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+from threading import BoundedSemaphore
 import time
 import uuid
 from datetime import datetime, timezone
@@ -56,6 +57,8 @@ READ_TIMEOUT = 60.0
 RESPONSE_DEADLINE = 180.0
 CHAT_READ_TIMEOUT = 180.0
 CHAT_RESPONSE_DEADLINE = 480.0
+CHAT_REQUEST_CONCURRENCY = 8
+_CHAT_REQUEST_SLOTS = BoundedSemaphore(CHAT_REQUEST_CONCURRENCY)
 _URL = re.compile(r"https?://[^\s<>\"'`\[\]{}]+", re.IGNORECASE)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _CREDENTIAL = re.compile(
@@ -584,24 +587,26 @@ class DeepSeekRequiredClient:
                 meter["limit_reason"] = "deadline"
                 _fail("RESPONSE_DEADLINE")
         self._remote_requests += 1
+        request_slot = _CHAT_REQUEST_SLOTS if chat else nullcontext()
         try:
-            remaining = max(0.001, deadline - time.monotonic()) if tool_limits is not None else None
-            if tool_limits is not None:
-                meter["request_count"] += 1
-            dispatch = getattr(self.execution, "model_transport_dispatch", None) if chat else None
-            if dispatch is not None:
-                if not callable(dispatch):
-                    _fail("TRUSTED_CONFIGURATION_MISMATCH")
-                dispatch(request)
-            response = requests.post(
-                BASE_URL + path, data=wire,
-                headers={"Content-Type": "application/json", "Accept": "application/json",
-                         "Accept-Encoding": "identity", "Authorization": "Bearer " + self._api_key},
-                timeout=((min(CONNECT_TIMEOUT, remaining / 2), min(READ_TIMEOUT, remaining / 2))
-                         if tool_limits is not None else
-                         (CONNECT_TIMEOUT, (_chat_read_timeout if _chat_read_timeout is not None else CHAT_READ_TIMEOUT)
-                            if chat else READ_TIMEOUT)),
-                allow_redirects=False, verify=True, stream=True)
+            with request_slot:
+                remaining = max(0.001, deadline - time.monotonic()) if tool_limits is not None else None
+                if tool_limits is not None:
+                    meter["request_count"] += 1
+                dispatch = getattr(self.execution, "model_transport_dispatch", None) if chat else None
+                if dispatch is not None:
+                    if not callable(dispatch):
+                        _fail("TRUSTED_CONFIGURATION_MISMATCH")
+                    dispatch(request)
+                response = requests.post(
+                    BASE_URL + path, data=wire,
+                    headers={"Content-Type": "application/json", "Accept": "application/json",
+                             "Accept-Encoding": "identity", "Authorization": "Bearer " + self._api_key},
+                    timeout=((min(CONNECT_TIMEOUT, remaining / 2), min(READ_TIMEOUT, remaining / 2))
+                             if tool_limits is not None else
+                             (CONNECT_TIMEOUT, (_chat_read_timeout if _chat_read_timeout is not None else CHAT_READ_TIMEOUT)
+                                if chat else READ_TIMEOUT)),
+                    allow_redirects=False, verify=True, stream=True)
             status = response.status_code
             if observed_chat and self._response_observation_contract == TOOL_CONTRACT:
                 final_url, redirected = response.url, bool(response.history)
@@ -720,7 +725,7 @@ class DeepSeekRequiredClient:
             transport = diagnostic.get("transport") or {}
             reason = transport.get("transport_error") if isinstance(transport, dict) else None
             retryable = (
-                status == 503
+                status in {429, 503}
                 or diagnostic.get("code") in {"NETWORK_TIMEOUT", "TRANSPORT_FAILURE"}
                 or reason in {"connect_timeout", "transport_failure", "timeout", "read_timeout"}
             )
@@ -736,7 +741,7 @@ class DeepSeekRequiredClient:
             if topic_reservation or not retryable or self._chat_route_retries >= 1:
                 raise
             self._chat_route_retries += 1
-            time.sleep(1.0)
+            time.sleep(5.0 if status == 429 else 1.0)
             return self._post_json("/chat/completions", request)
 
     def _native_transport_usage(self):
