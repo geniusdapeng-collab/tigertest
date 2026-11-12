@@ -90,6 +90,15 @@ def test_parent_history_verification_reuses_prepared_value(tmp_path, monkeypatch
         run, admission, policy, reference, expected=value) == value
 
 
+def test_parent_events_are_published_before_full_history(tmp_path):
+    _state, run, admission, policy = prepared_parent(tmp_path)
+    content = b'{"TEST_FIXTURE":"canonical events"}\n'
+    (run / "parent-attempts/1/events.jsonl").write_bytes(content)
+    reference = resume.publish_parent_events(run, admission, policy)
+    assert (run / "events.jsonl").read_bytes() == content
+    assert reference == resume.file_ref(run, "events.jsonl", "application/x-ndjson")
+
+
 def parent_context(run, admission, policy):
     work = run / "work"
     paths = RuntimePaths(work_dir=work, reports_dir=work / "reports", journal_path=work / "reports/journal.json",

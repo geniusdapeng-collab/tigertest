@@ -450,11 +450,22 @@ def _history_value(run, admission, policy, *, proof=None):
         "failed_attempts_remain_failures": True}
 
 
+def publish_parent_events(run, admission, policy):
+    """Copy the current attempt's canonical event stream before full closeout."""
+    _require(policy)
+    current = current_parent_attempt(run, admission)
+    if current is None:
+        raise EvidenceInvalid("RESULT_INVALID", "Parent attempt history is missing")
+    source = file_ref(run, current["events_path"], "application/x-ndjson")
+    _write_equal(run, "events.jsonl", verify_ref(run, source, schema="application/x-ndjson"))
+    return file_ref(run, "events.jsonl", "application/x-ndjson")
+
+
 def publish_parent_completion(run, admission, policy, *, proof=None):
     _require(policy)
     value = _history_value(run, admission, policy, proof=proof)
     _write_equal(run, "research-parent-history.json", json_bytes(value))
-    _write_equal(run, "events.jsonl", verify_ref(run, value["events_ref"], schema="application/x-ndjson"))
+    publish_parent_events(run, admission, policy)
     return file_ref(run, "research-parent-history.json", HISTORY), value
 
 

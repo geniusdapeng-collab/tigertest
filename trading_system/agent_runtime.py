@@ -1310,6 +1310,9 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
     engine = read_json(run, "engine-result.json")
     if engine.get("run_id") != run.name or engine.get("success") is not True:
         raise EvidenceInvalid("RUN_INCOMPLETE", "Engine result is not successful")
+    if policy.get("research_work") is not None:
+        from .research_resume import publish_parent_events
+        publish_parent_events(run, admission, policy)
     stages = verify_events(run, run.name, policy["stages"])
     summary = business_summary(run, admission, engine["artifacts"])
     research_history = None
