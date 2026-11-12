@@ -865,9 +865,9 @@ def clean(llm, docs, *, acquisition):
 
 class Acquisition(legacy.Acquisition):
     """New research uses the inherited source contract and separate work ledger."""
-    def __init__(self, llm, frontier, topics):
+    def __init__(self, llm, frontier, topics, *, required_cells=None):
         _store(llm)
-        super().__init__(llm, frontier, topics)
+        super().__init__(llm, frontier, topics, required_cells=required_cells)
         from dataclasses import replace
         from ..intelligence import IntelligenceService
         from ..intelligence.adapters import DeepSeekBridge

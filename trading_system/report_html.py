@@ -2636,7 +2636,7 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     P: list[str] = []
     P.append(f"<html><head><meta charset='utf-8'><meta name='viewport' "
              f"content='width=device-width,initial-scale=1'><title>"
-             f"老虎全球资产管理 TGAM · {r.trade_date}</title><style>{_CSS}</style></head>")
+             f"TigerTest 科技情报选股 · {r.trade_date}</title><style>{_CSS}</style></head>")
     if HERO_ART_B64:
         # —— 一整张无缝大背景：猛虎图自页头贯穿向下，渐变融入嫩芽白正文（移动端加高取图）——
         P.append(f"<style>"
@@ -2659,11 +2659,12 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     if HERO_ART_B64:
         P.append("<div class='hero-veil'></div>")
     P.append("<div class='hero-inner'>")
-    P.append("<div class='eyebrow'>TIGER GLOBAL ASSET MANAGEMENT · EVIDENCE, NOT OPINIONS.</div>")
-    P.append(f"<h1>老虎全球资产管理 TGAM <span class='sub'>v3.1 · {r.trade_date}</span></h1>")
+    P.append("<div class='eyebrow'>TIGERTEST · TWO THEMES, EVIDENCE BEFORE ACTION.</div>")
+    P.append(f"<h1>TigerTest 双主题情报选股 <span class='sub'>v3 · {r.trade_date}</span></h1>")
     P.append("<div class='bigline'>别人预测市场，我们执行纪律。</div>")
-    P.append("<div class='sub' style='margin:2px 0'>AI 基金经理统筹的全自动化交易系统（美股 · A股 · 港股）"
-             f" ｜ 本报告市场：<b style='color:#ffd700'>{market}</b></div>")
+    P.append("<div class='sub' style='margin:2px 0'>半导体周期 × AI 基础设施"
+             f" ｜ 本报告市场：<b style='color:#ffd700'>{market}</b>"
+             " ｜ 条件观察不等于交易许可</div>")
     # —— 战绩条：亮剑三数（今日状态 / 小虎净值 / 逐笔留痕）——
     sim_stats = (sim or {}).get("stats") or {}
     eq = sim_stats.get("equity")
@@ -2731,6 +2732,39 @@ def render_html(r: PipelineResult, journal_stats: dict | None = None,
     P.append(f"<div style='margin-top:8px;font-size:14.5px'>{_esc(r.market_view)}</div>")
     if company_note:
         P.append(f"<p class='sub'>{_esc(company_note)}</p>")
+    decision_board = raw.get("decision_board")
+    if isinstance(decision_board, dict):
+        actionable = decision_board.get("actionable") or []
+        watch_rows = decision_board.get("conditional_watchlist") or []
+        P.append("<div style='margin-top:10px;padding-top:10px;"
+                 f"border-top:1px dashed {BORDER}'>"
+                 "<b>TigerTest 双主题决策面</b>"
+                 "<div class='sub' style='margin:3px 0 7px'>"
+                 "半导体周期 × AI 基础设施；条件观察与买入许可分层记录。</div>")
+        P.append("<div class='kpi' style='font-size:22px'>"
+                 f"{len(actionable)} 只可执行 · {len(watch_rows)} 只条件观察</div>")
+        if watch_rows:
+            P.append("<table style='margin-top:7px'><thead><tr>"
+                     "<th>标的</th><th>状态</th><th>TSS</th><th>模板</th>"
+                     "<th>当前阻断</th><th>重新评估条件</th></tr></thead><tbody>")
+            for row in watch_rows[:8]:
+                reasons = "、".join(row.get("reasons") or []) or "—"
+                triggers = "；".join(row.get("reopen_if") or []) or "下一轮完整检查"
+                P.append(f"<tr><td><b>{_esc(row.get('ticker'))}</b></td>"
+                         f"<td>{_esc(row.get('state'))}</td>"
+                         f"<td>{_esc(row.get('tss_final', '—'))}</td>"
+                         f"<td>{_esc(row.get('entry_template') or '—')}</td>"
+                         f"<td>{_esc(reasons)}</td><td>{_esc(triggers)}</td></tr>")
+            P.append("</tbody></table>")
+        conditions = decision_board.get("next_open_conditions") or []
+        if conditions:
+            P.append("<div class='sub' style='margin-top:7px'><b>下一轮开门条件：</b>"
+                     + "；".join(_esc(value) for value in conditions) + "</div>")
+        gaps = decision_board.get("research_gaps") or []
+        if gaps:
+            P.append(f"<div class='sub' style='margin-top:5px'><b>研究缺口：</b>"
+                     f"{len(gaps)} 项。缺口不会被记成“没有风险”，需补查后再评分。</div>")
+        P.append("</div>")
     audit_tables = research_audit_tables(raw)
     if audit_tables:
         P.append("<p class='sub'>阶段证据截至治理链校验。最终回执补齐日报生成和封存阶段。</p>")

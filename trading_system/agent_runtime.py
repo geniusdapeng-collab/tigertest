@@ -28,7 +28,8 @@ from .agent_evidence import (
 )
 from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_PROFILE,
                                 REQUIRED_POLICY_ID, INTELLIGENCE_PROFILE, INTELLIGENCE_POLICY_ID,
-                                INTELLIGENCE_SEARCH_SOURCES)
+                                TECH_INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_POLICY_ID,
+                                INTELLIGENCE_PROFILES, INTELLIGENCE_SEARCH_SOURCES)
 from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
 from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
 from .llm.json_observation import (CONTRACT as RESPONSE_OBSERVATION_CONTRACT,
@@ -37,7 +38,10 @@ from .llm.json_observation import (CONTRACT as RESPONSE_OBSERVATION_CONTRACT,
 
 PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
-SUPPORTED_PROFILES = frozenset({PROFILE, ACTIVE_PROFILE, REQUIRED_PROFILE, INTELLIGENCE_PROFILE})
+SUPPORTED_PROFILES = frozenset({
+    PROFILE, ACTIVE_PROFILE, REQUIRED_PROFILE, INTELLIGENCE_PROFILE,
+    TECH_INTELLIGENCE_PROFILE,
+})
 ACCOUNT = "public-usd"
 POLICY_ID = "tiger.public-paper-policy.v1"
 RUN_RE = re.compile(r"run-[0-9a-f]{32}\Z")
@@ -72,7 +76,7 @@ LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa
 
 def source_observation_contract(files, profile):
     """Select an observation version only from the actual frozen inventory."""
-    if profile != INTELLIGENCE_PROFILE:
+    if profile not in INTELLIGENCE_PROFILES:
         return ""
     paths = {item["path"] for item in files}
     tool_files = {TOOL_SOURCE_PATH, "trading_system/llm/strict_clean_transport.py"}
@@ -84,7 +88,7 @@ def source_observation_contract(files, profile):
 
 
 def source_research_work_policy(files, profile, source_root: Path | None = None):
-    if profile != INTELLIGENCE_PROFILE:
+    if profile not in INTELLIGENCE_PROFILES:
         return None
     paths = {item["path"] for item in files}
     required = {"trading_system/research_work.py", "trading_system/research_snapshot.py",
@@ -111,7 +115,7 @@ def source_research_work_policy(files, profile, source_root: Path | None = None)
 
 def validate_runtime_input(value: object, profile: str) -> dict:
     """Validate the complete frozen extension, never an arbitrary policy flag."""
-    if (profile != INTELLIGENCE_PROFILE or not isinstance(value, dict)
+    if (profile not in INTELLIGENCE_PROFILES or not isinstance(value, dict)
             or set(value) != {"schema", "profile", "business_deadline_seconds"}
             or value.get("schema") != RUNTIME_INPUT_SCHEMA or value.get("profile") != profile
             or type(value.get("business_deadline_seconds")) is not int
@@ -129,7 +133,7 @@ def startup_runtime_input(profile: str | None = None) -> dict | None:
     location = os.environ.get(RUNTIME_POLICY_ENV)
     if location is None:
         return None
-    if profile is not None and profile != INTELLIGENCE_PROFILE:
+    if profile is not None and profile not in INTELLIGENCE_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Custom business runtime is restricted to the intelligence paper profile")
     try:
         if (not isinstance(location, str) or not location or len(location) > 4096
@@ -142,8 +146,9 @@ def startup_runtime_input(profile: str | None = None) -> dict | None:
         if (not isinstance(value, dict) or set(value) != {"schema", "business_deadline_seconds"}
                 or value.get("schema") != RUNTIME_POLICY_SCHEMA):
             raise ValueError
-        return validate_runtime_input({"schema": RUNTIME_INPUT_SCHEMA, "profile": INTELLIGENCE_PROFILE,
-            "business_deadline_seconds": value["business_deadline_seconds"]}, INTELLIGENCE_PROFILE)
+        selected = profile or INTELLIGENCE_PROFILE
+        return validate_runtime_input({"schema": RUNTIME_INPUT_SCHEMA, "profile": selected,
+            "business_deadline_seconds": value["business_deadline_seconds"]}, selected)
     except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as exc:
         raise EvidenceInvalid("RESULT_INVALID", "Trusted business runtime policy is unavailable or invalid") from exc
 
@@ -174,7 +179,8 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     research_scope_sha256: str | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
-    intelligence = profile == INTELLIGENCE_PROFILE
+    intelligence = profile in INTELLIGENCE_PROFILES
+    tech_focus = profile == TECH_INTELLIGENCE_PROFILE
     if research_work is not None:
         from .research_work import validate_research_work_policy
         if not intelligence:
@@ -190,9 +196,10 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             or response_observation_contract not in {"", *RESPONSE_OBSERVATION_CONTRACTS}
             or response_observation_contract and not intelligence):
         raise EvidenceInvalid("RESULT_INVALID", "Unknown model response observation contract")
-    required = profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}
+    required = profile == REQUIRED_PROFILE or intelligence
     active = profile == ACTIVE_PROFILE
-    policy_id = (INTELLIGENCE_POLICY_ID if intelligence else REQUIRED_POLICY_ID if required
+    policy_id = (TECH_INTELLIGENCE_POLICY_ID if tech_focus else
+                 INTELLIGENCE_POLICY_ID if intelligence else REQUIRED_POLICY_ID if required
                  else "tiger.public-active-paper-policy.v1" if active else POLICY_ID)
     execution = ExecutionPolicy(policy_id=policy_id, model_mode="enabled",
                                 search_source_names=INTELLIGENCE_SEARCH_SOURCES if intelligence
@@ -201,9 +208,11 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         "schema": "tiger.policy.v1", "profile": profile,
         "paper_account": ACCOUNT, "execution_mode": "paper",
         "initial_cash_usd": 100000.0, "market": "us",
-        "universe": ("focused" if research_work is not None and runtime_input is not None
+        "universe": ("tech" if tech_focus else
+                     "focused" if research_work is not None and runtime_input is not None
                      else "extended"),
-        "strategy": "evidence-complete-active-v1" if active else "reviewed_source_defaults",
+        "strategy": ("tech-intelligence-first-v1" if tech_focus else
+                     "evidence-complete-active-v1" if active else "reviewed_source_defaults"),
         "use_tuned": False, "real_broker": False,
         "execution": asdict(execution),
         "market_timezone": "America/New_York",
@@ -312,6 +321,20 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                 "Each target has separate typed evidence and coverage; missing research is never a clean-risk score.",
                 "A frozen frontier and evidence manifest precede final scoring; unresearched final supplements cannot enter.",
                 "Raw historical archives are imported only through an explicit admission snapshot; old semantic outputs are not reused.",
+            ]
+        if tech_focus:
+            from .tech_focus import FOCUS_POLICY
+            value["tech_focus"] = FOCUS_POLICY.to_dict()
+            value["intelligence"]["frontier"] = {
+                **value["intelligence"]["frontier"],
+                "ranked": FOCUS_POLICY.frontier_size,
+                "theme_minimum": FOCUS_POLICY.theme_minimum,
+                "sector_symbols": list(FOCUS_POLICY.sector_etfs),
+            }
+            value["limitations"] += [
+                "TigerTest focuses US cash equities on semiconductor and AI-infrastructure themes.",
+                "The focus profile narrows the universe and research depth; it does not relax MRS, SHS, ICS, TSS or risk thresholds.",
+                "Conditional watchlist entries are observations with reopen conditions, never trade approvals.",
             ]
     if active:
         from .sector_classification import OBSERVED_DATE, SOURCE_RESPONSE_SHA256, SOURCE_URL
@@ -722,7 +745,7 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Admission runtime input binding differs")
     research_scope_sha256 = admission.get("research_scope_sha256")
     if research_scope_sha256 is not None:
-        if request["profile"] != INTELLIGENCE_PROFILE:
+        if request["profile"] not in INTELLIGENCE_PROFILES:
             raise EvidenceInvalid("RESULT_INVALID", "Only intelligence-paper research admits a supplement scope")
         from .research_followup import validate_scope, _time
         try:
@@ -759,11 +782,11 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
     event_contract = (EVENT_EVIDENCE_CONTRACT
                       if any(ref["path"] == EVENT_EVIDENCE_RELATIVE for ref in source["files"]) else "")
     intelligence_input = None
-    if request["profile"] == INTELLIGENCE_PROFILE:
+    if request["profile"] in INTELLIGENCE_PROFILES:
         from .intelligence_workflow import validate_input_packet
         intelligence_input = validate_input_packet(read_json(run, "intelligence-input.json"))
     model_counter_id = None
-    if request["profile"] in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
+    if request["profile"] == REQUIRED_PROFILE or request["profile"] in INTELLIGENCE_PROFILES:
         from .llm.model_budget import TokenBudgetError, frozen_budget_contract
         try:
             model_counter_id = frozen_budget_contract(read_bytes(
@@ -897,7 +920,7 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
         raise EvidenceInvalid("RESULT_INVALID", "Invalid benchmark date") from exc
     from .calendar import prev_trading_day
     expected_date = prev_trading_day(datetime.fromisoformat(date).date())
-    if profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
+    if profile == REQUIRED_PROFILE or profile in INTELLIGENCE_PROFILES:
         from .market_close import SOURCE_PATH, completed_session, verify_close_evidence
         from .redline.execution import StrictObservationError
 
@@ -980,8 +1003,9 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
                         "redline": raw.get("redline", []),
                         "account_origin": "independent USD paper account, initially 100000"},
     }
-    if profile in {REQUIRED_PROFILE, INTELLIGENCE_PROFILE}:
-        if profile == INTELLIGENCE_PROFILE:
+    if profile == REQUIRED_PROFILE or profile in INTELLIGENCE_PROFILES:
+        intelligence_profile = profile in INTELLIGENCE_PROFILES
+        if intelligence_profile:
             from .llm.intelligence_proof import verify_intelligence_model as verify_required_model
         else:
             from .llm.required_proof import verify_required_model
@@ -1000,13 +1024,13 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
             event_contract=model_contract.get("event_contract", ""),
             risk_evidence_contract=model_contract.get("risk_evidence_contract", ""),
             **({"response_observation_contract": model_contract.get("response_observation_contract", "")}
-               if profile == INTELLIGENCE_PROFILE else {}))
+               if intelligence_profile else {}))
         if model_contract.get("company_evidence_contract"):
             summary["disclosures"]["company_evidence"] = raw["debate"]["company_evidence"]
         summary["action_summary"] = raw["action_summary"]
         summary["execution_decisions"] = raw["execution_decisions"]
         summary["disclosures"].update(model_mode="enabled", model_required=True)
-        if profile == INTELLIGENCE_PROFILE:
+        if intelligence_profile:
             summary["disclosures"]["intelligence"] = raw["intelligence"]
     return summary
 

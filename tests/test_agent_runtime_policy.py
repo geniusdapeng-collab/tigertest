@@ -128,15 +128,21 @@ def test_unsafe_runtime_path_or_file_identity_is_rejected(tmp_path, monkeypatch,
         runtime.startup_runtime_input(PROFILE)
 
 
-@pytest.mark.parametrize("profile", sorted(runtime.SUPPORTED_PROFILES - {PROFILE}))
-def test_runtime_extension_is_explicitly_restricted_to_v2(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize("profile", sorted(runtime.SUPPORTED_PROFILES - runtime.INTELLIGENCE_PROFILES))
+def test_runtime_extension_is_restricted_to_intelligence_profiles(tmp_path, monkeypatch, profile):
     configured(tmp_path, monkeypatch)
     with pytest.raises(EvidenceInvalid) as caught:
         runtime.startup_runtime_input(profile)
     assert caught.value.code == "INVALID_REQUEST"
-    packet = runtime.startup_runtime_input(PROFILE)
-    with pytest.raises(EvidenceInvalid):
-        runtime.policy_manifest(profile, runtime_input=packet)
+
+
+def test_runtime_extension_accepts_legacy_and_tech_intelligence_profiles(tmp_path, monkeypatch):
+    configured(tmp_path, monkeypatch)
+    for profile in sorted(runtime.INTELLIGENCE_PROFILES):
+        packet = runtime.startup_runtime_input(profile)
+        assert packet["profile"] == profile
+        policy = runtime.policy_manifest(profile, runtime_input=packet)
+        assert policy["profile"] == profile
 
 
 @pytest.mark.parametrize("field", ["runtime_policy", "runtime_policy_file", "runtime_input", "business_deadline_seconds", runtime.RUNTIME_POLICY_ENV])

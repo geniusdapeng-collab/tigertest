@@ -8,6 +8,7 @@ export const ENGINE_ROOT = resolve(import.meta.dirname, "../../..");
 export const PROFILE = "us-public-paper-v1";
 export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
 export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
+export const TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v3";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
   frameBytes: 131072, requestMs: 60000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
@@ -407,7 +408,8 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
       }
       function onAbort() { stop(new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id })); }
       try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env,
-        operation === "resume" || operation === "supplement" || operation === "run" && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE].includes(input.profile)
+        operation === "resume" || operation === "supplement" || operation === "run"
+          && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE].includes(input.profile)
       ), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
       catch (cause) { finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })); return; }
       child.on("error", (cause) => finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })));

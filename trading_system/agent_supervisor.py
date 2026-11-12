@@ -672,7 +672,8 @@ def engine(run: Path) -> int:
         from trading_system import config
         args = argparse.Namespace(
             mode="daily", market="us", universe=policy.get("universe", "extended"), universe_file=None,
-            top=config.SCAN_TOP_N, picks=config.MAX_PICKS_DEFAULT,
+            top=policy.get("tech_focus", {}).get("frontier_size", config.SCAN_TOP_N),
+            picks=policy.get("tech_focus", {}).get("max_picks", config.MAX_PICKS_DEFAULT),
             account=100000.0, use_tuned=False, html=True, quiet=True,
             demo=False, out=str(paths.reports_dir),
         )

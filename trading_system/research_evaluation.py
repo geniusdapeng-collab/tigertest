@@ -235,7 +235,7 @@ def _empty_record(entry, mode):
 
 
 def _collect_record(state, entry, mode):
-    from .agent_runtime import validate_admission, verify_run, INTELLIGENCE_PROFILE
+    from .agent_runtime import validate_admission, verify_run, INTELLIGENCE_PROFILES
     from .agent_runner import observe_run
     record = _empty_record(entry, mode)
     run = state / 'runs' / entry['run_id']
@@ -263,7 +263,7 @@ def _collect_record(state, entry, mode):
                 required = [row for row in gaps if row.get('required') is True]
                 record['coverage_required'] = len(required)
                 record['coverage_present'] = sum(row.get('status') == 'present' for row in required)
-        elif policy['profile'] == INTELLIGENCE_PROFILE and not observation['active'] and (run / 'events.jsonl').exists():
+        elif policy['profile'] in INTELLIGENCE_PROFILES and not observation['active'] and (run / 'events.jsonl').exists():
             from .llm.intelligence_proof import verify_partial_intelligence_model
             model = verify_partial_intelligence_model(run, admission,
                 scene_policy_path=run / 'source/governance/bundles/trading/model-policy.yml')

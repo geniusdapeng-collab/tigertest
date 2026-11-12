@@ -2,7 +2,7 @@
 
 > 两条使用路径：**A. 交易内核单用**（Python，开箱即用）｜**B. 全栈**（内核 + WorkLoom 治理底座，适合团队/机构）。
 >
-> 下方 `main.py` 命令用于内核开发、离线演示和历史兼容。新的 AI 研究、官网更新、原身份 resume、候选 supplement、独立 receipt/verify 必须使用 [Agent 操作指南](AGENT-CLIENTS.md) 的受控 CLI/MCP 与 `us-public-intelligence-paper-v2`；`--demo`、透传和本页旧命令都不能作为新研究完成证明。
+> 下方 `main.py` 命令用于内核开发、离线演示和其他模式对照。新的 AI 研究、官网更新、原身份 resume、候选 supplement、独立 receipt/verify 必须使用 [Agent 操作指南](AGENT-CLIENTS.md) 的受控 CLI/MCP 与 `us-tech-intelligence-paper-v3`；`--demo`、透传和本页旧命令都不能作为新研究完成证明。
 
 ## A. 交易内核单用（5 分钟）
 
@@ -17,8 +17,8 @@ bash scripts/setup.sh        # 装依赖 + 冒烟测试 + 环境自检
 ```bash
 python3 main.py --demo                                    # 离线演示（合成数据，确定性）
 bash scripts/doctor.sh                                    # 你的网络下哪些数据源可用
-python3 main.py --mode daily --universe extended \
-       --top 30 --picks 8 --html                          # 真实数据全链路（约 30 分钟）
+python3 main.py --mode daily --universe tech \
+       --top 16 --picks 5 --html                          # 双主题科技焦点链路
 ```
 
 产物在 `reports/`（或 `--out` 指定目录）：双页签日报 HTML、journal 台账、小虎模拟盘台账、复盘纪要、治理事件流。

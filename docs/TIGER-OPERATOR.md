@@ -8,14 +8,15 @@
 - MCP 使用 `scripts/tiger-agent-mcp.mjs`；具备本地执行能力时，可用同一后端的 `scripts/tiger-agent.mjs` 作 CLI 入口。原 `workloom-agent` 只读能力目录不能代替完整工作流。
 - 解释器、访问模式和 state-root 来自操作者的可信部署配置。CLI 备用入口必须保持同一解释器、模式和 state-root，不能借切换入口升级权限。默认 readonly；只有已明确选择的 paper 部署可提交模拟研究。
 - 对同一 profile、同一操作者的 paper 账户保持稳定 state-root，让持仓、待成交和净值连续。新逻辑任务只使用新的幂等键；切换 profile 或明确另建隔离模拟账户时才使用独立 root，并披露新账户的初始资金。不得复制或迁移旧账户冒充兼容。
-- 新 AI 研究显式选择 `us-public-intelligence-paper-v2` 与 `public-usd`。旧 profile 用于其原有或历史语义，不用省略 profile、演示数据或透传结果代替新研究。
+- 新 AI 研究显式选择 `us-tech-intelligence-paper-v3` 与 `public-usd`。旧 profile 用于其原有或历史语义，不用省略 profile、演示数据或透传结果代替新研究。
 - 外层平台模型不等于内层研究模型。真实模型配置与 key 必须由可信启动环境提供，不能出现在聊天、请求 JSON、源码或配置示例中。生成配置不验证凭据或付费调用是否可用。
 
 ### 可选的完整研究运行时限
 
 公开情报 paper 研究默认仍为 2400 秒。操作者可在可信启动环境设置
 `TIGER_AGENT_RUNTIME_POLICY_FILE`，指向仅含下面两项的本地 JSON；它只适用于
-`us-public-intelligence-paper-v2`，秒数须为 2400–7200 的整数。
+`us-tech-intelligence-paper-v3`（或历史 `us-public-intelligence-paper-v2`），
+秒数须为 2400–7200 的整数。
 [5400 秒示例](../config/agent-clients/paper-runtime-5400.json.example)用于完整五阶段研究的实测，
 不是新的默认值。
 
@@ -40,14 +41,14 @@ doctor 的 `business_runtime` 和 v2 describe 的 policy 会显示实际秒数�
 Agent 依次调用：
 
 1. `tiger_doctor`，参数 `{}`。
-2. `tiger_workflow_describe`，参数 `{"profile":"us-public-intelligence-paper-v2"}`。
+2. `tiger_workflow_describe`，参数 `{"profile":"us-tech-intelligence-paper-v3"}`。
 
 没有可用 MCP 时，由 Agent 在已选择的仓库根目录执行下面的等价 CLI。实际路径由已核实的部署配置取得，用户无需手工拼装命令：
 
 ```bash
 node scripts/tiger-agent.mjs doctor --python /absolute/path/to/python \
   --state-root /absolute/path/to/existing-v2-state
-printf '%s\n' '{"profile":"us-public-intelligence-paper-v2"}' | \
+printf '%s\n' '{"profile":"us-tech-intelligence-paper-v3"}' | \
   node scripts/tiger-agent.mjs describe --python /absolute/path/to/python \
     --state-root /absolute/path/to/existing-v2-state --input-file -
 ```
@@ -63,7 +64,7 @@ Agent 先执行上面的检查，再确认使用既有可信 paper 部署及该 
 ```json
 {
   "schema_version": "tiger.agent-request/v1",
-  "profile": "us-public-intelligence-paper-v2",
+  "profile": "us-tech-intelligence-paper-v3",
   "paper_account": "public-usd",
   "idempotency_key": "operator-task-20261105-001"
 }
@@ -114,7 +115,8 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 调查并解决失败原因后，只有明确发起新的逻辑尝试才分配新键；同一 profile 的连续 paper 账户仍使用原 root。没有原 root 或原请求的必要信息时，说明缺什么，不猜测或新建账户掩盖历史。
 
-对 `us-public-intelligence-paper-v2`，若原 worker 已停止且原 admission 尚未过期，操作者明确要求继续时调用 `resume`：
+对 `us-tech-intelligence-paper-v3`（或历史 `us-public-intelligence-paper-v2`），
+若原 worker 已停止且原 admission 尚未过期，操作者明确要求继续时调用 `resume`：
 
 ```json
 {"run_id":"run-实际原身份"}

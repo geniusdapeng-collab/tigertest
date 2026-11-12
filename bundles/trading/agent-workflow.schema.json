@@ -155,14 +155,14 @@
     "doctor_request": {"type": "object", "properties": {}, "additionalProperties": false},
     "describe_request": {
       "type": "object", "additionalProperties": false, "required": ["profile"],
-      "properties": {"profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1", "us-public-intelligence-paper-v2"]}}
+      "properties": {"profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1", "us-public-intelligence-paper-v2", "us-tech-intelligence-paper-v3"]}}
     },
     "run_request": {
       "type": "object", "additionalProperties": false,
       "required": ["schema_version", "profile", "paper_account", "idempotency_key"],
       "properties": {
         "schema_version": {"type": "string", "const": "tiger.agent-request/v1"},
-        "profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1", "us-public-intelligence-paper-v2"]},
+        "profile": {"type": "string", "enum": ["us-public-paper-v1", "us-public-active-paper-v1", "us-public-model-required-paper-v1", "us-public-intelligence-paper-v2", "us-tech-intelligence-paper-v3"]},
         "paper_account": {"type": "string", "const": "public-usd"},
         "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$"}
       }

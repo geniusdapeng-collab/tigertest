@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INTELLIGENCE_PROFILE, validateEnvelope, validateRequest, runtimeEnvironment,
+import { INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE, validateEnvelope, validateRequest, runtimeEnvironment,
   invokeWorkflow } from "../bundles/trading/capabilities/workflow-client.mjs";
 import { INSTRUCTIONS, toolDefinitions } from "./tiger-agent-mcp.mjs";
 import { REQUEST, RUN_ID, result, runnerFixture } from "./tiger-agent-test-support.mjs";
@@ -23,12 +23,13 @@ function receipt() {
   return row;
 }
 
-test("v2 controlled profile reaches CLI/MCP schema without request-level source authority", () => {
+test("v3 tech profile reaches CLI/MCP schema without request-level source authority", () => {
   assert.equal(validateRequest("run", { ...REQUEST, profile: INTELLIGENCE_PROFILE }).profile, INTELLIGENCE_PROFILE);
-  assert.equal(validateRequest("describe", { profile: INTELLIGENCE_PROFILE }).profile, INTELLIGENCE_PROFILE);
-  assert.match(INSTRUCTIONS, /us-public-intelligence-paper-v2/u);
+  assert.equal(validateRequest("describe", { profile: TECH_INTELLIGENCE_PROFILE }).profile, TECH_INTELLIGENCE_PROFILE);
+  assert.match(INSTRUCTIONS, /us-tech-intelligence-paper-v3/u);
   const tool = toolDefinitions("paper").find(row => row.name === "tiger_workflow_run");
   assert.ok(tool.inputSchema.properties.profile.enum.includes(INTELLIGENCE_PROFILE));
+  assert.ok(tool.inputSchema.properties.profile.enum.includes(TECH_INTELLIGENCE_PROFILE));
   for (const field of ["sources", "registry", "archive_root", "frontier", "model", "skip", "limits", "env"]) {
     assert.throws(() => validateRequest("run", { ...REQUEST, profile: INTELLIGENCE_PROFILE, [field]: {} }), { code: "INVALID_REQUEST" });
   }
@@ -68,11 +69,12 @@ test("new trusted source configuration is inherited only by model-required run",
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   } });
   await invokeWorkflow("run", { ...REQUEST, profile: INTELLIGENCE_PROFILE }, fixture.options);
+  await invokeWorkflow("run", { ...REQUEST, profile: TECH_INTELLIGENCE_PROFILE }, fixture.options);
   await invokeWorkflow("run", REQUEST, fixture.options);
   await invokeWorkflow("describe", { profile: INTELLIGENCE_PROFILE }, fixture.options);
   const calls = await fixture.calls();
   for (const key of Object.keys(settings)) {
-    assert.deepEqual(calls.map(row => row.envNames.includes(key)), [true, false, false]);
+    assert.deepEqual(calls.map(row => row.envNames.includes(key)), [true, true, false, false]);
     assert.equal(runtimeEnvironment(settings)[key], undefined);
   }
 });

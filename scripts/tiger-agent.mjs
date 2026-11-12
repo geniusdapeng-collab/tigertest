@@ -2,7 +2,7 @@
 /** Tiger CLI: one request, one envelope; business execution belongs to the strict Python runner. */
 import { pathToFileURL } from "node:url";
 import {
-  LIMITS, OPERATIONS, PROFILE, WorkflowError, exitCode, failureEnvelope, invokeWorkflow,
+  LIMITS, OPERATIONS, TECH_INTELLIGENCE_PROFILE, WorkflowError, exitCode, failureEnvelope, invokeWorkflow,
   readOptionalRequestInput, readRequestInput, startupOptions, waitForReceipt,
 } from "../bundles/trading/capabilities/workflow-client.mjs";
 
@@ -62,7 +62,7 @@ export async function main(argv = process.argv.slice(2)) {
     // Readonly rejects run before even opening an operator-supplied request file.
     if (["run", "resume", "supplement", "cancel"].includes(operation)
       && parsed.options.mode === "readonly") throw new WorkflowError("READ_ONLY", "Paper mutations are unavailable in readonly deployment.");
-    const fallback = operation === "doctor" ? {} : operation === "describe" ? { profile: PROFILE } : {};
+    const fallback = operation === "doctor" ? {} : operation === "describe" ? { profile: TECH_INTELLIGENCE_PROFILE } : {};
     const input = parsed.file ? await readRequestInput(parsed.file, process.stdin, { signal: controller.signal })
       : await readOptionalRequestInput(process.stdin, fallback, { signal: controller.signal });
     if (parsed.operation === "status") Object.assign(input, parsed.statusOptions);

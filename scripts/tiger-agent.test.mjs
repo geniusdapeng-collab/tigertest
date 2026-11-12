@@ -23,7 +23,7 @@ test("CLI doctor/describe use fixed defaults and emit exactly one JSON envelope"
     const value = envelope(await proc.closed, 0);
     assert.equal(value.operation, operation); assert.equal(value.summary, null);
   }
-  assert.deepEqual((await fixture.calls()).map((call) => call.input), [{}, { profile: "us-public-paper-v1" }]);
+  assert.deepEqual((await fixture.calls()).map((call) => call.input), [{}, { profile: "us-tech-intelligence-paper-v3" }]);
   assert.equal(existsSync(fixture.stateRoot), false);
 });
 

@@ -225,6 +225,9 @@ def load_full_universe(include_etfs: bool = False) -> tuple[list[str], str]:
 
 
 def load_universe(mode: str = "extended", file_path: str | None = None) -> list[str]:
+    if mode in {"tech", "tech-focus"}:
+        from .tech_focus import TECH_FOCUS_UNIVERSE
+        return list(TECH_FOCUS_UNIVERSE)
     if mode == "focused":
         return list(FOCUSED_UNIVERSE)
     if mode == "core":

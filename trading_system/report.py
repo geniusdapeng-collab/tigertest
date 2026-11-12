@@ -43,12 +43,13 @@ def _accounting_note(raw: dict) -> str:
 
 def _universe_note(raw: dict) -> str:
     """请求模式、实际列表来源与扫描数量是三个不同的事实。"""
-    modes = {"core": "内置核心池", "extended": "内置扩展池",
+    modes = {"tech": "美股科技双主题聚焦池", "core": "内置核心池", "extended": "内置扩展池",
              "full": "请求全量清单", "file": "自定义文件"}
     sources = {"core": "内置核心池", "extended": "内置扩展池",
                "embedded": "内置列表", "file": "自定义文件",
                "nasdaqtrader": "Nasdaq Trader 官方列表", "eastmoney": "东方财富列表",
-               "cache": "缓存列表", "fallback": "降级备选列表"}
+               "cache": "缓存列表", "fallback": "降级备选列表",
+               "tiger.tech-focus.v1": "TigerTest 双主题聚焦合同"}
     mode = raw.get("universe_mode")
     source = raw.get("universe_source")
     note = (f"股票池模式：{modes.get(mode, mode or '未知')}；"
@@ -432,7 +433,10 @@ def render_markdown(r: PipelineResult) -> str:
     company_note = company_evidence_note(r.raw) if instructions is not None else ""
     research_status = report_research_status(r.raw, r.action)
     lines: list[str] = []
-    lines.append(f"# AI 短线{_market_name(r.raw)}交易日报 — {r.trade_date}")
+    heading = (f"# TigerTest 双主题情报选股日报（{_market_name(r.raw)}）"
+               if r.raw.get("tech_focus") else
+               f"# AI 短线{_market_name(r.raw)}交易日报")
+    lines.append(f"{heading} — {r.trade_date}")
     lines.append("")
     lines.append(f"> 数据源: {r.provider} ｜ 股票池: {r.raw.get('universe_mode')} "
                  f"（覆盖 {r.raw.get('data_coverage')}）｜ 耗时 {r.raw.get('elapsed_s')}s")
@@ -477,6 +481,9 @@ def render_markdown(r: PipelineResult) -> str:
     lines.extend([f"**系统指令**：`{r.action}` — {overview}", ""])
     if company_note:
         lines.extend([_markdown_text(company_note), ""])
+    board = r.raw.get("decision_board")
+    if isinstance(board, dict):
+        lines.extend(decision_board_markdown(board))
     if instructions is not None and research_status is None:
         lines.extend(["## 模型最终判断与执行条件（纸面研究）", ""])
         if not instructions:
@@ -775,3 +782,59 @@ def render_markdown(r: PipelineResult) -> str:
     lines.append("---")
     lines.append("*非预测、重流程、可审计。本报告不构成投资建议。*")
     return "\n".join(lines)
+
+
+def decision_board_markdown(board: dict) -> list[str]:
+    """Render a WAIT day as named conditions, gaps and a preliminary list."""
+    lines = ["## TigerTest 双主题决策面", "",
+             "> 线索、证据、数值资格与纸面交易许可分层记录；条件观察不等于买入。", ""]
+    themes = board.get("themes") or []
+    if themes:
+        lines.extend(["| 主主题 | 子链 | ICS | 周期 | 景气 | 风险证据 |",
+                      "|---|---|---|---|---|---|"])
+        for theme in themes:
+            for sub in theme.get("subchain_states", []):
+                lines.append(
+                    f"| {_markdown_text(theme.get('name_zh', theme.get('id', '—')))} "
+                    f"| {_markdown_text(sub.get('name_zh', sub.get('chain_id', '—')))} "
+                    f"| {sub.get('ics') if sub.get('ics') is not None else '—'} "
+                    f"| {_markdown_text(str(sub.get('stage') or '—'))} "
+                    f"| {sub.get('prosperity') if sub.get('prosperity') is not None else '证据不足'} "
+                    f"| {_markdown_text(str(sub.get('risk_assessment_status') or 'unknown'))} |")
+        lines.append("")
+    actionable = board.get("actionable") or []
+    if actionable:
+        lines.append("**可执行纸面计划**：" + "、".join(
+            f"{row['ticker']}（TSS {row.get('tss_final')}，{row.get('entry_template') or '模板待定'}）"
+            for row in actionable))
+    else:
+        lines.append("**本轮无新增可执行纸面计划。** 系统没有把“没有通过闸门”压缩成一句“没有标的”。")
+    lines.append("")
+    watch = board.get("conditional_watchlist") or []
+    if watch:
+        lines.extend(["### 条件观察与重开条件", "",
+                      "| 标的 | 状态 | TSS | 模板 | 价格 | 关键位 | 当前阻断 | 重新评估条件 |",
+                      "|---|---|---|---|---|---|---|---|"])
+        for row in watch:
+            reasons = "、".join(row.get("reasons") or []) or "—"
+            triggers = "；".join(row.get("reopen_if") or []) or "下一轮完整检查"
+            lines.append(
+                f"| {row.get('ticker')} | {row.get('state')} | {row.get('tss_final', '—')} "
+                f"| {row.get('entry_template') or '—'} | {row.get('price', '—')} "
+                f"| {row.get('key_level') or '—'} | {_markdown_text(reasons)} "
+                f"| {_markdown_text(triggers)} |")
+        lines.append("")
+    gaps = board.get("research_gaps") or []
+    if gaps:
+        lines.extend(["### 研究缺口（不能由“未发现坏消息”代替）", ""])
+        for gap in gaps[:12]:
+            lines.append(f"- **{_markdown_text(str(gap.get('target') or '未知对象'))}**："
+                         f"{_markdown_text(str(gap.get('question') or '研究问题未记录'))}"
+                         f"（{_markdown_text(str(gap.get('status') or 'unknown'))}）")
+        lines.append("")
+    conditions = board.get("next_open_conditions") or []
+    if conditions:
+        lines.extend(["### 下一轮开门条件", ""])
+        lines.extend(f"- {_markdown_text(value)}" for value in conditions)
+        lines.append("")
+    return lines

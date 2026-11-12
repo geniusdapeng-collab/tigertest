@@ -359,14 +359,26 @@ def quote_with_fallback(provider, ticker: str) -> dict | None:
 
 def _batch_with_fallback(provider, tickers: list[str], days: int,
                          label: str = "batch", *, close_cutoff=None, minimum=None,
-                         gap_fill=False) -> dict[str, pd.DataFrame]:
+                         gap_fill=False, deadline_seconds: float | None = None,
+                         chunk_size: int | None = None) -> dict[str, pd.DataFrame]:
     """批量拉取：yahoo → stooq → 服务端通道群依次补洞
     （仅真实源之间降级；生产链路绝不回退合成数据，覆盖率如实记录 data_coverage）。"""
     execution = getattr(provider, "execution", None)
     if not tickers:
         return {}
+    if (deadline_seconds is not None
+            and (type(deadline_seconds) not in {int, float} or deadline_seconds <= 0)):
+        raise ValueError("Batch deadline must be a positive number or None")
+    if (chunk_size is not None
+            and (type(chunk_size) is not int or chunk_size <= 0)):
+        raise ValueError("Batch chunk size must be a positive integer or None")
+    deadline = (time.monotonic() + deadline_seconds
+                if deadline_seconds is not None else None)
 
-    def _fetch(src, missing: list[str]) -> dict[str, pd.DataFrame]:
+    def deadline_exhausted() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    def _fetch_once(src, missing: list[str]) -> dict[str, pd.DataFrame]:
         if src is not provider and not is_synthetic(provider) and is_synthetic(src):
             _data_issue(src, "ohlcv_batch", missing, "synthetic_fallback_rejected", label=label)
             logger.warning("%s 是合成源，真实数据回退链跳过该源", src.name)
@@ -409,6 +421,22 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
             _DATA_ISSUES[-1]["availability"] = dict(availability)
         return got
 
+    def _fetch(src, missing: list[str]) -> dict[str, pd.DataFrame]:
+        if not missing or deadline_exhausted():
+            return {}
+        size = chunk_size or len(missing)
+        merged: dict[str, pd.DataFrame] = {}
+        for start in range(0, len(missing), size):
+            if deadline_exhausted():
+                break
+            chunk = missing[start:start + size]
+            merged.update(_fetch_once(src, chunk))
+            batch_status = getattr(src, "last_batch_status", None)
+            if (src.name == "stooq" and isinstance(batch_status, dict)
+                    and batch_status.get("source_exhausted") is True):
+                break
+        return merged
+
     def _finish() -> dict[str, pd.DataFrame]:
         missing = [t for t in tickers if t not in data]
         if missing:
@@ -419,6 +447,10 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         return data
 
     data = _fetch(provider, tickers)
+    if deadline_exhausted():
+        _data_issue(provider, "ohlcv_batch", [t for t in tickers if t not in data],
+                    "batch_deadline_exhausted", label=label)
+        return _finish()
     enough = minimum if minimum is not None else max(3, len(tickers) // 3)
     _LINEAGE.append((f"{label}[{len(data)}/{len(tickers)}]", _provider_source(provider)))
     if (len(data) < enough and provider.name != "stooq"
@@ -427,9 +459,15 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
                        provider.name, len(data), len(tickers))
         from .providers.stooq import StooqProvider
         missing = [t for t in tickers if t not in data]
-        stooq = (record_provider(StooqProvider(allow_challenge=False,
-                     max_consecutive_no_output=3), execution) if execution else StooqProvider())
-        got = _fetch(stooq, missing) if missing else {}
+        try:
+            stooq = StooqProvider(allow_challenge=False, max_consecutive_no_output=3)
+        except TypeError:
+            # Lightweight test doubles and older providers may not accept the
+            # operational availability-budget keyword.
+            stooq = StooqProvider()
+        if execution is not None:
+            stooq = record_provider(stooq, execution)
+        got = _fetch(stooq, missing) if missing and not deadline_exhausted() else {}
         data.update(got)
         if got:
             _LINEAGE.append((f"{label}+补{len(got)}只", _provider_source(stooq)))
@@ -444,7 +482,7 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
     # source first.
     for alt in _ordered_batch_chain(execution):
         missing = [t for t in tickers if t not in data]
-        if not missing or len(data) >= len(tickers):
+        if not missing or len(data) >= len(tickers) or deadline_exhausted():
             break
         logger.warning("覆盖率仍不足（%d/%d），%s 通道补 %d 只",
                        len(data), len(tickers), alt.name, len(missing))
@@ -452,6 +490,9 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         data.update(got)
         if got:
             _LINEAGE.append((f"{label}+补{len(got)}只", _provider_source(alt)))
+    if deadline_exhausted():
+        _data_issue(provider, "ohlcv_batch", [t for t in tickers if t not in data],
+                    "batch_deadline_exhausted", label=label)
     return _finish()
 
 
@@ -495,6 +536,27 @@ def run_pipeline(
         # 扫描过滤/合规规则/轻仓毕业门槛全部来自 spec（参数 single source = config）。
         from .markets import get_market
         spec = get_market(market)
+        from .redline.execution import TECH_INTELLIGENCE_POLICY_ID
+        from .tech_focus import (FOCUS_POLICY, TECH_FOCUS_CONTRACT,
+                                 research_cells, research_topics, scan_filters as focus_scan_filters)
+        tech_focus = ((execution is not None
+                       and execution.policy.policy_id == TECH_INTELLIGENCE_POLICY_ID)
+                      or universe_mode == "tech")
+        if tech_focus and market != "us":
+            raise ValueError("TigerTest focus mode is restricted to US cash equities")
+        sector_symbols = (list(FOCUS_POLICY.sector_etfs) if tech_focus
+                          else list(spec.sector_symbols))
+        scan_filt = focus_scan_filters() if tech_focus else spec.scan_filters()
+        market_disclosure = {
+            **spec.to_dict(),
+            "sector_symbols": sector_symbols,
+            "scan_filters": scan_filt,
+            **({"focus": FOCUS_POLICY.to_dict()} if tech_focus else {}),
+        }
+        if tech_focus:
+            universe_mode = "tech"
+            top_n = min(top_n, FOCUS_POLICY.frontier_size)
+            max_picks = min(max_picks, FOCUS_POLICY.max_picks)
         bmk = spec.benchmarks
         benchmark_labels = {"index": bmk.get("index_label", bmk["index"]),
                             "rate": bmk.get("rate_label", bmk["rate"]),
@@ -503,7 +565,10 @@ def run_pipeline(
                           or spec.market_id in config.AH_AUTO_MARKETS)
         market_grad = spec.graduation()
         universe_source = universe_mode
-        if spec.market_id == "us":
+        if tech_focus:
+            universe = load_universe("tech", universe_file)
+            universe_source = TECH_FOCUS_CONTRACT
+        elif spec.market_id == "us":
             if universe_mode == "full":
                 from .universe import load_full_universe
                 universe, universe_source = load_full_universe()   # nasdaqtrader/cache/fallback
@@ -561,10 +626,11 @@ def run_pipeline(
                                                 strict=True, as_of_date=execution.run_date,
                                                 execution=execution)
         prepared.output({"trade_date": trade_date, "provider": provider.name,
-                         "synthetic": demo_mode, "market": spec.to_dict(),
+                         "synthetic": demo_mode, "market": market_disclosure,
                          "universe": universe, "universe_source": universe_source,
                          **({"security_roster": security_roster} if security_roster else {}),
-                         "benchmark_labels": benchmark_labels, "scan_filters": spec.scan_filters(),
+                         "benchmark_labels": benchmark_labels, "scan_filters": scan_filt,
+                         **({"tech_focus": FOCUS_POLICY.to_dict()} if tech_focus else {}),
                          "market_grad": market_grad, "ah_topics_enabled": ah_enabled,
                          "calendar": event_calendar.to_dict() if event_calendar else None,
                          "model": llm.describe() if execution is not None else {"mode": "legacy"}})
@@ -624,7 +690,7 @@ def run_pipeline(
             if lag >= 1:
                 logger.warning("数据时效披露：%s 末根 %s（最近交易日 %s，滞后 %d 天）",
                                idx_name, spy_last, expect, lag)
-            sector_list = spec.sector_symbols
+            sector_list = sector_symbols
             need_etf = (len(sector_list) * 2 + 2) // 3     # ≥2/3
             if len(etfs) < need_etf:
                 missing = [e for e in sector_list if e not in etfs]
@@ -652,8 +718,8 @@ def run_pipeline(
         days = 420
         market_data: dict = {"benchmark_labels": benchmark_labels}
         with tracer.step("data.prepare", {"universe": universe, "benchmarks": bmk,
-                         "sector_symbols": spec.sector_symbols, "days": days,
-                         "trade_date": trade_date, "scan_filters": spec.scan_filters(),
+                         "sector_symbols": sector_symbols, "days": days,
+                         "trade_date": trade_date, "scan_filters": scan_filt,
                          **({"market_close": close_binding} if close_binding else {})}) as stage:
             idx_sym = bmk["index"]
             try:
@@ -707,14 +773,13 @@ def run_pipeline(
             except Exception:
                 market_data["vix9d"] = None
 
-            sector_etfs = _batch_with_fallback(provider, spec.sector_symbols, days,
+            sector_etfs = _batch_with_fallback(provider, sector_symbols, days,
                 **({"label": "signal_etfs", "close_cutoff": session,
-                    "minimum": (len(spec.sector_symbols) * 2 + 2) // 3} if session else {}))
+                    "minimum": (len(sector_symbols) * 2 + 2) // 3} if session else {}))
             market_data["sector_etfs"] = sector_etfs
 
             # full 模式两级拉取：先用 30 日短历史做流动性预筛，再对幸存者拉全历史
             prefilter_note = ""
-            scan_filt = spec.scan_filters()
             if len(universe) > config.FULL_PREFILTER_THRESHOLD:
                 logger.info("池规模 %d > %d，启动流动性预筛（%d 日短历史）",
                             len(universe), config.FULL_PREFILTER_THRESHOLD,
@@ -742,14 +807,19 @@ def run_pipeline(
             if spec.market_id == "us":
                 from .chains import CHAINS
                 from .universe import RETIRED_UNIVERSE
-                for c in CHAINS.values():
+                chain_ids = FOCUS_POLICY.parent_chains if tech_focus else tuple(CHAINS)
+                for chain_id in chain_ids:
+                    c = CHAINS[chain_id]
                     for link in ("upstream", "midstream", "downstream"):
                         chain_tickers.update(c[link]["tickers"])
                 chain_tickers.difference_update(RETIRED_UNIVERSE)
             all_tickers = sorted(set(universe) | chain_tickers)
             stock_data = _batch_with_fallback(
                 provider, all_tickers, days, label="signal_stocks", gap_fill=True,
-                **({"close_cutoff": session} if session else {}))
+                **({"close_cutoff": session} if session else {}),
+                **({"deadline_seconds": config.TECH_FOCUS_MARKET_BATCH_SECONDS,
+                    "chunk_size": config.TECH_FOCUS_MARKET_CHUNK_SIZE}
+                   if tech_focus else {}))
             if session and not stock_data:
                 raise StrictDataUnavailable(f"缺少已完成交易日 {session} 的可用股票收盘数据")
             market_data["stock_ohlcv"] = stock_data
@@ -760,7 +830,7 @@ def run_pipeline(
                 from .agent_evidence import normalize
                 freshness["market_close"] = {
                     **close_binding,
-                    "etf_missing": sorted(set(spec.sector_symbols) - sector_etfs.keys()),
+                    "etf_missing": sorted(set(sector_symbols) - sector_etfs.keys()),
                     "stock_missing": sorted(set(all_tickers) - stock_data.keys()),
                     "macro_last_bars": {name: (values.index[-1].date().isoformat()
                         if (values := market_data[name]) is not None else None) for name in macro_dates},
@@ -790,17 +860,22 @@ def run_pipeline(
                 "universe": universe, "portfolio_state": portfolio_state}) as frontier_stage:
             frontier = build_frontier(market_data, universe, security_roster["symbols"],
                 as_of=execution.admitted_at, market_snapshot_ref=market_ref,
-                portfolio_state=portfolio_state, scan_filters=scan_filt, sector_symbols=spec.sector_symbols,
-                research_scope=getattr(execution, "research_scope", None))
+                portfolio_state=portfolio_state, scan_filters=scan_filt, sector_symbols=sector_symbols,
+                research_scope=getattr(execution, "research_scope", None),
+                focus_profile=(FOCUS_POLICY.to_dict() if tech_focus else None))
             frontier_stage.output(frontier)
 
-    with tracer.step("search.collect", {"chains": CHAIN_TOPICS, "sectors": SECTOR_TOPICS,
+    focus_topics = research_topics() if tech_focus else None
+    with tracer.step("search.collect", {"chains": focus_topics or CHAIN_TOPICS,
+                     "sectors": {} if focus_topics else SECTOR_TOPICS,
                      "ah": config.AH_TOPICS, "ah_enabled": ah_enabled, "limit_per_query": 4,
                      "deep": True, "source_allowlist": execution.policy.search_source_names if execution else None}) as stage:
         if required:
-            all_topics = {**CHAIN_TOPICS, **SECTOR_TOPICS}
+            all_topics = (focus_topics if tech_focus else {**CHAIN_TOPICS, **SECTOR_TOPICS})
             if intelligence:
-                intelligence_state = semantic.Acquisition(llm, frontier, all_topics)
+                intelligence_state = semantic.Acquisition(
+                    llm, frontier, all_topics,
+                    required_cells=(research_cells(frontier) if tech_focus else None))
                 raw_docs = intelligence_state.collect()
             else:
                 raw_docs = semantic.collect(llm, all_topics, trade_date)
@@ -811,8 +886,11 @@ def run_pipeline(
         # 都要有自己的情报输入，否则非科技板块的 LLM 叙事维度被架空（情报偏科即评分偏科）。
         # S3：AH（A股/港股）主题默认关闭（config.AH_TOPICS_ENABLED，S4 多市场启用），
         # 关闭时整体缺席、不产生任何网络调用，开关状态写入日报披露。
-            hub.register_topic_set("chains", CHAIN_TOPICS)
-            hub.register_topic_set("sectors", SECTOR_TOPICS)
+            if tech_focus:
+                hub.register_topic_set("tech_focus", focus_topics)
+            else:
+                hub.register_topic_set("chains", CHAIN_TOPICS)
+                hub.register_topic_set("sectors", SECTOR_TOPICS)
             hub.register_topic_set("ah", config.AH_TOPICS, enabled=ah_enabled)
             raw_docs = hub.gather_topic_sets(limit_per_query=4, deep=True)
             search_cleanup = (execution.call_io("search.workers.settle",
@@ -880,7 +958,7 @@ def run_pipeline(
             intelligence_bundle = intelligence_state.freeze(cleaned, cv_stats)
             frozen_stage.output(intelligence_bundle)
         if getattr(execution, "research_work_policy", None) is not None:
-            semantic.prepare_analysis(llm, score_docs, spec.sector_symbols)
+            semantic.prepare_analysis(llm, score_docs, sector_symbols)
 
     # WFA 调优参数：默认【不加载】——tuned_params.json 属于上一轮生产残留，
     # 零基线纪律下每轮从零开始；仅当调用方显式 use_tuned=True 时才覆盖默认闸门。
@@ -964,9 +1042,9 @@ def run_pipeline(
 
     # ================= SHS 叙事维度（LLM 化） =================
     narrative_llm: dict = {}
-    with tracer.step("sector.narrative", {"documents": score_docs, "sector_symbols": spec.sector_symbols,
+    with tracer.step("sector.narrative", {"documents": score_docs, "sector_symbols": sector_symbols,
                      **({"assessment": assessment} if required else {})}) as stage:
-        narr_res = semantic.narrative(llm, score_docs, spec.sector_symbols) if required else NarrativeAgent(llm).execute(score_docs, spec.sector_symbols, tracer)
+        narr_res = semantic.narrative(llm, score_docs, sector_symbols) if required else NarrativeAgent(llm).execute(score_docs, sector_symbols, tracer)
         if not isinstance(narr_res, Passthrough) and (intelligence or event_cutoff is None or score_docs):
             narrative_llm = narr_res
 
@@ -997,6 +1075,13 @@ def run_pipeline(
         # SHS 叙事维度 LLM 注入（空 dict = 透传，维度剔除再归一化）
         "narrative_llm": narrative_llm,
     }
+    if tech_focus:
+        context.update({
+            "tech_focus": FOCUS_POLICY.to_dict(),
+            "focus_frontier": frontier if intelligence else None,
+            "focus_research_status": (intelligence_state.disclosure()
+                                      if intelligence_state is not None else None),
+        })
     from .activity import ACTIVE_POLICY_ID, ACTIVE_PROFILE
     active = execution is not None and execution.policy.policy_id == ACTIVE_POLICY_ID
     if execution is not None:
@@ -1046,7 +1131,7 @@ def run_pipeline(
         candidates = TSSAgent(provider).execute(context)
         stage.output({"watchlist": candidates, "options_history": options_store.observed if options_store else {}})
     with tracer.step("layer4.risk", {"watchlist": candidates, "mrs": mrs, "sectors": sectors,
-                     "chains": chains, "market_grad": market_grad, "market": spec.to_dict(),
+                     "chains": chains, "market_grad": market_grad, "market": market_disclosure,
                      "trade_date": trade_date, "account_usd": account_usd, "max_picks": max_picks,
                      "calendar": event_calendar.to_dict() if event_calendar else None,
                      "tech_signal_map": context["tech_signal_map"]}) as stage:
@@ -1055,6 +1140,9 @@ def run_pipeline(
 
         stage.output({key: context.get(key) for key in
                       ("picks", "pick_rationale", "action", "market_view", "notes", "currency_policy", "compliance", "rejections", "entry_budget")})
+    if tech_focus:
+        from .tech_focus import build_decision_surface
+        context["decision_surface_pre_model"] = build_decision_surface(context, final=False)
 
     # ================= 多空辩论证据层（v6.3 S2，桥水 AIA 辩论制） =================
     # 铁律：辩论在 L4 闸门产出【之后】执行，只读 picks/rationale/watchlist，
@@ -1097,6 +1185,11 @@ def run_pipeline(
                     debate_raw["status"], debate_raw["triggered"])
 
         stage.output(debate_raw)
+
+    if tech_focus:
+        from .tech_focus import build_decision_surface
+        context["decision_board"] = build_decision_surface(context, final=True)
+        context["tech_theme_dossier"] = build_decision_surface(context, final=True)["themes"]
 
     # ================= 统计校准层（v6.3 S2，迭代层·只进报告不改闸门） =================
     # 会计账白名单（与 journal 同级）：只读已结算台账，输出仅进报告披露，
@@ -1170,9 +1263,20 @@ def run_pipeline(
                 **({"run_id": execution.run_id}
                    if getattr(execution, "research_work_policy", None) else {}),
                 "scan_stats": context.get("scan_stats", {}),
+                **({"decision_board": context.get("decision_board")} if tech_focus else {}),
                 "elapsed_s": round(time.time() - started, 1),
                 "universe_mode": universe_mode,
                 "universe_source": universe_source,
+                **({"tech_focus": {
+                    "policy": FOCUS_POLICY.to_dict(),
+                    "universe_size": len(load_universe("tech")),
+                    "data_symbols": len(all_tickers),
+                    "frontier_size": len(frontier["symbols"]) if intelligence else None,
+                    "research_cells": (len(research_cells(frontier))
+                                       if intelligence else None),
+                    "decision_board": context.get("decision_board"),
+                    "theme_dossier": context.get("tech_theme_dossier"),
+                }} if tech_focus else {}),
                 **({"security_roster": security_roster} if security_roster else {}),
                 "account_usd": account_usd,
                 "account_currency": "USD",
@@ -1211,7 +1315,7 @@ def run_pipeline(
                     "exclusions": context.get("intelligence_exclusions", [])}} if intelligence else {}),
                 "ah_topics_enabled": ah_enabled,
                 # v6.3 S4：市场标识 / 合规校验记录 / 轻仓毕业状态（日报披露）
-                "market": spec.to_dict(),
+                "market": market_disclosure,
                 "compliance": context.get("compliance", []),
                 "market_grad": market_grad,
                 # v6.3 S2：辩论证据与校准摘要（只读证据/披露，不含决策输入）

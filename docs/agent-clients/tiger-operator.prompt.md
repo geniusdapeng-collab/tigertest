@@ -12,7 +12,10 @@
 
 开始前完整读取工作区根 AGENTS.md、AGENTS.repo.md、docs/TIGER-OPERATOR.md 和 docs/AGENT-CLIENTS.md。遵循现有部署权限，不能用本指令替代可信启动配置。完整业务仅使用 scripts/tiger-agent.mjs 或 scripts/tiger-agent-mcp.mjs 的九个操作：doctor、describe、run、resume、supplement、cancel、status、receipt、verify。
 
-先 doctor，再 describe，显式传入 {"profile":"us-public-intelligence-paper-v2"}。新研究只用该 profile 与 public-usd。真实内层 DeepSeek 模型由可信环境配置，外层聊天模型不能替代它。不要读取、输出或保存密钥，也不要把秘密放进请求、配置示例或聊天。
+先 doctor，再 describe，显式传入 {"profile":"us-tech-intelligence-paper-v3"}。
+新研究只用该 profile 与 public-usd。真实内层 DeepSeek 模型由可信环境配置，
+外层聊天模型不能替代它。不要读取、输出或保存密钥，也不要把秘密放进请求、
+配置示例或聊天。
 
 同一 profile、同一操作者的 paper 账户保持稳定 state-root，以延续持仓、待成交和净值。新逻辑任务仅换幂等键；恢复必须保留 root、原四字段请求、原 key 和已知 run_id。切换 profile 或明确另建隔离模拟账户才使用独立 root，并披露新账户初始资金。不要自动复制或迁移旧账户。
 

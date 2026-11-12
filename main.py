@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""老虎交易系统（Tiger Trading）— 主入口。
+"""TigerTest 科技情报选股系统 — 主入口。
 
 运行模式（--mode）：
   daily      日频全流程：扫描 → 三道门+ICS → 风控 → 日报 + 信号落账/结算（默认）
@@ -12,8 +12,9 @@
 
 示例：
   python main.py --demo                          # 离线演示
-  python main.py --universe full                 # 请求所选市场列表，实际范围见报告
-  python main.py --mode premarket --universe full
+  python main.py --universe tech                 # 美股科技双主题聚焦（默认）
+  python main.py --universe full                 # 历史宽池对照，实际范围见报告
+  python main.py --mode premarket --universe tech
   python main.py --mode intraday --interval 300 --cycles 12
   python main.py --backtest --demo --bt-days 260
   python main.py --tune --demo --bt-days 380
@@ -197,7 +198,7 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
     }) as stage:
         if (args.mode != "daily" or args.market != "us" or args.demo
                 or args.use_tuned or not args.html
-                or args.universe not in ("file", "extended", "focused")
+                or args.universe not in ("file", "extended", "focused", "tech")
                 or Path(args.out).resolve() != paths.reports_dir
                 or Path.cwd().resolve() != paths.work_dir):
             raise ExecutionContractError("Daily request differs from the trusted public paper profile")
@@ -220,7 +221,8 @@ def _daily_strict(args, provider, execution) -> DailyRunResult:
                       "journal": before_journal, "sim": before_sim,
                       "calibration": before_calibration, "account_currency": "USD",
                       "universe": (read_file(universe_path) if universe_path
-                                   else {"source": "frozen_focused" if args.universe == "focused"
+                                   else {"source": "frozen_tech_focus" if args.universe == "tech"
+                                         else "frozen_focused" if args.universe == "focused"
                                          else "frozen_extended"}),
                       "calendar": read_file(paths.calendar_override_path)})
 
@@ -880,8 +882,8 @@ def main() -> None:
                                  "agentgw", "demo"],
                         default=None)
     parser.add_argument("--demo", action="store_true", help="离线演示模式（合成数据）")
-    parser.add_argument("--universe", choices=["focused", "core", "extended", "full", "file"],
-                        default="focused",
+    parser.add_argument("--universe", choices=["tech", "focused", "core", "extended", "full", "file"],
+                        default="tech",
                         help="full=请求所选市场股票列表，实际范围以输出中的来源和预筛记录为准")
     parser.add_argument("--universe-file", default=None)
     parser.add_argument("--top", type=int, default=config.SCAN_TOP_N, help="扫描精评候选数")

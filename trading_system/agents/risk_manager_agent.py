@@ -119,7 +119,7 @@ class RiskManagerAgent(BaseAgent):
             row = diagnostics[c.ticker]
             row.update(sector_evidence=evidence, mrs_star=mrs.mrs_star,
                        shs=shs, tss_final=c.tss_final)
-            if budgeted and c.entry_template not in {"A", "B", "C"}:
+            if (budgeted or context.get("tech_focus")) and c.entry_template not in {"A", "B", "C"}:
                 row.update(status="rejected", reasons=["entry_template_missing"])
                 continue
             if active and (not etf or not any(s.etf == etf for s in sectors)):

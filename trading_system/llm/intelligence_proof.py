@@ -1064,7 +1064,18 @@ def _verify_acquisition(replay):
                    for call in output["io_calls"]):
                 _fail(stage)
     if replay.policy is not None:
-        _same(replay.policy["intelligence"], {**acquisition_policy(), "input_sha256": value_hash(packet)})
+        expected_intelligence = acquisition_policy()
+        if replay.policy.get("tech_focus") is not None:
+            focus = replay.policy["tech_focus"]
+            expected_intelligence["frontier"] = {
+                **expected_intelligence["frontier"],
+                "ranked": focus["frontier_size"],
+                "theme_minimum": focus["theme_minimum"],
+                "sector_symbols": list(focus["sector_etfs"]),
+            }
+        _same(replay.policy["intelligence"], {
+            **expected_intelligence, "input_sha256": value_hash(packet),
+        })
         for key, expected in {"source_content_contract": SOURCE_CONTENT_CONTRACT,
                 "company_evidence_contract": semantic.COMPANY_CONTRACT, "event_contract": STRUCTURED_EVENT_CONTRACT,
                 "risk_evidence_contract": RISK_CONTRACT, "search_mode": SEARCH_MODE}.items():
@@ -1083,23 +1094,40 @@ def _verify_acquisition(replay):
     _same(finput["market_snapshot_ref"], replay.ends["data.prepare"]["output_ref"], "intelligence.frontier")
     from ..markets import get_market
     spec = get_market("us")
+    focus = (replay.policy or {}).get("tech_focus")
+    scan_filters = spec.scan_filters()
+    sector_symbols = spec.sector_symbols
+    if focus is not None:
+        from ..tech_focus import (FOCUS_POLICY, research_cells as focus_research_cells,
+                                  research_topics, scan_filters as focus_scan_filters)
+        if focus != FOCUS_POLICY.to_dict():
+            _fail()
+        scan_filters = focus_scan_filters()
+        sector_symbols = list(focus["sector_etfs"])
     research_scope = None
     if (replay.policy or {}).get("research_work") is not None:
         from .work_proof import verified_research_scope
         research_scope = verified_research_scope(replay)
     verify_frontier(frontier, numeric, finput["universe"], as_of=replay.cutoff,
         market_snapshot_ref=replay.ends["data.prepare"]["output_ref"],
-        portfolio_state=finput["portfolio_state"], scan_filters=spec.scan_filters(), sector_symbols=spec.sector_symbols,
+        portfolio_state=finput["portfolio_state"], scan_filters=scan_filters,
+        sector_symbols=sector_symbols,
+        **({"focus_profile": focus} if focus is not None else {}),
         **({"research_scope": research_scope} if research_scope is not None else {}))
     _same(frontier["security_ids"], prepared["security_roster"]["symbols"], "intelligence.frontier")
-    plan = build_plan({"run_id": replay.run.name, "as_of": replay.cutoff.isoformat(), "market": "us",
+    plan_request = {"run_id": replay.run.name, "as_of": replay.cutoff.isoformat(), "market": "us",
         "universe": frontier["security_ids"], "entities": entity_registry(frontier)["entities"],
         "frontier": frontier["symbols"], "frontier_manifest_hash": frontier["manifest_sha256"],
         "market_snapshot_refs": frontier["market_snapshot_refs"], "holdings": frontier["holdings"], "pending": frontier["pending"],
-        "watchlist": frontier["watchlist"], "topics": semantic.acquisition_topics({**CHAIN_TOPICS, **SECTOR_TOPICS}),
+        "watchlist": frontier["watchlist"],
+        "topics": (semantic.acquisition_topics(research_topics()) if focus is not None
+                   else semantic.acquisition_topics({**CHAIN_TOPICS, **SECTOR_TOPICS})),
         "baseline_refs": ([{"manifest_sha256": packet["baseline"]["manifest"]["manifest_sha256"]}]
                           if packet["baseline"] else []), "limits": dict(TOOL_LIMITS),
-        **({"acquisition_mode": "snapshot_only"} if mode == "snapshot_only" else {})}, registry)
+        **({"acquisition_mode": "snapshot_only"} if mode == "snapshot_only" else {})}
+    if focus is not None:
+        plan_request["required_cells"] = focus_research_cells(frontier)
+    plan = build_plan(plan_request, registry)
     freeze = replay.value("intelligence.freeze")
     archive_root = replay.run / "intelligence"
     checked_root(archive_root)

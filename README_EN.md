@@ -1,10 +1,14 @@
-# Tiger Global Asset Management (TGAM)
+# TigerTest Intelligence-First US Tech Selector
 
-> A fully automated trading system orchestrated by an AI fund manager — covering US / CN / HK markets, running 24 hours.
+> A paper-only US tech selector centered on two themes, a bounded 16-name research frontier and evidence-complete decisions.
 >
 > **No prediction. Process, discipline, audit.**
 
-Tiger Global Asset Management (TGAM) uses the [Caishen AI trading system](docs/CAISHEN_README.md) (v6.3) as its trading kernel and [WorkLoom IM](governance/README.md) as its governance shell, strictly following every trading discipline in the [White Paper: AI Short-Term US Equity Trading (1–15 Day Swing Edition)](reports/AI短线美股交易白皮书_20260730.pdf).
+TigerTest is a complete fork of `workroom-tiger@d833064`. It inherits the
+[Caishen AI trading system](docs/CAISHEN_README.md) and
+[WorkLoom IM](governance/README.md), while narrowing the default universe to
+high-liquidity US semiconductor-cycle and AI-infrastructure names. The full
+design is in [TIGERTEST-ARCHITECTURE.md](docs/TIGERTEST-ARCHITECTURE.md).
 
 **This system currently runs in paper trading only. It is not investment advice and promises no returns.**
 

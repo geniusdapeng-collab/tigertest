@@ -339,7 +339,7 @@ def assessment_rows(docs, plan):
 
 
 class Acquisition:
-    def __init__(self, llm, frontier, topics):
+    def __init__(self, llm, frontier, topics, *, required_cells=None):
         from ..intelligence import IntelligenceService, default_registry, build_plan
         from ..intelligence.registry import acquisition_mode
 
@@ -359,7 +359,7 @@ class Acquisition:
             self.service.use_host_limits(self.archive)
         self.entities = entity_registry(frontier)
         self.baseline = self.packet["baseline"]
-        self.plan = build_plan({"run_id": llm.execution.run_id, "as_of": llm.execution.admitted_at.isoformat(),
+        request = {"run_id": llm.execution.run_id, "as_of": llm.execution.admitted_at.isoformat(),
             "market": "us", "universe": frontier["security_ids"], "entities": self.entities["entities"],
             "frontier": frontier["symbols"], "frontier_manifest_hash": frontier["manifest_sha256"],
             "market_snapshot_refs": frontier["market_snapshot_refs"], "holdings": frontier["holdings"],
@@ -367,7 +367,10 @@ class Acquisition:
             "watchlist": frontier["watchlist"], "topics": acquisition_topics(topics),
             "baseline_refs": ([{"manifest_sha256": self.baseline["manifest"]["manifest_sha256"]}]
                               if self.baseline else []), "limits": dict(TOOL_LIMITS),
-            **({"acquisition_mode": "snapshot_only"} if self.acquisition_mode == "snapshot_only" else {})}, self.registry)
+            **({"acquisition_mode": "snapshot_only"} if self.acquisition_mode == "snapshot_only" else {})}
+        if required_cells is not None:
+            request["required_cells"] = required_cells
+        self.plan = build_plan(request, self.registry)
         self.job = self.service.create_job(self.plan, "daily:" + llm.execution.run_id)
         self.rounds = []
         self.bundle = None

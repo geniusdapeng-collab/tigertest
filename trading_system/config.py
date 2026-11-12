@@ -135,6 +135,30 @@ FULL_PREFILTER_THRESHOLD = 1000   # 池规模超过此值启用预筛
 FULL_PREFILTER_DAYS = 30          # 预筛用短历史长度
 FULL_HEAVY_CAP = 800              # 预筛后进入重量级拉取的上限（按 ADV 排序）
 
+# ============================================================
+# TigerTest intelligence-first focus profile
+# ============================================================
+# One reviewed domain, two executable parent themes:
+#   semiconductor_cycle -> semis
+#   ai_infrastructure   -> ai_compute
+# The focused universe is derived from these two chains. Raising liquidity
+# requirements is a focus/quality choice, not a change to the white-paper
+# minimums used by historical profiles.
+TECH_FOCUS_UNIVERSE_MODE = "tech"
+TECH_FOCUS_PARENT_CHAINS = ("semis", "ai_compute")
+TECH_FOCUS_SUBCHAINS = ("memory", "logic", "foundry", "equipment", "ai_model", "ai_app")
+TECH_FOCUS_SECTOR_ETFS = ("XLK", "SMH")
+TECH_FOCUS_MIN_PRICE = 10.0
+TECH_FOCUS_MIN_ADV_USD = 100_000_000
+TECH_FOCUS_MIN_HISTORY_DAYS = 260
+TECH_FOCUS_MAX_ATR_PCT = 0.12
+TECH_FOCUS_FRONTIER_SIZE = 16
+TECH_FOCUS_THEME_MINIMUM = 4
+TECH_FOCUS_MAX_PICKS = 5
+TECH_FOCUS_MAX_CONDITIONAL_WATCH = 8
+TECH_FOCUS_MARKET_BATCH_SECONDS = 180
+TECH_FOCUS_MARKET_CHUNK_SIZE = 20
+
 # 扫描排序分（量化初排，非 TSS）
 SCAN_RANK_WEIGHTS = {
     "rs_63": 0.30,     # 63 日相对 SPY 强度（一年分位）

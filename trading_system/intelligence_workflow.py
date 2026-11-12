@@ -17,7 +17,7 @@ from .agent_evidence import (EvidenceInvalid, atomic_json, json_bytes, normalize
                             read_bytes, strict_json)
 from .agents.universe_scanner_agent import rank_universe
 from .chains import SECTOR_TO_CHAINS, chain_of
-from .redline.execution import ExecutionContractError
+from .redline.execution import ExecutionContractError, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE
 
 ACQUISITION_CONTRACT = "tiger.intelligence-acquisition.v2"
 SOURCE_CONTENT_CONTRACT = "intelligence-original-versions/v2"
@@ -182,10 +182,14 @@ def validate_input_packet(packet: dict) -> dict:
         raise EvidenceInvalid("RESULT_INVALID", "Frozen intelligence source configuration differs") from None
 
 
-def _stage_input_packet(run: Path, *, as_of: datetime) -> dict:
+def _stage_input_packet(run: Path, *, as_of: datetime,
+                        profile: str = INTELLIGENCE_PROFILE) -> dict:
     """Only trusted startup may supply a registry or explicit raw archive."""
     from .intelligence.registry import acquisition_mode, default_registry
 
+    if profile not in {INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE}:
+        raise EvidenceInvalid("INVALID_REQUEST", "Intelligence input requires an intelligence profile")
+    focused = profile == TECH_INTELLIGENCE_PROFILE
     config = {}
     configured = os.environ.get("TIGER_INTEL_REGISTRY_FILE")
     if configured:
@@ -201,6 +205,7 @@ def _stage_input_packet(run: Path, *, as_of: datetime) -> dict:
     if archive:
         from .intelligence.archive import Archive
         from .universe import EXTENDED_UNIVERSE
+        from .tech_focus import focus_universe
         from .tech_chain.universe import TECH_SUBCHAINS
         from .markets import get_market
         path = Path(archive)
@@ -209,15 +214,19 @@ def _stage_input_packet(run: Path, *, as_of: datetime) -> dict:
         # The numerical frontier does not exist until market.prepare in the
         # worker. Seal a bounded trusted-roster superset first, then derive the
         # exact frontier subset from these immutable members after that stage.
-        scope = {"entity_ids": ["us:" + symbol for symbol in EXTENDED_UNIVERSE],
-            "topic_ids": ["global:macro", *TECH_SUBCHAINS, *get_market("us").sector_symbols],
+        reviewed_symbols = focus_universe() if focused else EXTENDED_UNIVERSE
+        reviewed_sectors = (list(config.TECH_FOCUS_SECTOR_ETFS)
+                            if focused else get_market("us").sector_symbols)
+        scope = {"entity_ids": ["us:" + symbol for symbol in reviewed_symbols],
+            "topic_ids": ["global:macro", *TECH_SUBCHAINS, *reviewed_sectors],
             "observed_since": (as_of - timedelta(days=760)).isoformat(), "include_history": True}
         limits = dict(PAPER_SNAPSHOT_LIMITS)
         if acquisition_mode(config) == "snapshot_only":
             limits["metadata_bytes"] = SNAPSHOT_ONLY_METADATA_BYTES
         manifest = Archive(path).create_snapshot(as_of.isoformat(), scope=scope,
             limits=limits, registry_hash=registry.public_manifest()["sha256"],
-            topic_ref={"purpose": "paper-admission-reviewed-roster-superset"})
+            topic_ref={"purpose": ("paper-admission-tech-focus-roster"
+                                   if focused else "paper-admission-reviewed-roster-superset")})
         if acquisition_mode(config) == "snapshot_only" and not manifest["versions"]:
             raise EvidenceInvalid("INVALID_REQUEST", "Snapshot-only acquisition has no admitted raw originals")
         baseline = {"archive_root": str(path), "manifest": manifest}
@@ -228,10 +237,11 @@ def _stage_input_packet(run: Path, *, as_of: datetime) -> dict:
     return packet
 
 
-def stage_input_packet(run: Path, *, as_of: datetime) -> dict:
+def stage_input_packet(run: Path, *, as_of: datetime,
+                       profile: str = INTELLIGENCE_PROFILE) -> dict:
     from .intelligence.contracts import IntelligenceError
     try:
-        return _stage_input_packet(run, as_of=as_of)
+        return _stage_input_packet(run, as_of=as_of, profile=profile)
     except IntelligenceError:
         raise EvidenceInvalid("INVALID_REQUEST", "Trusted intelligence startup configuration is invalid") from None
 
@@ -259,7 +269,8 @@ def build_frontier(market_data: dict, universe: list[str], security_ids: dict[st
                    as_of: datetime, market_snapshot_ref: dict,
                    portfolio_state: dict | None = None, scan_filters=None,
                    sector_symbols=None, top_n: int = config.SCAN_TOP_N,
-                   research_scope: dict | None = None) -> dict:
+                   research_scope: dict | None = None,
+                   focus_profile: dict | None = None) -> dict:
     """Reuse exact scanner rank/filter rules without SHS or entry supplements."""
     if (as_of.utcoffset() is None or type(top_n) is not int or not 1 <= top_n <= 1000
             or len(set(universe)) != len(universe)
@@ -286,10 +297,47 @@ def build_frontier(market_data: dict, universe: list[str], security_ids: dict[st
 
     for symbol in [*(held or []), *pending]:
         include(symbol, "admitted_holding_or_pending")
-    for row in ranked[:top_n]:
-        include(row["ticker"], "market_rank")
+    focused_rows = ranked[:top_n]
+    focus_disclosure = None
+    if focus_profile is not None:
+        from .tech_focus import (FOCUS_POLICY, TECH_FOCUS_CONTRACT,
+                                 select_frontier_rows, themes_for_symbol)
+        if (not isinstance(focus_profile, dict)
+                or focus_profile != FOCUS_POLICY.to_dict()):
+            raise ExecutionContractError("Research frontier focus policy differs")
+        frontier_size = int(focus_profile["frontier_size"])
+        effective_limit = min(top_n, frontier_size, max(0, frontier_size - len(selected)))
+        focused_rows = (select_frontier_rows(
+            ranked, limit=effective_limit,
+            theme_minimum=int(focus_profile["theme_minimum"]))
+            if effective_limit else [])
+        selected_before = set(selected)
+        theme_counts: dict[str, int] = {}
+        for index, row in enumerate(focused_rows):
+            themes = themes_for_symbol(row["ticker"])
+            reason = ("focus_theme_quota" if index >= effective_limit
+                      else "focus_rank") + (":" + ",".join(themes) if themes else ":unmapped")
+            include(row["ticker"], reason)
+            if row["ticker"] not in selected_before:
+                for theme_id in themes:
+                    theme_counts[theme_id] = theme_counts.get(theme_id, 0) + 1
+        focus_disclosure = {
+            **focus_profile,
+            "contract": TECH_FOCUS_CONTRACT,
+            "policy_sha256": FOCUS_POLICY.sha256,
+            "effective_frontier_limit": frontier_size,
+            "rank_slots_after_account_reservations": effective_limit,
+            "theme_selected_counts": dict(sorted(theme_counts.items())),
+        }
+    else:
+        for row in focused_rows:
+            include(row["ticker"], "market_rank")
     sector_gaps = []
     for sector in sector_symbols or []:
+        if focus_profile is not None and len(selected) >= int(focus_profile["frontier_size"]):
+            sector_gaps.append({"sector": sector, "status": "frontier_slot_unavailable",
+                                "classification": "bounded_focus_frontier"})
+            continue
         chains = set(SECTOR_TO_CHAINS.get(sector, []))
         representative = next((row["ticker"] for row in ranked
                                if chain_of(row["ticker"])[0] in chains), None)
@@ -310,6 +358,8 @@ def build_frontier(market_data: dict, universe: list[str], security_ids: dict[st
                                       "benchmark_sha256": value_hash(market_data["spy"]),
                                       "stock_sha256": stock_hashes},
              "not_a_trade_approval": True}
+    if focus_disclosure is not None:
+        value["focus"] = focus_disclosure
     frontier = {**value, "manifest_sha256": value_hash(value)}
     if research_scope is not None:
         from .research_followup import apply_scope
@@ -329,11 +379,12 @@ def entity_registry(frontier: dict) -> dict:
 def verify_frontier(value: dict, market_data: dict, universe: list[str], *,
                     as_of: datetime, market_snapshot_ref: dict,
                     portfolio_state=None, scan_filters=None, sector_symbols=None,
-                    top_n: int = config.SCAN_TOP_N, research_scope: dict | None = None) -> None:
+                    top_n: int = config.SCAN_TOP_N, research_scope: dict | None = None,
+                    focus_profile: dict | None = None) -> None:
     expected = build_frontier(market_data, universe, value["security_ids"], as_of=as_of,
         market_snapshot_ref=market_snapshot_ref, portfolio_state=portfolio_state,
         scan_filters=scan_filters, sector_symbols=sector_symbols,
-        top_n=top_n, research_scope=research_scope)
+        top_n=top_n, research_scope=research_scope, focus_profile=focus_profile)
     if normalize(value) != normalize(expected):
         raise ExecutionContractError("Research frontier differs from frozen market facts")
 

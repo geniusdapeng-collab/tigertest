@@ -48,7 +48,13 @@ REQUIRED_PROFILE = "us-public-model-required-paper-v1"
 REQUIRED_POLICY_ID = "tiger.public-model-required-paper-policy.v1"
 INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2"
 INTELLIGENCE_POLICY_ID = "tiger.public-intelligence-paper-policy.v2"
-MODEL_REQUIRED_POLICIES = frozenset({REQUIRED_POLICY_ID, INTELLIGENCE_POLICY_ID})
+TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v3"
+TECH_INTELLIGENCE_POLICY_ID = "tiger.public-tech-intelligence-paper-policy.v3"
+INTELLIGENCE_PROFILES = frozenset({INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE})
+INTELLIGENCE_POLICY_IDS = frozenset({INTELLIGENCE_POLICY_ID, TECH_INTELLIGENCE_POLICY_ID})
+MODEL_REQUIRED_POLICIES = frozenset({
+    REQUIRED_POLICY_ID, INTELLIGENCE_POLICY_ID, TECH_INTELLIGENCE_POLICY_ID,
+})
 INTELLIGENCE_SEARCH_SOURCES = (
     "deepseek_search", "brave_news", "tavily_search", "exa_search",
     "sec_submissions", "issuer_ir", "fed", "fred", "bls", "cboe", "fda", "ecb",
@@ -82,7 +88,7 @@ class ExecutionPolicy:
         for values, allowed, label in (
             (self.provider_names, PUBLIC_PROVIDER_NAMES, "provider"),
             (self.search_source_names, INTELLIGENCE_SEARCH_SOURCES
-             if self.policy_id == INTELLIGENCE_POLICY_ID else
+             if self.policy_id in INTELLIGENCE_POLICY_IDS else
              ("deepseek_search",) if required else PUBLIC_SEARCH_SOURCE_NAMES, "search source"),
         ):
             if (not values or len(set(values)) != len(values)
@@ -237,7 +243,7 @@ class ExecutionContext:
         self.run_id, self.run_date = run_id, run_date
         self.paths, self.policy, self.store = paths, policy, store
         self.model_required = policy.policy_id in MODEL_REQUIRED_POLICIES
-        self.intelligence = policy.policy_id == INTELLIGENCE_POLICY_ID
+        self.intelligence = policy.policy_id in INTELLIGENCE_POLICY_IDS
         if type(response_observation_contract) is not str:
             raise ExecutionContractError("Invalid model response observation contract")
         if response_observation_contract:

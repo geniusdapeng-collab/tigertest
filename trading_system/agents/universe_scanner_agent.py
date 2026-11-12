@@ -41,6 +41,10 @@ def rank_universe(universe: list[str], market_data: dict, scan_filters=None, *, 
     filt = scan_filters or {}
     min_price = filt.get("min_price", config.SCAN_MIN_PRICE)
     min_adv = filt.get("min_adv", config.SCAN_MIN_ADV_USD)
+    # Historical profiles retain their original 60%-of-260 observation floor.
+    # The focused profile explicitly supplies 260 in its frozen scan filter.
+    min_history = filt.get("min_history", int(config.SCAN_MIN_HISTORY_DAYS * 0.6))
+    max_atr_pct = filt.get("max_atr_pct", config.SCAN_MAX_ATR_PCT)
 
     passed: list[dict] = []
     rejected = {"price": 0, "adv": 0, "history": 0, "atr": 0, "nodata": 0}
@@ -48,7 +52,7 @@ def rank_universe(universe: list[str], market_data: dict, scan_filters=None, *, 
 
     for ticker in universe:
         df = stock_data.get(ticker)
-        if df is None or len(df) < config.SCAN_MIN_HISTORY_DAYS * 0.6:
+        if df is None or len(df) < min_history:
             rejected["nodata"] += 1
             if audit is not None:
                 audit[ticker] = {"hard_filter": "no_data" if df is None else "short_history"}
@@ -68,7 +72,7 @@ def rank_universe(universe: list[str], market_data: dict, scan_filters=None, *, 
             continue
         a14 = last(atr(df, 14))
         atr_pct = a14 / price if price > 0 else 9.9
-        if atr_pct > config.SCAN_MAX_ATR_PCT:
+        if atr_pct > max_atr_pct:
             rejected["atr"] += 1
             if audit is not None:
                 audit[ticker] = {"hard_filter": "atr"}

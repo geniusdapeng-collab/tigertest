@@ -1,12 +1,17 @@
-# 老虎全球资产管理（Tiger Global Asset Management）项目介绍
+# TigerTest 科技情报选股系统项目介绍
 
-> 一句话：以财神爷 AI 炒股系统为交易内核、以 WorkLoom IM 为治理外壳的
-> 全自动化模拟盘交易系统——覆盖美股 / A股 / 港股，24 小时运行。
+> 一句话：以情报问题图为主体、以财神爷纪律内核为闸门、以 WorkLoom IM
+> 为治理外壳的美股科技双主题模拟盘选股系统。
 > **No prediction. Process, discipline, audit.**
 
 **当前阶段：仅模拟盘（paper trading）。不构成投资建议，不承诺收益。**
 
-新 AI 研究的正式入口是 `scripts/tiger-agent.mjs` / `tiger-agent-mcp.mjs` 的 `us-public-intelligence-paper-v2`，不是直接调用 `main.py --demo`。正式入口分别记录流程、证据、决策和账户四轴，支持同 run resume 与已审定候选 supplement；只有冻结源码、完整原件、五阶段模型、数值风险、账户 CAS 和独立 receipt/verify 同时成立才报告完成。
+新 AI 研究的正式入口是 `scripts/tiger-agent.mjs` / `tiger-agent-mcp.mjs` 的
+`us-tech-intelligence-paper-v3`，不是直接调用 `main.py --demo`。正式入口分别
+记录流程、证据、决策和账户四轴，默认聚焦半导体周期与 AI 基础设施两母主题，
+支持同 run resume 与已审定候选 supplement；只有冻结源码、完整原件、五阶段模型、
+数值风险、账户 CAS 和独立 receipt/verify 同时成立才报告完成。架构见
+[TIGERTEST-ARCHITECTURE.md](TIGERTEST-ARCHITECTURE.md)。
 
 ## 一、项目缘起：从财神爷到老虎全球资产管理
 

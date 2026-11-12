@@ -31,7 +31,8 @@ from .agent_runtime import (
     committed_pointer, freeze_source, frozen_clock, pointer_read, policy_manifest,
     run_environment, stage_account, stage_calendar, startup_runtime_input, validate_admission,
     validate_clock, verify_run,
-    DEADLINE_SECONDS, INTELLIGENCE_PROFILE, RUNTIME_POLICY_ENV,
+    DEADLINE_SECONDS, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE,
+    INTELLIGENCE_PROFILES, RUNTIME_POLICY_ENV,
     source_observation_contract, source_inventory, source_research_work_policy,
 )
 from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
@@ -368,11 +369,11 @@ def _submit(state: Path, request: dict, *, source: Path,
             if runtime_input is not None:
                 atomic_json(run, "runtime-input.json", runtime_input, exclusive=True)
             intelligence_input = None
-            from .redline.execution import INTELLIGENCE_PROFILE
-            if request["profile"] == INTELLIGENCE_PROFILE:
+            if request["profile"] in INTELLIGENCE_PROFILES:
                 from .intelligence_workflow import stage_input_packet
                 intelligence_input = stage_input_packet(run,
-                    as_of=datetime.fromisoformat(clock["admitted_at_utc"]))
+                    as_of=datetime.fromisoformat(clock["admitted_at_utc"]),
+                    profile=request["profile"])
             policy = policy_manifest(request["profile"],
                                      scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
                                      intelligence_input=intelligence_input, runtime_input=runtime_input,
@@ -447,8 +448,8 @@ def _supplement_inputs(state: Path, request: dict, clock: dict):
     parent = verify_run(state, request["parent_run_id"], current_source=None)
     parent_run = state / "runs" / request["parent_run_id"]
     parent_request = read_json(parent_run, "request.json")
-    if parent_request.get("profile") != INTELLIGENCE_PROFILE:
-        raise EvidenceInvalid("SUPPLEMENT_UNAVAILABLE", "Only verified v2 research has pending candidates")
+    if parent_request.get("profile") not in INTELLIGENCE_PROFILES:
+        raise EvidenceInvalid("SUPPLEMENT_UNAVAILABLE", "Only verified intelligence research has pending candidates")
     summary = parent.get("summary")
     intelligence = ((summary or {}).get("disclosures") or {}).get("intelligence")
     pending = intelligence.get("pending_candidates") if isinstance(intelligence, dict) else None
@@ -649,7 +650,7 @@ def submit_resume(state: Path, request: dict, *,
 
 
 def doctor(state: Path, mode: str) -> dict:
-    runtime_input = startup_runtime_input()
+    runtime_input = startup_runtime_input(TECH_INTELLIGENCE_PROFILE)
     packages = {}
     for name in DEPENDENCIES:
         try:
@@ -671,7 +672,8 @@ def doctor(state: Path, mode: str) -> dict:
             "api_key_present": bool(os.environ.get("LLM_API_KEY")),
             "required_for_intelligence_profile": True,
         },
-        "business_runtime": {"profile": INTELLIGENCE_PROFILE,
+        "business_runtime": {"profile": TECH_INTELLIGENCE_PROFILE,
+            "legacy_intelligence_profile": INTELLIGENCE_PROFILE,
             "startup_environment": RUNTIME_POLICY_ENV, "configured": runtime_input is not None,
             "business_deadline_seconds": runtime_input["business_deadline_seconds"] if runtime_input else DEADLINE_SECONDS,
             "input_sha256": digest(json_bytes(runtime_input)) if runtime_input else None,

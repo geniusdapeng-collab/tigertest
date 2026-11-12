@@ -19,10 +19,10 @@
 
 ```bash
 node scripts/tiger-agent.mjs doctor --python /absolute/path/to/python \
-  --state-root /absolute/path/to/existing-v2-state
-printf '%s\n' '{"profile":"us-public-intelligence-paper-v2"}' | \
+  --state-root /absolute/path/to/existing-tech-focus-state
+printf '%s\n' '{"profile":"us-tech-intelligence-paper-v3"}' | \
   node scripts/tiger-agent.mjs describe --python /absolute/path/to/python \
-    --state-root /absolute/path/to/existing-v2-state --input-file -
+    --state-root /absolute/path/to/existing-tech-focus-state --input-file -
 ```
 
 这两条命令不调用行情或模型、不创建账户、不启动业务 worker。doctor 检查实际解释器和依赖；describe 返回固定 profile、阶段顺序和限制。`trading.repo.readiness` 只检查文件布局，不能代替 doctor。
@@ -31,13 +31,28 @@ doctor 的 `ready` 不核验模型凭据或提供者。缺少模型配置的 pap
 
 默认 `--mode readonly`。执行完整 paper 工作流必须由操作者在启动参数或项目部署配置中显式选择 `--mode paper`。请求 JSON 不能改变 mode、解释器、state-root、阶段或策略。
 
-当前开放四个显式 profile。新的 AI 研究和官网更新必须明确选择 `us-public-intelligence-paper-v2`：真实同模型语义、独立数值 frontier、登记来源采集、逐目标证据与冻结包共同组成完成条件。`us-public-model-required-paper-v1` 保留历史严格运行及旧回执；`us-public-paper-v1` 和 `us-public-active-paper-v1` 保留原 disabled/passthrough 或明确实验语义，均不能代替新研究验收。兼容函数的默认值仍保留旧调用含义，操作者不得靠省略 profile 推断获得 v2。所有配置仍为美股公开数据、USD 本地 paper 账户 `public-usd`、独立初始资金 100000 USD，不连接真实券商、不执行真实资金订单。外层宿主模型不会自动接入内层模型。完整情报合同、来源启用、采集预算与评测边界见 [INTELLIGENCE-ACQUISITION.md](INTELLIGENCE-ACQUISITION.md)。
+当前开放五个显式 profile。新的 TigerTest AI 研究和官网更新必须明确选择
+`us-tech-intelligence-paper-v3`：两母主题科技域、最多 16 只冻结 frontier、六子链
+与逐证券证据共同组成完成条件。`us-public-intelligence-paper-v2` 保留历史宽池语义；
+`us-public-model-required-paper-v1` 保留历史严格运行及旧回执；`us-public-paper-v1`
+和 `us-public-active-paper-v1` 保留原 disabled/passthrough 或明确实验语义，均不能
+代替新研究验收。兼容函数的默认值仍保留旧调用含义，操作者不得靠省略 profile 推断
+获得 v3。所有配置仍为美股公开数据、USD 本地 paper 账户 `public-usd`、独立初始
+资金 100000 USD，不连接真实券商、不执行真实资金订单。外层宿主模型不会自动接入
+内层模型。完整情报合同、来源启用、采集预算与评测边界见
+[INTELLIGENCE-ACQUISITION.md](INTELLIGENCE-ACQUISITION.md) 和
+[TIGERTEST-ARCHITECTURE.md](TIGERTEST-ARCHITECTURE.md)。
 
 可选 active 实验的回退板块是冻结的 NASDAQ 供应商分类代理，不是 GICS、真实 ETF 成分或历史时点分类；第三条达标主线保留为次池。更高资金使用率会改变实际风险，不能把“上限不变”解释为“收益或回撤不变”。该实验不会随 model-required 配置启用。运行和评测边界见 [TIGER-ACTIVITY-EVALUATION.md](TIGER-ACTIVITY-EVALUATION.md)。
 
 ### 真实 DeepSeek 内层模型与原生搜索
 
-本节保留严格 v1 的精确历史口径，便于旧运行复核。v2 继续要求同一 DeepSeek 客户端完成五个语义阶段，不将搜索供应商当替代文本模型；它以登记来源、原文/附件、结构化事件、逐目标 `null`/缺口与冻结证据包替代固定主题 collector。以下提到固定 14 主题、单一文档资格或原交叉验证的段落仅描述 v1；v2 的差异与独立采集操作以 [情报指南](INTELLIGENCE-ACQUISITION.md) 为准。
+本节保留严格 v1 的精确历史口径，便于旧运行复核。v3 与 v2 都要求同一
+DeepSeek 客户端完成五个语义阶段，不将搜索供应商当替代文本模型；v3 以两母主题、
+六子链和逐证券问题替代 v2 的宽池统一主题。以下提到固定 14 主题、单一文档资格
+或原交叉验证的段落仅描述 v1；v3 的差异与独立采集操作以
+[情报指南](INTELLIGENCE-ACQUISITION.md) 和
+[TIGERTEST-ARCHITECTURE.md](TIGERTEST-ARCHITECTURE.md) 为准。
 
 固定配置见根 `.env.example`，实际 key 存在仓库外受保护文件。运行器不自动寻找或加载 `.env`，也不读取 Codex/DSH 的登录缓存。可信启动器先将 `LLM_BACKEND=api`、`LLM_BASE_URL=https://api.deepseek.com`、`LLM_MODEL=deepseek-flash` 与非空 `LLM_API_KEY` 导出到进程环境，再执行 CLI/MCP。五个语义调用固定 JSON mode；thinking 从 bundle 场景策略读取：清洗与舆情为非思考，风险与板块叙事为 high，最终多空判断为 max。每次调用用仓库固定的官方 tokenizer 对完整序列化请求计数，并自动申请全部合法剩余输出窗口；输入超过 1,048,576 tokens 或输出超过 393,216 时失败关闭。启用 SEC 原文核验时，可信启动器还须导出操作者的 `TIGER_SEC_CONTACT` 邮箱。这些设置只传入 model-required 的业务子进程。请求 JSON 无权设置这些值。
 
@@ -51,7 +66,12 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
   --input-file model-required-request.json --wait
 ```
 
-新任务的 `model-required-request.json` 使用下文同一四字段结构，将 profile 设为 `us-public-intelligence-paper-v2`；仅复核历史严格路径时显式选择 `us-public-model-required-paper-v1`。两个严格配置的 activity 实验均保持关闭。模型只能选择/否决数值风险闸门已批准的买入，不得新增、扩大或绕过任何风险限制；无合格买入也必须由实际模型生成等待理由。
+新任务的 `model-required-request.json` 使用下文同一四字段结构，将 profile 设为
+`us-tech-intelligence-paper-v3`；复核历史宽池路径时显式选择
+`us-public-intelligence-paper-v2`，仅复核旧严格路径时显式选择
+`us-public-model-required-paper-v1`。各严格配置的 activity 实验均保持关闭。
+模型只能选择/否决数值风险闸门已批准的买入，不得新增、扩大或绕过任何风险限制；
+无合格买入也必须由实际模型生成等待理由。
 
 严格研究保留原初排和主线补扫名单。对初筛通过但未进入名单的股票，用已有日线逐只检查同一套 A/B/C 入场形态；有形态的股票追加到精评，再走原有期权、评分、风控和模型证据检查。结果中的 `raw.scan_stats.entry_setup_supplement` 分别记录原名单数 `baseline_selected`、额外检查数 `checked`、追加数 `added` 与缺少可用结构行情的数量 `unavailable`。检查范围以已取得合格行情的股票池为准。
 
@@ -92,7 +112,7 @@ node scripts/tiger-agent.mjs run --python /absolute/path/to/python \
 ```json
 {
   "schema_version": "tiger.agent-request/v1",
-  "profile": "us-public-intelligence-paper-v2",
+  "profile": "us-tech-intelligence-paper-v3",
   "paper_account": "public-usd",
   "idempotency_key": "operator-task-20261021-001"
 }
@@ -126,7 +146,8 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，可选 `--wait-timeout-seconds 1..3600`。默认观察窗口 2460 秒；Python 业务 deadline 默认独立为 2400 秒。Node 单次提交/查询上限 60 秒，等待循环只轮询已有 `run_id`，不会重新提交。
 
-仅对 `us-public-intelligence-paper-v2`，可信启动环境可设置 `TIGER_AGENT_RUNTIME_POLICY_FILE`，
+仅对 `us-tech-intelligence-paper-v3` 和历史 `us-public-intelligence-paper-v2`，
+可信启动环境可设置 `TIGER_AGENT_RUNTIME_POLICY_FILE`，
 指向 `{"schema":"tiger.agent-runtime-policy/v1","business_deadline_seconds":5400}` 形式的本地文件。
 只接受这两个字段与 2400–7200 的整数秒数；[示例](../config/agent-clients/paper-runtime-5400.json.example)不自动加载。
 doctor/describe 可只读检查有效值。新运行把脱敏、无凭据的内容冻结为 `runtime-input.json`，
