@@ -117,7 +117,7 @@ def test_new_admitted_idle_can_receive_first_byte_after_old_idle(tmp_path, monke
 
 
 def test_legacy_idle_still_times_out_without_new_observation(tmp_path, monkeypatch):
-    monkeypatch.setattr(transport, "CHAT_READ_TIMEOUT", .04)
+    monkeypatch.setattr(transport, "LEGACY_CHAT_READ_TIMEOUT", .04)
     monkeypatch.setattr(transport, "CHAT_RESPONSE_DEADLINE", .6)
     with server("delay_headers") as (endpoint, state):
         instance, execution, _ = client(tmp_path, monkeypatch, endpoint, legacy=True)
