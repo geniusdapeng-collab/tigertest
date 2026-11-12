@@ -75,7 +75,7 @@ def configured(monkeypatch):
     return RecordingExecution()
 
 
-def test_chat_transport_unknown_has_two_bounded_retries(configured, monkeypatch):
+def test_chat_transport_unknown_has_four_bounded_retries(configured, monkeypatch):
     from trading_system.llm.deepseek_required import DeepSeekRequiredClient
     from trading_system.redline.model_diagnostics import RequiredModelUnavailable
     client = DeepSeekRequiredClient(configured)
@@ -93,10 +93,10 @@ def test_chat_transport_unknown_has_two_bounded_retries(configured, monkeypatch)
     assert calls == ["/chat/completions", "/chat/completions"]
     with pytest.raises(RequiredModelUnavailable):
         client._post_chat_bounded({"model": "deepseek-flash"})
-    assert len(calls) == 4
+    assert len(calls) == 6
 
 
-def test_chat_rate_limit_has_one_bounded_retry(configured, monkeypatch):
+def test_chat_rate_limit_has_bounded_retries(configured, monkeypatch):
     from trading_system.llm.deepseek_required import (
         CHAT_READ_TIMEOUT, CHAT_RESPONSE_DEADLINE, DeepSeekRequiredClient,
     )
@@ -118,7 +118,7 @@ def test_chat_rate_limit_has_one_bounded_retry(configured, monkeypatch):
     assert sleeps == [5.0]
 
 
-def test_chat_rate_limit_retries_twice_then_stops(configured, monkeypatch):
+def test_chat_rate_limit_retries_four_times_then_stops(configured, monkeypatch):
     from trading_system.llm.deepseek_required import DeepSeekRequiredClient
     client = DeepSeekRequiredClient(configured)
     sleeps = []
@@ -130,7 +130,7 @@ def test_chat_rate_limit_retries_twice_then_stops(configured, monkeypatch):
     monkeypatch.setattr("trading_system.llm.deepseek_required.time.sleep", sleeps.append)
     with pytest.raises(RequiredModelUnavailable):
         client._post_chat_bounded({"model": "deepseek-flash"})
-    assert sleeps == [5.0, 10.0]
+    assert sleeps == [5.0, 10.0, 20.0, 30.0]
 
 
 def test_required_chat_binds_keyless_request_and_actual_response(configured, monkeypatch):
@@ -288,7 +288,7 @@ def test_http_error_retry_boundary_and_no_body_leak(configured, monkeypatch, sta
         client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)
     assert str(status) in str(error.value)
     assert KEY not in str(error.value) and "private-token" not in str(error.value)
-    assert len(seen) == (3 if status == 429 else 1)
+    assert len(seen) == (5 if status == 429 else 1)
     assert not client.receipts and response.closed
 
 

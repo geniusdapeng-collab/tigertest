@@ -738,11 +738,12 @@ class DeepSeekRequiredClient:
                 hasattr(self.execution, "store")
                 and callable(getattr(self.execution.store, "reserve", None))
             )
-            if topic_reservation or not retryable or self._chat_route_retries >= 2:
+            if topic_reservation or not retryable or self._chat_route_retries >= 4:
                 raise
             retry_index = self._chat_route_retries
             self._chat_route_retries += 1
-            time.sleep((5.0, 10.0)[retry_index] if status == 429 else (1.0, 3.0)[retry_index])
+            time.sleep((5.0, 10.0, 20.0, 30.0)[retry_index]
+                       if status == 429 else (1.0, 3.0, 10.0, 30.0)[retry_index])
             return self._post_chat_bounded(request)
 
     def _native_transport_usage(self):
