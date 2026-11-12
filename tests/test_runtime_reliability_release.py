@@ -103,9 +103,11 @@ def test_transient_busy_write_lock_is_retried_before_transaction(tmp_path):
 def test_large_workload_capacity_preserves_frozen_policy_compatibility(tmp_path):
     policy = research_work_policy()
     assert policy["document_workers"] >= 16
+    assert policy["analysis_workers"] == 1
     previous = deepcopy(policy)
     previous["parser_workers"] = 2
     previous["document_workers"] = 4
+    previous["analysis_workers"] = 3
     assert validate_research_work_policy(previous) == previous
 
     store = create(tmp_path, [unit(f"capacity-{number:03d}") for number in range(64)])
