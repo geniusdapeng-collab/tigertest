@@ -29,7 +29,10 @@ _START_FIELDS = {"schema", "run_id", "number", "admission_sha256", "request_sha2
 
 def supported(policy):
     value = policy.get("research_work") if type(policy) is dict else None
-    return (policy.get("profile") == "us-public-intelligence-paper-v2" and type(value) is dict
+    return (policy.get("profile") in {
+                "us-public-intelligence-paper-v2",
+                "us-tech-intelligence-paper-v3",
+            } and type(value) is dict
             and value.get("parent_attempt_contract") == ATTEMPT
             and value.get("provider_replay_contract") == PROVIDER_REPLAY)
 
