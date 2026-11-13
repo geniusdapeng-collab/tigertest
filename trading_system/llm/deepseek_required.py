@@ -56,7 +56,10 @@ CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 60.0
 RESPONSE_DEADLINE = 180.0
 CHAT_READ_TIMEOUT = 240.0
-CHAT_RESPONSE_DEADLINE = 900.0
+# Large original filings can keep the non-streaming JSON request open with
+# whitespace keep-alives for more than fifteen minutes. Keep the per-read
+# timeout bounded while allowing the complete long-document response to finish.
+CHAT_RESPONSE_DEADLINE = 1800.0
 LEGACY_CHAT_READ_TIMEOUT = 180.0
 CHAT_REQUEST_CONCURRENCY = 8
 _CHAT_REQUEST_SLOTS = BoundedSemaphore(CHAT_REQUEST_CONCURRENCY)

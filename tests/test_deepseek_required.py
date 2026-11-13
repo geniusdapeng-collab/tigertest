@@ -100,7 +100,7 @@ def test_chat_rate_limit_has_bounded_retries(configured, monkeypatch):
     from trading_system.llm.deepseek_required import (
         CHAT_READ_TIMEOUT, CHAT_RESPONSE_DEADLINE, DeepSeekRequiredClient,
     )
-    assert CHAT_READ_TIMEOUT == 240.0 and CHAT_RESPONSE_DEADLINE == 900.0
+    assert CHAT_READ_TIMEOUT == 240.0 and CHAT_RESPONSE_DEADLINE == 1800.0
     client = DeepSeekRequiredClient(configured)
     calls = []
     sleeps = []
