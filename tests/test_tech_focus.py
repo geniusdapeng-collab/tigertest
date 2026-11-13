@@ -104,6 +104,25 @@ def test_focus_topics_record_only_the_sector_mappings_present_in_its_reviewed_gr
     assert {"XLE", "XLF", "XLV", "IBB", "XLY", "XLP", "XLI", "XLU", "XLRE", "IWM"}.isdisjoint(mapped)
 
 
+def test_work_disclosure_is_available_before_the_layer0_pending_candidate_pass(monkeypatch):
+    from trading_system.llm import intelligence_required, work_required
+
+    monkeypatch.setattr(
+        intelligence_required.Acquisition,
+        "disclosure",
+        lambda _self: {"base": "disclosure"},
+    )
+    acquisition = object.__new__(work_required.Acquisition)
+    acquisition.pending_risk_state = {"leads": []}
+    assert acquisition.disclosure() == {
+        "base": "disclosure",
+        "pending_risk": {"leads": []},
+        "pending_candidates": None,
+    }
+    acquisition.pending_candidates = {"candidates": []}
+    assert acquisition.disclosure()["pending_candidates"] == {"candidates": []}
+
+
 def test_focus_frontier_is_bounded_reproducible_and_keeps_both_themes():
     symbols = ["MU", "NVDA", "MSFT", "PLTR"]
     market = {
