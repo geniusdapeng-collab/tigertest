@@ -67,7 +67,7 @@ _URL = re.compile(r"https?://[^\s<>\"'`\[\]{}]+", re.IGNORECASE)
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _CREDENTIAL = re.compile(
     r"(?i)\b(access[_-]?token|api[_-]?key|authorization|password|secret|session(?:id)?)"
-    r"\s*[:=]\s*(?:Bearer\s+)?[^\s,;<>\"']+")
+    r"\s*[:=]\s*(?:Bearer\s+)?[^\s,;<>\"'\\]+")
 _SENSITIVE_QUERY = frozenset({
     "accesstoken", "token", "key", "apikey", "signature", "password", "passwd",
     "session", "sessionid", "secret", "authorization", "auth", "credential",
