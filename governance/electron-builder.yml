@@ -4,8 +4,8 @@
 #       (+pgvector) + nats-server + 产品载荷，用户机零依赖；首启由
 #       apps/desktop/electron/bootstrap.cjs 自动完成装配→initdb→迁移→种子→起服务，
 #       客户端窗口即产品（不再打开外部浏览器）。
-appId: com.geniusdapeng.workroomtiger
-productName: 老虎全球资产管理系统
+appId: com.geniusdapeng.tigertest
+productName: TigerTest 科技情报选股系统
 copyright: Copyright © 2026 WorkLoom
 directories:
   output: release
@@ -30,15 +30,15 @@ extraResources:
     to: payload/PAYLOAD_VERSION
 extraMetadata:
   main: apps/desktop/electron/main.cjs
-  name: workroom-tiger
-  productName: 老虎全球资产管理系统
+  name: workloom-ai-tigertest
+  productName: TigerTest 科技情报选股系统
   # 与仓库根 product.manifest.json 保持一致，避免与其他行业客户端争用端口。
-  workloomPortOffset: 610
+  workloomPortOffset: 620
 asar: true
 # 产物名带平台与架构、**不带版本号**——文件名恒定才能支撑
 # https://github.com/<org>/<repo>/releases/latest/download/<文件名> 永久直链
 #（版本信息看 Release 页标题与 PAYLOAD_VERSION；GitHub 会剥离中文，arch 后缀是分辨安装包的依据）
-artifactName: "Workroom.Tiger-${os}-${arch}.${ext}"
+artifactName: "TigerTest-${os}-${arch}.${ext}"
 
 # Windows：NSIS 安装包（一键安装、桌面快捷方式）
 win:
@@ -50,7 +50,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: 老虎全球资产管理系统
+  shortcutName: TigerTest 科技情报选股系统
 
 # macOS：DMG（按架构分包：arm64 / x64——载荷内 Node 为架构专属，不打 universal）
 mac:
