@@ -154,7 +154,7 @@ def acquisition_topics(topics):
               "XLV": "healthcare", "IBB": "healthcare", "XLY": "consumer", "XLP": "consumer",
               "XLI": "industrials", "XLU": "utilities", "XLRE": "reits", "IWM": "macro"}
     return {**{key: value for key, value in topics.items() if key in TECH_SUBCHAINS},
-            **{etf: topics[topic] for etf, topic in mapped.items()}}
+            **{etf: topics[topic] for etf, topic in mapped.items() if topic in topics}}
 
 
 def _docs(docs, *, project_annotations=False, allow_empty=True):
