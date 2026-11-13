@@ -1,22 +1,22 @@
 {
   "schemaVersion": "workloom.product/v1",
-  "productId": "workroom-tiger",
+  "productId": "workloom-ai-tigertest",
   "role": "industry",
-  "displayName": "老虎全球资产管理系统",
+  "displayName": "TigerTest 科技情报选股系统",
   "packageName": "workloom-im",
-  "repository": "workloom-ai/workroom-tiger",
+  "repository": "geniusdapeng-collab/tigertest",
   "defaultBundle": "trading",
   "demoWorkspaceSlug": "tiger-trading",
   "demoMemberNo": "MEM-T001",
   "release": {
-    "appId": "com.geniusdapeng.workroomtiger",
+    "appId": "com.geniusdapeng.tigertest",
     "channel": "stable",
-    "artifactPrefix": "Workroom.Tiger",
+    "artifactPrefix": "TigerTest",
     "workflow": ".github/workflows/build-desktop.yml",
     "website": "apps/site"
   },
   "desktop": {
-    "portOffset": 610
+    "portOffset": 620
   },
   "clients": {
     "bPc": { "enabled": true, "entry": "apps/web" },

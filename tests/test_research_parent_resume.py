@@ -52,6 +52,14 @@ def prepared_parent(tmp_path):
     return state, run, admission, policy
 
 
+def test_tech_focus_profile_uses_parent_attempt_contract():
+    policy = runtime.policy_manifest(
+        runtime.TECH_INTELLIGENCE_PROFILE,
+        research_work=research_work_policy(),
+    )
+    assert resume.supported(policy) is True
+
+
 def test_parent_history_reuses_the_already_verified_event_proof(tmp_path, monkeypatch):
     _state, run, admission, policy = prepared_parent(tmp_path)
     proof = {"event_count": 2, "stage_count": 1, "last_event_sha256": "a" * 64,

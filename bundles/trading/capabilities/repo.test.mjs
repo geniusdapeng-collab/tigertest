@@ -28,7 +28,7 @@ async function fixture(t) {
 
 test("R02: actual engine and governance roots are reported with the real trading manifest", () => {
   const status = actual.repoStatus({});
-  assert.equal(status.productId, "workroom-tiger"); assert.equal(status.engineRoot, root); assert.equal(status.governanceRoot, join(root, "governance"));
+  assert.equal(status.productId, "workloom-ai-tigertest"); assert.equal(status.engineRoot, root); assert.equal(status.governanceRoot, join(root, "governance"));
   const bundle = actual.bundleSummary({}); assert.equal(bundle.found, true); assert.equal(bundle.location, "governance/bundles/trading");
   assert.ok(bundle.counts.skills > 0); assert.ok(bundle.counts.fences > 0);
   const readiness = actual.repoReadiness({}); assert.equal(readiness.ready, true);
@@ -74,7 +74,7 @@ test("R01/R03: old readonly catalog remains valid and still forbids local execut
   const catalog = await loadCatalog(root);
   assert.equal(catalog.entries.size, 12);
   const output = await invokeCapability(catalog, "trading.repo.status", {});
-  assert.equal(output.status, "succeeded"); assert.equal(output.result.productId, "workroom-tiger");
+  assert.equal(output.status, "succeeded"); assert.equal(output.result.productId, "workloom-ai-tigertest");
   const descriptor = catalog.entries.get("trading.repo.status");
   const { dir, file } = await fixture(t);
   await file("bundles/trading/agent-capabilities.json", JSON.stringify({ schemaVersion: "workloom.agent-capabilities/v1", bundleId: "trading",
