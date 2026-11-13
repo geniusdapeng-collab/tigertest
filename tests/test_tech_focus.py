@@ -13,12 +13,14 @@ from trading_system.agent_runtime import (
 from trading_system.chains import CHAINS
 from trading_system.data_models import StockCandidate
 from trading_system.intelligence_workflow import build_frontier, verify_frontier
+from trading_system.llm.intelligence_required import acquisition_topics
 from trading_system.pipeline import _batch_with_fallback
 from trading_system.tech_focus import (
     FOCUS_POLICY,
     TECH_FOCUS_UNIVERSE,
     build_decision_surface,
     research_cells,
+    research_topics,
     scan_filters,
     select_frontier_rows,
     themes_for_symbol,
@@ -94,6 +96,12 @@ def test_research_graph_covers_six_tech_subchains_macro_sectors_and_security_evi
         assert materials == {"issuer_financial", "adverse_event", "counterevidence"}
     assert len(cells) == 21
     assert len({cell["cell_id"] for cell in cells}) == len(cells)
+
+
+def test_focus_topics_record_only_the_sector_mappings_present_in_its_reviewed_graph():
+    mapped = acquisition_topics(research_topics())
+    assert {"XLK", "SMH"} <= mapped.keys()
+    assert {"XLE", "XLF", "XLV", "IBB", "XLY", "XLP", "XLI", "XLU", "XLRE", "IWM"}.isdisjoint(mapped)
 
 
 def test_focus_frontier_is_bounded_reproducible_and_keeps_both_themes():
