@@ -40,6 +40,14 @@ def test_program_owns_identity_and_preserves_distinct_originals():
         validate_raw_documents([raw(), raw()])
 
 
+@pytest.mark.parametrize("diagnostic", ["MODEL_OUTPUT_TRUNCATED", "RESPONSE_OBJECT_MISMATCH"])
+def test_closed_document_output_failures_become_document_scoped_gaps(diagnostic):
+    from trading_system.llm.work_required import semantic_failure_code
+    from trading_system.redline.model_diagnostics import RequiredModelUnavailable
+
+    assert semantic_failure_code(RequiredModelUnavailable(diagnostic)) == "WORK_OUTPUT_JSON_INVALID"
+
+
 def test_new_document_contract_keeps_multi_issuer_roundups_but_legacy_stays_bounded():
     from trading_system.llm.required_schemas import clean_schema
     from trading_system.llm.work_semantics import extraction_schema

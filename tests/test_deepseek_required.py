@@ -12,7 +12,7 @@ import pytest
 import requests
 
 from trading_system.llm.deepseek_required import (
-    DeepSeekRequiredClient, sanitize_url, validate_schema,
+    DeepSeekRequiredClient, sanitize_model_text, sanitize_url, validate_schema,
 )
 from trading_system.redline import LLMUnavailable
 from trading_system.redline.model_diagnostics import RequiredModelUnavailable
@@ -402,6 +402,17 @@ def test_chat_redacts_key_and_credential_links_before_persistence(configured, mo
                                   schema_hint={}, schema=SCHEMA)
     serialized = json.dumps([output, configured.calls])
     assert KEY not in serialized and "private-jwt" not in serialized
+
+
+def test_credential_redaction_preserves_json_escaped_quotes():
+    original = json.dumps(
+        {"note": 'Client Secret=fixture-value"quoted"'},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    safe = sanitize_model_text(original, KEY)
+    assert KEY not in safe
+    assert json.loads(safe)["note"] == 'Client Secret=[REDACTED_SECRET]"quoted"'
 
 
 def test_required_chat_retries_one_schema_mismatch_per_run(configured, monkeypatch):
