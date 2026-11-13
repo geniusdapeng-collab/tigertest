@@ -928,10 +928,8 @@ class Acquisition(legacy.Acquisition):
     def disclosure(self):
         if not hasattr(self, "pending_risk_state"):
             raise ValueError("PENDING_RISK_ASSESSMENT_REQUIRED")
-        if not hasattr(self, "pending_candidates"):
-            raise ValueError("PENDING_CANDIDATE_ASSESSMENT_REQUIRED")
         return {**super().disclosure(), "pending_risk": deepcopy(self.pending_risk_state),
-                "pending_candidates": deepcopy(self.pending_candidates)}
+                "pending_candidates": deepcopy(getattr(self, "pending_candidates", None))}
 
 
 class _StagePlanner:
