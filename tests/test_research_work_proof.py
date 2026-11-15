@@ -413,6 +413,8 @@ def test_review_schema_failure_replays_its_failed_child_without_inventing_a_revi
     summary = verifier.assert_complete()
     assert summary["verified_units"] == 2
     assert summary["document_count"] == 1 and summary["native_count"] == 3
+    assert fixture.replay.counts["clean.llm_semantic"] == 1
+    assert len(fixture.replay.response_ids) == 1
 
 
 def test_duplicate_response_key_proof_binds_the_failed_native_child(duplicate_json_failed):
@@ -431,6 +433,8 @@ def test_duplicate_response_key_proof_binds_the_failed_native_child(duplicate_js
     summary = verifier.assert_complete()
     assert summary["verified_units"] == 2
     assert summary["document_count"] == 1 and summary["native_count"] == 1
+    assert fixture.replay.counts["clean.llm_semantic"] == 0
+    assert fixture.replay.response_ids == []
 
 
 def test_segment_failure_terminalizes_once_after_every_segment_is_accounted(segmented_semantic_failed):
