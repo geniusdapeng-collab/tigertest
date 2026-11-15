@@ -57,6 +57,21 @@ def _same(actual, expected, stage=None):
         _fail(stage)
 
 
+def _scoring_market_contract(spec, focus=None):
+    if focus is None:
+        return spec.to_dict(), spec.scan_filters()
+    from .tech_focus import FOCUS_POLICY, scan_filters as focus_scan_filters
+    if focus != FOCUS_POLICY.to_dict():
+        _fail("pipeline.prepare")
+    filters = focus_scan_filters()
+    return {
+        **spec.to_dict(),
+        "sector_symbols": list(focus["sector_etfs"]),
+        "scan_filters": filters,
+        "focus": focus,
+    }, filters
+
+
 def _unpack(value):
     """Restore finite JSON and declared missing scalars, never arbitrary objects."""
     if isinstance(value, dict):
@@ -433,6 +448,8 @@ def verify_intelligence_scoring(run, stages, admission):
                                     trace("data.prepare").calls, day)
         market["sector_etfs"] = {symbol: market["sector_etfs"][symbol] for symbol in sector_order}
         spec = get_market("us")
+        focus = prepared["market"].get("focus")
+        market_contract, scan_filters = _scoring_market_contract(spec, focus)
         if (request["market"] != "us" or request["demo"] is not False or request["use_tuned"] is not False
                 or prepared_input["market"] != "us" or prepared_input["use_tuned"] is not False
                 or type(request["top"]) is not int or not 1 <= request["top"] <= 1000
@@ -442,8 +459,10 @@ def verify_intelligence_scoring(run, stages, admission):
                 or prepared_input["account_usd"] != request["account"]
                 or prepared["trade_date"] != day.isoformat() or preflight["synthetic"] is not False):
             _fail()
-        _same(prepared["market"], spec.to_dict(), "pipeline.prepare")
-        _same(prepared["scan_filters"], spec.scan_filters(), "pipeline.prepare")
+        _same(prepared["market"], market_contract, "pipeline.prepare")
+        _same(prepared["scan_filters"], scan_filters, "pipeline.prepare")
+        if focus is not None:
+            _same(prepared.get("tech_focus"), focus, "pipeline.prepare")
         _same(prepared["market_grad"], spec.graduation(), "pipeline.prepare")
         _same(prepared_input["portfolio_state"], preflight["sim"], "pipeline.prepare")
         _same(market["benchmark_labels"], {key: spec.benchmarks[key + "_label"] for key in ("index", "rate", "vol")}, "data.prepare")
@@ -483,7 +502,7 @@ def verify_intelligence_scoring(run, stages, admission):
         signals = [_signal(row) for row in output("tech.fusion")]
         signal_map = {signal.main_chain: signal for signal in signals}
         context = {"market_data": market, "trade_date": day.isoformat(), "market_spec": spec,
-            "scan_filters": spec.scan_filters(), "market_grad": spec.graduation(),
+            "scan_filters": scan_filters, "market_grad": spec.graduation(),
             "event_calendar": calendar, "paper_execution_budgeted": True,
             "portfolio_state": copy.deepcopy(preflight["sim"]), "capture_scan_decisions": True,
             "narrative_llm": narrative, "tech_bonus_map": signals_to_bonus_map(signals), "tech_signal_map": signal_map}
@@ -510,7 +529,7 @@ def verify_intelligence_scoring(run, stages, admission):
         tape = trace(stage)
         universe = market_output["universe"]
         _same(snapshot(stage, "input"), {"universe": universe, "top_n": request["top"], "market_data": market,
-            "scan_filters": spec.scan_filters(), "sectors": sectors, "include_entry_setups": True}, stage)
+            "scan_filters": scan_filters, "sectors": sectors, "include_entry_setups": True}, stage)
         UniverseScannerAgent(provider, universe, top_n=request["top"], include_entry_setups=True).execute(context)
         exclusions = qualify_candidates(context, output("intelligence.frontier"))
         for row in exclusions:
@@ -539,7 +558,7 @@ def verify_intelligence_scoring(run, stages, admission):
         tape = trace(stage)
         provider.trace = tape
         _same(snapshot(stage, "input"), {"watchlist": watchlist, "mrs": mrs, "sectors": sectors, "chains": chains,
-            "market_grad": spec.graduation(), "market": spec.to_dict(), "trade_date": day.isoformat(),
+            "market_grad": spec.graduation(), "market": market_contract, "trade_date": day.isoformat(),
             "account_usd": request["account"], "max_picks": request["picks"], "calendar": calendar.to_dict(),
             "tech_signal_map": signal_map}, stage)
         picks = RiskManagerAgent(provider, account_usd=request["account"], max_picks=request["picks"]).execute(context)

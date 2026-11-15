@@ -169,15 +169,10 @@ class ResearchWorkProof:
                     or diagnostic.get("json_stage") != "assistant_content"
                     or attempts[-1][2]["diagnostic"] != diagnostic):
                 _fail(stage)
-            from .rejected_native import response_identity
             for _, native, result in attempts:
                 if result["usage"] is None:
                     _fail(stage)
-                response_id, _ = response_identity(native)
-                if response_id is not None:
-                    replay.response_ids.append(response_id)
             replay.call_ids.add(call_id)
-            replay.counts[stage] += 1
             self.work_call_ids.add(call_id)
             return {"schema_failure_code": failure_code}
         fields = {"schema", "response_observation_contract", "call_id", "stage", "provider",

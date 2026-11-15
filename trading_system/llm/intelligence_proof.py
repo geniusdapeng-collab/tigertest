@@ -73,6 +73,48 @@ def _same(actual, expected, stage=None):
         _fail(stage)
 
 
+def _expected_acquisition_topics(focus=None):
+    """Rebuild the stage-visible topic map before planner ETF aliasing."""
+    if focus is not None:
+        from ..tech_focus import research_topics as focus_research_topics
+        return focus_research_topics()
+    return {**CHAIN_TOPICS, **SECTOR_TOPICS}
+
+
+def _expected_sector_symbols(focus=None):
+    if focus is not None:
+        return list(focus["sector_etfs"])
+    from ..markets import get_market
+    return get_market("us").sector_symbols
+
+
+def _selected_pick_rationale(rationale, buys):
+    if rationale is None:
+        return {}
+    if type(rationale) is not dict:
+        _fail("decision.debate")
+    return {key: item for key, item in rationale.items() if key in buys}
+
+
+def _report_projection(value):
+    """Match the final JSON report's conversion of non-finite values to null."""
+    value = _plain(value)
+    if isinstance(value, list):
+        return [_report_projection(item) for item in value]
+    if isinstance(value, dict):
+        if (set(value) == {"__type__", "reason"}
+                and value.get("__type__") == "missing"
+                and value.get("reason") in {
+                    "nan",
+                    "pandas_na",
+                    "positive_infinity",
+                    "negative_infinity",
+                }):
+            return None
+        return {key: _report_projection(item) for key, item in value.items()}
+    return value
+
+
 def frozen_clean_format_contract(run):
     """Recognize only known frozen prompt code, without importing/executing it."""
     stage = "clean.llm_semantic"
@@ -1115,13 +1157,13 @@ def _verify_acquisition(replay):
         **({"focus_profile": focus} if focus is not None else {}),
         **({"research_scope": research_scope} if research_scope is not None else {}))
     _same(frontier["security_ids"], prepared["security_roster"]["symbols"], "intelligence.frontier")
+    expected_topics = _expected_acquisition_topics(focus)
     plan_request = {"run_id": replay.run.name, "as_of": replay.cutoff.isoformat(), "market": "us",
         "universe": frontier["security_ids"], "entities": entity_registry(frontier)["entities"],
         "frontier": frontier["symbols"], "frontier_manifest_hash": frontier["manifest_sha256"],
         "market_snapshot_refs": frontier["market_snapshot_refs"], "holdings": frontier["holdings"], "pending": frontier["pending"],
         "watchlist": frontier["watchlist"],
-        "topics": (semantic.acquisition_topics(research_topics()) if focus is not None
-                   else semantic.acquisition_topics({**CHAIN_TOPICS, **SECTOR_TOPICS})),
+        "topics": semantic.acquisition_topics(expected_topics),
         "baseline_refs": ([{"manifest_sha256": packet["baseline"]["manifest"]["manifest_sha256"]}]
                           if packet["baseline"] else []), "limits": dict(TOOL_LIMITS),
         **({"acquisition_mode": "snapshot_only"} if mode == "snapshot_only" else {})}
@@ -1209,7 +1251,7 @@ def _verify_acquisition(replay):
         _verify_snapshot_only(archive, bundle, plan, snapshots, phases)
     initial = project_to_rawdocuments(phases[0])
     collection = replay.value("search.collect")
-    _same(collection, {"documents": initial, "topics": {**CHAIN_TOPICS, **SECTOR_TOPICS}, "batches": [],
+    _same(collection, {"documents": initial, "topics": expected_topics, "batches": [],
         "cleanup": {"native_calls_completed": sum(row["stage"] == "search.collect" for row in replay.native_searches)},
         "acquisition": snapshots[0]}, "search.collect")
     if snapshots[0]["rounds"]:
@@ -1386,8 +1428,9 @@ def _verify_analysis(replay, scored):
     _same(risk_input["tech_signal_map"], signal_map, "layer4.risk")
     narrative_input = replay.inputs["sector.narrative"]
     _same(narrative_input, {**expected_input, "sector_symbols": narrative_input["sector_symbols"]}, "sector.narrative")
-    from ..markets import get_market
-    _same(narrative_input["sector_symbols"], get_market("us").sector_symbols, "sector.narrative")
+    focus = (replay.policy or {}).get("tech_focus")
+    expected_sector_symbols = _expected_sector_symbols(focus)
+    _same(narrative_input["sector_symbols"], expected_sector_symbols, "sector.narrative")
     out = _analysis(replay, "sector.narrative", scored, narrative_input["sector_symbols"])
     narrative = {row["etf"]: {"score": row["narrative_score"], "bias": row["eps_revision_bias"],
         "tone": row["guidance_tone"], "evidence": "; ".join(row["evidence"]),
@@ -1482,7 +1525,7 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
     if (replay.policy or {}).get("research_work") is not None:
         from .work_proof import verify_decision_outcome
         verify_decision_outcome(replay, value, selected_symbols=[symbol for symbol in picks if symbol in buys],
-            pick_rationale={key: item for key, item in bound["rationale"].items() if key in buys})
+            pick_rationale=_selected_pick_rationale(bound["rationale"], buys))
     _same(replay.value(stage), value, stage)
     raw = result["raw"]
     _same(raw["debate"], value, stage)
@@ -1763,7 +1806,7 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
         _same(result["raw"]["model"], summary)
         _same(result["raw"]["cross_validation"], stats)
         _same(result["raw"]["tech_signals"], [signal.to_dict() for signal in signals])
-        reported = _plain(replay.value("report.emit"))
+        reported = _report_projection(replay.value("report.emit"))
         for key in ("mrs", "sectors", "chains", "watchlist"):
             _same(result[key], reported[key], "report.emit")
         for key in ("scan_stats", "entry_budget", "security_roster", "security_identities"):
