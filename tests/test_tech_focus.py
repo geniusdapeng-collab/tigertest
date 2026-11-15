@@ -13,8 +13,14 @@ from trading_system.agent_runtime import (
 from trading_system.chains import CHAINS
 from trading_system.data_models import StockCandidate
 from trading_system.intelligence_workflow import build_frontier, verify_frontier
+from trading_system.llm.intelligence_proof import (
+    _expected_acquisition_topics,
+    _report_projection,
+    _selected_pick_rationale,
+)
 from trading_system.llm.intelligence_required import acquisition_topics
 from trading_system.pipeline import _batch_with_fallback
+from trading_system.tech_chain.universe import CHAIN_TOPICS, SECTOR_TOPICS
 from trading_system.tech_focus import (
     FOCUS_POLICY,
     TECH_FOCUS_UNIVERSE,
@@ -102,6 +108,43 @@ def test_focus_topics_record_only_the_sector_mappings_present_in_its_reviewed_gr
     mapped = acquisition_topics(research_topics())
     assert {"XLK", "SMH"} <= mapped.keys()
     assert {"XLE", "XLF", "XLV", "IBB", "XLY", "XLP", "XLI", "XLU", "XLRE", "IWM"}.isdisjoint(mapped)
+
+
+def test_proof_rebuilds_the_focus_topic_map_for_search_collection():
+    assert _expected_acquisition_topics(FOCUS_POLICY.to_dict()) == research_topics()
+    assert _expected_acquisition_topics() == {**CHAIN_TOPICS, **SECTOR_TOPICS}
+
+
+def test_focus_profile_uses_only_its_reviewed_sector_etfs():
+    from trading_system.llm.intelligence_proof import _expected_sector_symbols
+
+    assert _expected_sector_symbols(FOCUS_POLICY.to_dict()) == list(FOCUS_POLICY.sector_etfs)
+    assert set(_expected_sector_symbols(FOCUS_POLICY.to_dict())) == {"XLK", "SMH"}
+
+
+def test_scoring_proof_uses_the_focus_market_and_scan_contract():
+    from trading_system.intelligence_scoring_proof import _scoring_market_contract
+    from trading_system.markets import get_market
+
+    market, filters = _scoring_market_contract(get_market("us"), FOCUS_POLICY.to_dict())
+    assert market["sector_symbols"] == list(FOCUS_POLICY.sector_etfs)
+    assert market["scan_filters"] == filters == scan_filters()
+    assert market["focus"] == FOCUS_POLICY.to_dict()
+
+
+def test_decision_proof_normalizes_a_null_rationale_on_no_buy_day():
+    assert _selected_pick_rationale(None, set()) == {}
+    assert _selected_pick_rationale({"MU": {"why": "fixture"}}, {"NVDA"}) == {}
+    assert _selected_pick_rationale(
+        {"MU": {"why": "fixture"}, "NVDA": {"why": "other"}}, {"NVDA"}
+    ) == {"NVDA": {"why": "other"}}
+
+
+def test_report_proof_matches_strict_json_nonfinite_projection():
+    missing = {"__type__": "missing", "reason": "nan"}
+    assert _report_projection({"items": [{"momentum": missing}]}) == {
+        "items": [{"momentum": None}]
+    }
 
 
 def test_work_disclosure_is_available_before_the_layer0_pending_candidate_pass(monkeypatch):
