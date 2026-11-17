@@ -28,6 +28,8 @@
 - `completion_tokens >= output_ceiling` 一律为 `MODEL_OUTPUT_EXHAUSTED`。
 - provider 批次使用同一绝对 hard deadline；完成子集保留，未完成 symbol 进入下一真实源，
   不从已完成结果外推，也不使用合成源。
+- SEC `robots.txt` 与原文请求使用同一已审定操作者 User-Agent；该身份只发往
+  `sec.gov` 及其子域，不泄漏到其他来源。
 - v4 不接受 `completed_degraded`。只有 `completed`、`receipt.operation_ok=true`、
   `verify.operation_ok=true`、`verification.ok=true`、相同 receipt hash、非空 summary
   和完整五阶段证据同时成立才算完成。

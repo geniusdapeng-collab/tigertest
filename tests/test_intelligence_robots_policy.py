@@ -9,10 +9,11 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+from urllib.parse import urlsplit
 
 import pytest
 
-from trading_system.intelligence.contracts import SourceError
+from trading_system.intelligence.contracts import SourceError, digest
 from trading_system.intelligence.robots_policy import MAX_ROBOTS_BYTES, RobotsPolicy, USER_AGENT
 from trading_system.intelligence.transport import HttpResponse, HttpTransport
 
@@ -102,6 +103,59 @@ def test_real_http_allow_disallow_raw_observation_cache_and_no_target_fetch(site
     assert body == state["body"]
     assert json.loads(record)["body_sha256"] == hashlib.sha256(body).hexdigest() == first["robots_sha256"]
     assert identity == first["observation_id"]
+
+
+def test_sec_robots_uses_operator_identity_and_product_token(tmp_path):
+    sec_user_agent = "TigerTest research operator@example.test"
+
+    class SecTransport:
+        def __init__(self):
+            self.calls = []
+
+        def request(self, method, url, **kwargs):
+            self.calls.append((method, url, kwargs))
+            body = b"User-agent: TigerTest\nAllow: /public\nDisallow: /private\n"
+            return HttpResponse(
+                url, 200, {"content-type": "text/plain"}, body,
+                "2026-11-17T00:00:00+00:00", hashlib.sha256(body).hexdigest(),
+            )
+
+    from trading_system.intelligence.host_limits import HostRequestPolicy
+
+    host_policy = HostRequestPolicy(
+        tmp_path, minimum_interval_seconds=0, respect_robots=True,
+        sec_user_agent=sec_user_agent,
+    )
+    robots = host_policy.robots
+    assert robots.user_agent_for("www.sec.gov") == sec_user_agent
+    assert robots.user_agent_for("example.com") == USER_AGENT
+
+    transport = SecTransport()
+    record, body = robots._fetch(
+        "https://www.sec.gov", "www.sec.gov", transport, time.monotonic() + 2,
+    )
+    assert transport.calls[0][2]["headers"]["User-Agent"] == sec_user_agent
+    assert record["result"] == "valid" and record["user_agent"] == sec_user_agent
+    identity = digest(record)
+    assert robots._decision(
+        identity, record, body, urlsplit("https://www.sec.gov/public/report"),
+        cache_hit=False,
+    )["allowed"] is True
+    denied(
+        lambda: robots._decision(
+            identity, record, body, urlsplit("https://www.sec.gov/private/report"),
+            cache_hit=False,
+        ),
+        "ROBOTS_DISALLOWED",
+    )
+
+
+@pytest.mark.parametrize("value", ["", "short", "noncompliant agent", 42])
+def test_invalid_sec_robots_identity_is_rejected(tmp_path, value):
+    denied(
+        lambda: policy(tmp_path, sec_user_agent=value),
+        "ROBOTS_CONFIG_INVALID",
+    )
 
 
 @pytest.mark.parametrize(("path", "allowed"), [

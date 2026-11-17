@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -78,7 +79,9 @@ class IntelligenceService:
         exemptions = [spec.options["public_data_contract"] for spec in self.registry.sources.values()
                       if spec.enabled and "public_data_contract" in spec.options]
         bind_host_policy(self.adapters, HostRequestPolicy(root, tenant=self.archive.tenant,
-            respect_robots=True, public_api_exemptions=exemptions), preserve_existing=preserve_existing)
+            respect_robots=True, public_api_exemptions=exemptions,
+            sec_user_agent=os.environ.get("TIGER_INTEL_SEC_USER_AGENT")),
+            preserve_existing=preserve_existing)
         return self
 
     @staticmethod

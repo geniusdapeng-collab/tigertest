@@ -111,6 +111,11 @@ def test_large_workload_capacity_preserves_frozen_policy_compatibility(tmp_path)
     assert validate_research_work_policy(previous) == previous
 
     store = create(tmp_path, [unit(f"capacity-{number:03d}") for number in range(64)])
+    # Force SQLite contention to remain a bounded fallback: same-instance
+    # workers must serialize short writes above SQLite instead of exhausting a
+    # slow runner's busy retry window.
+    store.busy_timeout_ms = 25
+    store.write_busy_retry_ms = 200
     active, peak, lock = 0, 0, threading.Lock()
 
     def handler(_context):
