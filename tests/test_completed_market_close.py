@@ -77,7 +77,7 @@ def test_model_daily_uses_one_completed_session_and_same_spy_chart(tmp_path, mon
     admission = {"clock": {"run_date": research_date.isoformat(), "market_timezone": "America/New_York",
                            "admitted_at_utc": execution.admitted_at.isoformat()}}
     batch = provider.ohlcv_batch
-    def mixed_dates(symbols, days=400):
+    def mixed_dates(symbols, days=400, *, hard_deadline=None, progress_callback=None):
         if execution._active.spec.name == "tech.monitor":
             assert not any(symbol.endswith((".KS", ".TW")) for symbol in symbols)
         frames = batch(symbols, days)

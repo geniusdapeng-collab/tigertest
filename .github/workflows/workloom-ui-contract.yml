@@ -110,7 +110,7 @@ jobs:
           RUN_CAPTAIN_QUEUE_BOUNDARY_PG_TESTS=1 pnpm -C "$WORKLOOM_DIR/packages/base" test captain/queue-boundaries.pg.test.ts
           pnpm -C "$WORKLOOM_DIR" suite
           if [ -f requirements.txt ] && [ -d tests ] && find tests -type f -name 'test_*.py' -print -quit | grep -q .; then
-            python -m pip install --disable-pip-version-check -r requirements.txt
+            python -m pip install --disable-pip-version-check --require-hashes -r requirements.lock
             python -m pytest -q
           fi
       - name: 验证 Tiger CLI、MCP、配置与真实 Python 协议

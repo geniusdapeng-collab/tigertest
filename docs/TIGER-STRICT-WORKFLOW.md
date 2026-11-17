@@ -27,7 +27,8 @@ P0 为完整阶段执行、固定请求边界、独立模拟账户、持久幂�
 
 ## 固定 profile 和版本
 
-新的 AI 研究和官网更新默认必须显式选择 `us-tech-intelligence-paper-v3`。
+新的 AI 研究和官网更新默认必须显式选择 `us-tech-intelligence-paper-v4`。
+`us-tech-intelligence-paper-v3` 冻结为历史 prompt/hash/回执重放路径。
 `us-public-intelligence-paper-v2` 保留历史宽池语义；`us-public-model-required-paper-v1`
 保留旧严格路径；CLI 兼容函数默认 profile `us-public-paper-v1` 仅保留旧调用/
 历史语义；`us-public-active-paper-v1` 为可选实验。各配置账户名称均为
@@ -79,7 +80,7 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 
 严格报告目前不包含白皮书 PDF 附件；「核心交易理念」明确显示未附 PDF，不生成活动下载链接，也不从源码仓、工作目录或旧报告中猜测补入附件。该边界沿用现有冻结源码、报告文件清单与回执合同，不增加未记录的附件读取。普通日报、研究报告及 JSON 转 HTML 工具只在实际 HTML 输出目录内有可读、路径安全且通过 PDF 基础结构检查的同名白皮书时显示下载，并使用实测字节数；未附或校验失败均在页面披露。基础检查覆盖 PDF 文件头、末尾 EOF 与交叉引用位置，不等于完整 PDF 内容或交易结论审核。网站导出保留页面声明的本地 PDF 及 HTML 原始字节，核验复制后的摘要；声明的附件缺失、不可读、结构无效、路径越界、含符号链接或多市场同 URL 对应不同内容时失败，不宣布站点生成成功。
 
-`events.jsonl` 为顺序追加记录，每条绑定 run_id、序号、步骤编号、输入/输出引用、前一事件摘要和前一步输出。验证器重新计算哈希、顺序、状态与引用，并检查完整业务结果和报告。保存的 `verified=true` 标记或文件存在均不能替代这些检查。
+`events.jsonl` 为顺序追加记录，每条绑定 run_id、序号、步骤编号、输入/输出引用、前一事件摘要和前一步输出。验证器重新计算哈希、顺序、状态与引用，并检查完整业务结果和报告。v4 的 append-only `attempt_quarantines` 和 `failure_diagnostics` 也进入 WorkStore 事件链；quarantine 不改写原 attempt/usage/reservation，`progress.json` 仅用于观察且被明确标记为非 receipt。保存的 `verified=true` 标记或文件存在均不能替代这些检查。
 
 严格模型日报的 `raw.research_audit` 从封存的扫描、精评、风控、公司证据、模型和复盘阶段重建。逐股记录标识、形态、期权证据、组合限额、来源与模型动作。逐关汇总分别给出分母、通过、拒绝、未知和不适用，重叠原因单列。报告生成前的阶段表截止治理链校验，独立回执从同一证据流补齐报告生成和封存阶段，分别列出子调用尝试、返回和失败。子调用返回只证明收到了记录，数据缺失和证据降级另行计数。
 
@@ -111,7 +112,7 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 
 `cancel` 是独立的持久调度取消操作，请求只含原 `run_id`。Coordinator 停止领取新单元，尚 prepared 的调用标为未发送；dispatched/observed 的 unknown 外部调用保留预留并先对账。客户端中断观察与调度取消不能混写；显式取消后不得 `resume`。
 
-控制管道关闭也不等于 guardian 已退出。supervisor 先验证完整成功控制记录，再在原业务期限内观察真实退出：Linux 使用保留子进程待回收状态的 WNOWAIT；macOS 读取自有组首进程的 PID、父 PID、组 ID 和僵尸状态。身份不符、查询失败或到期均不能作为成功。观察到退出后仍先清理进程组，最后回收并要求真实退出码为零，才允许发布账户。
+控制管道关闭也不等于 guardian 已退出。supervisor 先验证完整成功控制记录，再在原业务期限内观察真实退出：Linux 使用保留子进程待回收状态的 WNOWAIT；macOS 通过 `libproc` 的 `proc_listpids(PROC_PGRP_ONLY)` 与 `proc_pidinfo(PROC_PIDTBSDINFO)` 读取自有组首进程的 PID、父 PID、组 ID 和 zombie 状态，不依赖 `/bin/ps`。身份不符、查询失败或到期均不能作为成功。观察到退出后仍先清理进程组，最后回收并要求真实退出码为零，才允许发布账户。
 
 状态查询先采样运行锁，再读取状态文件和账户提交链。写者完成最后的状态写入后才释放运行锁，同一个 run 不会重新启动。若采样时锁仍被持有，查询可以保守地多返回一次 running；不得把完成前的状态/指针快照与完成后的无锁状态拼成虚假的 interrupted。已发布的账户提交仍优先于可变状态文件。
 
@@ -119,7 +120,7 @@ model-required 在 `clean.llm_semantic`、`tech.sentiment`、`tech.risk`、`sect
 
 ## 时间、并发和错误
 
-单个业务任务的总期限为 2400 秒。Node 单次提交/查询观察上限为 60 秒，CLI 默认等待窗口为 2460 秒；观察超时和业务超时是两个不同结果。
+单个业务任务的总期限为 2400 秒。Node 单次提交/查询观察上限为 60 秒，CLI 默认等待窗口为 2460 秒；观察超时和业务超时是两个不同结果。行情批量接口把同一个绝对 hard deadline 传给每个真实 provider；完成子集保留，未完成 ticker 不合成，并由原子 `progress.json` 每 5 秒或每 5 个 ticker 披露 provider、完成/失败/超时数量。
 
 原两个 profile 的公开搜索 45 秒收集预算适用于每一批查询；主题会展开为多批查询，不能把它描述为整个搜索阶段只花 45 秒。收集期限之后的数据不再参与决策，已启动线程另有最多 15 秒的收尾等待；未结束的线程阻止流程成功。model-required 使用同步、有界响应的原生 Search，每次请求连接/读取期限和 1 MiB 响应上限由适配器固定；无跨模型或来源回退，任一必需主题失败即停，最外层 2400 秒业务期限仍然生效。
 

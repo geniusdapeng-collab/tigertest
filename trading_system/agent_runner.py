@@ -32,8 +32,10 @@ from .agent_runtime import (
     run_environment, stage_account, stage_calendar, startup_runtime_input, validate_admission,
     validate_clock, verify_run,
     DEADLINE_SECONDS, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE,
+    CURRENT_TECH_INTELLIGENCE_PROFILE,
     INTELLIGENCE_PROFILES, RUNTIME_POLICY_ENV,
     source_observation_contract, source_inventory, source_research_work_policy,
+    research_readiness, _api_key_present,
 )
 from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
                                PreparationExpired, thread_submission)
@@ -382,7 +384,9 @@ def _submit(state: Path, request: dict, *, source: Path,
                                      research_scope_sha256=research_scope["manifest_sha256"]
                                      if research_scope is not None else None,
                                      response_observation_contract=source_observation_contract(
-                                         frozen_source["files"], request["profile"]))
+                                         frozen_source["files"], request["profile"]),
+                                     readiness=(research_readiness() if request["profile"] ==
+                                                CURRENT_TECH_INTELLIGENCE_PROFILE else None))
             atomic_json(run, "policy.json", policy, exclusive=True)
             stage_account(state, run, parent)
             stage_calendar(run)
@@ -650,45 +654,88 @@ def submit_resume(state: Path, request: dict, *,
 
 
 def doctor(state: Path, mode: str) -> dict:
-    runtime_input = startup_runtime_input(TECH_INTELLIGENCE_PROFILE)
+    runtime_input = startup_runtime_input(CURRENT_TECH_INTELLIGENCE_PROFILE)
     packages = {}
     for name in DEPENDENCIES:
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             packages[name] = None
-    python_supported = sys.version_info >= (3, 11)
-    ready = python_supported and all(packages.values())
-    value = envelope("doctor", status="ready" if ready else "not_ready", data={
+    readiness = research_readiness(packages)
+    runtime_ready = readiness["runtime_ready"]
+    status = ("ready" if readiness["full_research_ready"]
+              else "reduced_evidence" if readiness["reduced_evidence"]
+              else "runtime_ready" if runtime_ready else "not_ready")
+    value = envelope("doctor", status=status, data={
         "profile": PROFILE, "access_mode": mode, "python_version": sys.version.split()[0],
         "dependencies": packages, "state_root_exists": state.exists(),
         "platform": sys.platform, "state_writes": False, "network_requests": False,
         "business_workers_started": False,
+        "readiness": readiness,
+        "runtime_ready": readiness["runtime_ready"],
+        "model_ready": readiness["model_ready"],
+        "full_research_ready": readiness["full_research_ready"],
         "model_credentials": {
             "provider": "deepseek",
             "backend": os.environ.get("LLM_BACKEND"),
             "base_url": os.environ.get("LLM_BASE_URL"),
             "model": os.environ.get("LLM_MODEL"),
-            "api_key_present": bool(os.environ.get("LLM_API_KEY")),
+            "api_key_present": _api_key_present(),
             "required_for_intelligence_profile": True,
         },
-        "business_runtime": {"profile": TECH_INTELLIGENCE_PROFILE,
+        "sec_identity": {
+            "contact_present": readiness["checks"]["sec_contact"],
+            "user_agent_present": readiness["checks"]["sec_user_agent"],
+            "reduced_evidence": readiness["reduced_evidence"],
+        },
+        "business_runtime": {"profile": CURRENT_TECH_INTELLIGENCE_PROFILE,
             "legacy_intelligence_profile": INTELLIGENCE_PROFILE,
+            "legacy_tech_profile": TECH_INTELLIGENCE_PROFILE,
             "startup_environment": RUNTIME_POLICY_ENV, "configured": runtime_input is not None,
             "business_deadline_seconds": runtime_input["business_deadline_seconds"] if runtime_input else DEADLINE_SECONDS,
             "input_sha256": digest(json_bytes(runtime_input)) if runtime_input else None,
             "values_are_frozen_on_new_submission": True},
     })
-    value["limitations"] = policy_manifest()["limitations"]
-    if not ready:
+    value["limitations"] = policy_manifest(
+        CURRENT_TECH_INTELLIGENCE_PROFILE, readiness=readiness,
+    )["limitations"]
+    if not runtime_ready:
         value["operation_ok"] = False
         message = ("This runner requires Python 3.11 or newer."
-                   if not python_supported else "Required Python dependencies are missing.")
+                   if sys.version_info < (3, 11) else "Required Python dependencies are missing.")
         value["error"] = failure("doctor", "RUNNER_FAILED", message)["error"]
     return value
 
 
 _FAST_STATUS_SCHEMA = "tiger.research-status-summary/v1"
+_PROGRESS_SCHEMA = "tiger.run-progress/v1"
+
+
+def _progress_projection(run: Path) -> dict | None:
+    path = run / "work" / "progress.json"
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        value = read_json(run / "work", "progress.json")
+        required = {
+            "schema", "stage", "provider", "completed", "failed", "timed_out",
+            "attempted", "total", "current_chunk", "last_update", "deadline",
+            "progress_is_not_receipt",
+        }
+        if (type(value) is not dict or set(value) != required
+                or value["schema"] != _PROGRESS_SCHEMA
+                or value["progress_is_not_receipt"] is not True
+                or any(type(value[name]) is not int or value[name] < 0 for name in (
+                    "completed", "failed", "timed_out", "attempted", "total"))
+                or value["completed"] + value["failed"] + value["timed_out"]
+                    > value["total"]
+                or value["current_chunk"] is not None
+                    and (type(value["current_chunk"]) is not int or value["current_chunk"] < 1)):
+            raise ValueError
+        return value
+    except (EvidenceInvalid, OSError, ValueError, TypeError):
+        return {"schema": _PROGRESS_SCHEMA, "unavailable": True,
+                "progress_is_not_receipt": True}
 
 
 def _fast_status_projection(state: Path, run_id: str, observed: str) -> dict | None:
@@ -786,6 +833,9 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
         observed = observation["status"]
         if operation == "status":
             data = dict(observation)
+            progress = _progress_projection(state / "runs" / run_id)
+            if progress is not None:
+                data["progress"] = progress
             verification = None
             raw = None
             fast_research_status = None

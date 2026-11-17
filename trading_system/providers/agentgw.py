@@ -87,7 +87,9 @@ class AgentGwProvider(DataProvider):
             raise RuntimeError(f"agent-gw {ticker} 历史不足: {len(df)} 行")
         return df
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         """并发批量（服务端通道逐只一次调用，4 路并发 + 总墙钟预算）。"""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         out: dict[str, pd.DataFrame] = {}
@@ -95,7 +97,10 @@ class AgentGwProvider(DataProvider):
         pool = ThreadPoolExecutor(max_workers=4)
         futs = {pool.submit(self._fetch, t, days): t for t in tickers}
         try:
-            for fut in as_completed(futs, timeout=self.batch_budget_s):
+            timeout = self.batch_budget_s
+            if hard_deadline is not None:
+                timeout = min(timeout, max(0.0, hard_deadline - time.monotonic()))
+            for fut in as_completed(futs, timeout=timeout):
                 t = futs[fut]
                 try:
                     df = fut.result()

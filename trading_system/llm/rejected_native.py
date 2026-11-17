@@ -13,10 +13,17 @@ import re
 
 CONTRACT = "tiger.rejected-native/v1"
 _FINISH = {"stop", "length", "tool_calls", "content_filter", "insufficient_system_resource"}
-_CODES = {"MODEL_OUTPUT_TRUNCATED", "INCOMPLETE_MODEL_RESPONSE", "INVALID_CHOICES"}
+_CODES = {
+    "MODEL_OUTPUT_TRUNCATED", "MODEL_OUTPUT_EXHAUSTED",
+    "INCOMPLETE_MODEL_RESPONSE", "INVALID_CHOICES",
+}
 
 
-def _code(value):
+def _code(value, *, output_ceiling=None):
+    if (output_ceiling is not None
+            and type(output_ceiling) is int and output_ceiling > 0
+            and value["usage"]["completion_tokens"] >= output_ceiling):
+        return "MODEL_OUTPUT_EXHAUSTED"
     if value["choice_count"] != 1 or not value["choice_mapping"]:
         return "INVALID_CHOICES"
     if value["finish_reason"] == "length":
@@ -73,7 +80,7 @@ def capture(native, inputs, *, ordinal, body_hash, code, secret, sanitize_identi
         "content_sha256": hashlib.sha256(content.encode()).hexdigest() if isinstance(content, str) else None,
         "content_bytes": len(content.encode()) if isinstance(content, str) else None}
     value["observation_sha256"] = digest(value)
-    if _code(value) != code:
+    if _code(value, output_ceiling=inputs.get("output_ceiling")) != code:
         return None
     return validate(value, inputs, ordinal=ordinal, transport_hash=body_hash)
 
@@ -113,7 +120,7 @@ def validate(value, inputs, *, ordinal, transport_hash):
             or value["content_sha256"] is not None and (type(value["content_sha256"]) is not str
                 or re.fullmatch(r"[0-9a-f]{64}", value["content_sha256"]) is None)):
         raise ValueError("REJECTED_NATIVE_SHAPE_INVALID")
-    _code(value)
+    _code(value, output_ceiling=inputs.get("output_ceiling"))
     return deepcopy(value)
 
 
@@ -123,7 +130,9 @@ def replay(value, inputs, *, ordinal, transport):
     value = validate(value, inputs, ordinal=ordinal, transport_hash=transport["body_sha256"])
     if transport["http_status"] != 200 or transport["body_complete"] is not True:
         raise ValueError("REJECTED_NATIVE_ENVELOPE_INCOMPLETE")
-    return {"parsed": None, "diagnostic": staged_diagnostic(RequiredModelUnavailable(_code(value)), "http_envelope", transport),
+    return {"parsed": None, "diagnostic": staged_diagnostic(
+        RequiredModelUnavailable(_code(value, output_ceiling=inputs.get("output_ceiling"))),
+        "http_envelope", transport),
             "usage": value["usage"], "retry_eligible": False}
 
 

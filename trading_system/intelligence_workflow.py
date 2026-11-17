@@ -17,7 +17,8 @@ from .agent_evidence import (EvidenceInvalid, atomic_json, json_bytes, normalize
                             read_bytes, strict_json)
 from .agents.universe_scanner_agent import rank_universe
 from .chains import SECTOR_TO_CHAINS, chain_of
-from .redline.execution import ExecutionContractError, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE
+from .redline.execution import (ExecutionContractError, INTELLIGENCE_PROFILE,
+                                TECH_INTELLIGENCE_PROFILES)
 
 ACQUISITION_CONTRACT = "tiger.intelligence-acquisition.v2"
 SOURCE_CONTENT_CONTRACT = "intelligence-original-versions/v2"
@@ -187,9 +188,9 @@ def _stage_input_packet(run: Path, *, as_of: datetime,
     """Only trusted startup may supply a registry or explicit raw archive."""
     from .intelligence.registry import acquisition_mode, default_registry
 
-    if profile not in {INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE}:
+    if profile not in {INTELLIGENCE_PROFILE, *TECH_INTELLIGENCE_PROFILES}:
         raise EvidenceInvalid("INVALID_REQUEST", "Intelligence input requires an intelligence profile")
-    focused = profile == TECH_INTELLIGENCE_PROFILE
+    focused = profile in TECH_INTELLIGENCE_PROFILES
     config = {}
     configured = os.environ.get("TIGER_INTEL_REGISTRY_FILE")
     if configured:

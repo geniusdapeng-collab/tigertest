@@ -32,6 +32,7 @@ def supported(policy):
     return (policy.get("profile") in {
                 "us-public-intelligence-paper-v2",
                 "us-tech-intelligence-paper-v3",
+                "us-tech-intelligence-paper-v4",
             } and type(value) is dict
             and value.get("parent_attempt_contract") == ATTEMPT
             and value.get("provider_replay_contract") == PROVIDER_REPLAY)
@@ -264,8 +265,14 @@ def source_unknown_attempts(run):
     with archive._session() as connection:
         jobs = [row["job_id"] for row in connection.execute(
             "SELECT job_id FROM jobs WHERE tenant=? AND run_id=?", ("public", run.name))]
-    return [{"job_id": job, "attempt_id": row["attempt_id"], "state": row["status"]}
-            for job in jobs for row in archive.attempts(job) if row["status"] in {"inflight", "unknown"}]
+    rows = []
+    for job in jobs:
+        quarantined = {item["attempt_id"] for item in archive.quarantined_attempts(job)}
+        rows.extend({"job_id": job, "attempt_id": row["attempt_id"], "state": row["status"]}
+                    for row in archive.attempts(job)
+                    if row["status"] in {"inflight", "unknown"}
+                    and row["attempt_id"] not in quarantined)
+    return rows
 
 
 def _recover_work_store(run, admission, policy, verifier):
@@ -290,7 +297,9 @@ def _recover_work_store(run, admission, policy, verifier):
                 raise EvidenceInvalid("RECONCILIATION_REQUIRED", "Observed model usage did not pass native replay")
             store.settle_attempt(row["attempt_id"])
     current_attempts = store.attempts()
-    if (any(row["state"] in {"dispatched", "observed"} for row in current_attempts)
+    quarantined = {row["attempt_id"] for row in store.quarantines()}
+    if (any(row["state"] in {"dispatched", "observed"}
+            and row["attempt_id"] not in quarantined for row in current_attempts)
             or source_unknown_attempts(run)):
         raise EvidenceInvalid("RECONCILIATION_REQUIRED", "An original external attempt remains unknown; retain its reservation")
     attempts_by_unit = {}

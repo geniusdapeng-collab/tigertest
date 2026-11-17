@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 import importlib.metadata
+import json
 import math
 import os
 from pathlib import Path
@@ -29,6 +30,9 @@ from .agent_evidence import (
 from .redline.execution import (ExecutionPolicy, daily_stage_contract, REQUIRED_PROFILE,
                                 REQUIRED_POLICY_ID, INTELLIGENCE_PROFILE, INTELLIGENCE_POLICY_ID,
                                 TECH_INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_POLICY_ID,
+                                CURRENT_TECH_INTELLIGENCE_PROFILE,
+                                CURRENT_TECH_INTELLIGENCE_POLICY_ID,
+                                TECH_INTELLIGENCE_PROFILES,
                                 INTELLIGENCE_PROFILES, INTELLIGENCE_SEARCH_SOURCES)
 from .tech_chain.risk_evidence import CONTRACT as RISK_EVIDENCE_CONTRACT
 from .tech_chain.risk_evidence import SOURCE_PATH as RISK_EVIDENCE_RELATIVE
@@ -40,7 +44,7 @@ PROFILE = "us-public-paper-v1"
 ACTIVE_PROFILE = "us-public-active-paper-v1"
 SUPPORTED_PROFILES = frozenset({
     PROFILE, ACTIVE_PROFILE, REQUIRED_PROFILE, INTELLIGENCE_PROFILE,
-    TECH_INTELLIGENCE_PROFILE,
+    TECH_INTELLIGENCE_PROFILE, CURRENT_TECH_INTELLIGENCE_PROFILE,
 })
 ACCOUNT = "public-usd"
 POLICY_ID = "tiger.public-paper-policy.v1"
@@ -51,6 +55,9 @@ MAX_DEADLINE_SECONDS = 7200
 RUNTIME_POLICY_ENV = "TIGER_AGENT_RUNTIME_POLICY_FILE"
 RUNTIME_POLICY_SCHEMA = "tiger.agent-runtime-policy/v1"
 RUNTIME_INPUT_SCHEMA = "tiger.agent-runtime-input/v1"
+READINESS_SCHEMA = "tiger.run-readiness/v1"
+READINESS_INPUT_ENV = "TIGER_READINESS_INPUT"
+READINESS_INPUT_SCHEMA = "tiger.readiness-input/v1"
 MAX_RUNTIME_POLICY_BYTES = 4096
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_ACCOUNT_FILES = frozenset({
@@ -72,6 +79,120 @@ PAPER_LEDGER_CONTRACT = "tiger.paper-execution.v1"
 # The last deployed contract used 4,000/1,600-character excerpts. Recognize it
 # only from its already frozen source bytes, not a missing marker in new runs.
 LEGACY_REQUIRED_SOURCE_SHA256 = "220713e8d783adc4d68512e484c85fc60269335659cdcfa9b118ee990b69eceb"
+
+
+def _readiness_input() -> dict | None:
+    raw = os.environ.get(READINESS_INPUT_ENV)
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    fields = {"schema", "api_key_present", "model_ready", "sec_contact", "sec_user_agent"}
+    if (type(value) is not dict or set(value) != fields
+            or value.get("schema") != READINESS_INPUT_SCHEMA
+            or type(value.get("api_key_present")) is not bool
+            or type(value.get("model_ready")) is not bool
+            or type(value.get("sec_contact")) is not bool
+            or type(value.get("sec_user_agent")) is not bool
+            or value["model_ready"] and not value["api_key_present"]
+            or value["sec_user_agent"] and not value["sec_contact"]):
+        return None
+    return value
+
+
+def _api_key_present() -> bool:
+    observed = _readiness_input()
+    return bool(os.environ.get("LLM_API_KEY")) if observed is None else observed["api_key_present"]
+
+
+def research_readiness(packages: dict | None = None) -> dict:
+    """Runtime, model and full-research readiness without network calls."""
+    packages = packages if packages is not None else {
+        name: _package_version(name) for name in DEPENDENCIES
+    }
+    runtime_ready = sys.version_info >= (3, 11) and all(packages.get(name) for name in DEPENDENCIES)
+    observed = _readiness_input()
+    if observed is None:
+        key = os.environ.get("LLM_API_KEY", "")
+        model_ready = (
+            os.environ.get("LLM_BACKEND") == "api"
+            and os.environ.get("LLM_BASE_URL") == "https://api.deepseek.com"
+            and os.environ.get("LLM_MODEL") == "deepseek-flash"
+            and isinstance(key, str) and 0 < len(key) <= 4096
+            and key.strip() == key
+            and all(33 <= ord(char) <= 126 for char in key)
+        )
+        contact = os.environ.get("TIGER_SEC_CONTACT", "")
+        user_agent = os.environ.get("TIGER_INTEL_SEC_USER_AGENT", "")
+        contact_valid = (
+            type(contact) is str and len(contact) <= 254
+            and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", contact) is not None
+        )
+        user_agent_valid = (
+            type(user_agent) is str and 8 <= len(user_agent) <= 256
+            and not any(ord(char) < 32 or ord(char) == 127 for char in user_agent)
+            and contact_valid and contact in user_agent
+        )
+    else:
+        model_ready = observed["model_ready"]
+        contact_valid = observed["sec_contact"]
+        user_agent_valid = observed["sec_user_agent"]
+    sec_identity_ready = contact_valid and user_agent_valid
+    return {
+        "schema": READINESS_SCHEMA,
+        "runtime_ready": runtime_ready,
+        "model_ready": model_ready,
+        "sec_identity_ready": sec_identity_ready,
+        "full_research_ready": runtime_ready and model_ready and sec_identity_ready,
+        "reduced_evidence": runtime_ready and model_ready and not sec_identity_ready,
+        "checks": {
+            "python_3_11": sys.version_info >= (3, 11),
+            "dependencies": all(packages.get(name) for name in DEPENDENCIES),
+            "deepseek_model": model_ready,
+            "sec_contact": contact_valid,
+            "sec_user_agent": user_agent_valid,
+        },
+    }
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def validate_readiness(value: object) -> dict:
+    fields = {
+        "schema", "runtime_ready", "model_ready", "sec_identity_ready",
+        "full_research_ready", "reduced_evidence", "checks",
+    }
+    check_fields = {"python_3_11", "dependencies", "deepseek_model", "sec_contact", "sec_user_agent"}
+    if (type(value) is not dict or set(value) != fields or value.get("schema") != READINESS_SCHEMA
+            or any(type(value[name]) is not bool for name in (
+                "runtime_ready", "model_ready", "sec_identity_ready",
+                "full_research_ready", "reduced_evidence"))
+            or type(value.get("checks")) is not dict or set(value["checks"]) != check_fields
+            or any(type(item) is not bool for item in value["checks"].values())
+            or value["full_research_ready"] != (
+                value["runtime_ready"] and value["model_ready"] and value["sec_identity_ready"])
+            or value["reduced_evidence"] != (
+                value["runtime_ready"] and value["model_ready"] and not value["sec_identity_ready"])):
+        raise EvidenceInvalid("RESULT_INVALID", "Frozen run readiness is invalid")
+    return {**value, "checks": dict(value["checks"])}
+
+
+def completion_status(profile: str, degraded: object) -> str:
+    if isinstance(degraded, list):
+        degraded = bool(degraded)
+    if type(degraded) is not bool:
+        raise EvidenceInvalid("RESULT_INVALID", "Completion degradation flag is invalid")
+    status = "completed_degraded" if degraded else "completed"
+    if profile == CURRENT_TECH_INTELLIGENCE_PROFILE and status != "completed":
+        raise EvidenceInvalid("RESULT_INVALID", "v4 cannot publish a completed_degraded run")
+    return status
 
 
 def source_observation_contract(files, profile):
@@ -101,6 +222,12 @@ def source_research_work_policy(files, profile, source_root: Path | None = None)
                 "trading_system/llm/work_proof.py", "trading_system/tasks/contracts.py",
                 "trading_system/tasks/store.py", "trading_system/tasks/context.py",
                 "trading_system/tasks/scheduler.py", "trading_system/tasks/recovery.py"}
+    if profile == CURRENT_TECH_INTELLIGENCE_PROFILE:
+        required |= {
+            "trading_system/llm/coverage_proof.py",
+            "trading_system/platform_process.py",
+            "trading_system/tasks/validation_diagnostic.py",
+        }
     if "trading_system/research_work.py" not in paths:
         return None
     if not required <= paths:
@@ -110,7 +237,10 @@ def source_research_work_policy(files, profile, source_root: Path | None = None)
     if source_root is not None:
         marker = read_bytes(source_root, "trading_system/research_work.py")
         legacy = b"SEGMENT_CONTRACT" not in marker or b"segment_contract" not in marker
-    return research_work_policy(legacy=legacy)
+    return research_work_policy(
+        legacy=legacy,
+        reliability=profile == CURRENT_TECH_INTELLIGENCE_PROFILE,
+    )
 
 
 def validate_runtime_input(value: object, profile: str) -> dict:
@@ -176,11 +306,13 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
                     runtime_input: dict | None = None,
                     response_observation_contract: str | None = None,
                     model_counter_id: str | None = None, research_work: dict | None = None,
-                    research_scope_sha256: str | None = None) -> dict:
+                    research_scope_sha256: str | None = None,
+                    readiness: dict | None = None) -> dict:
     if not isinstance(profile, str) or profile not in SUPPORTED_PROFILES:
         raise EvidenceInvalid("INVALID_REQUEST", "Unsupported workflow profile")
     intelligence = profile in INTELLIGENCE_PROFILES
-    tech_focus = profile == TECH_INTELLIGENCE_PROFILE
+    tech_focus = profile in TECH_INTELLIGENCE_PROFILES
+    reliability_v4 = profile == CURRENT_TECH_INTELLIGENCE_PROFILE
     if research_work is not None:
         from .research_work import validate_research_work_policy
         if not intelligence:
@@ -198,12 +330,21 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         raise EvidenceInvalid("RESULT_INVALID", "Unknown model response observation contract")
     required = profile == REQUIRED_PROFILE or intelligence
     active = profile == ACTIVE_PROFILE
-    policy_id = (TECH_INTELLIGENCE_POLICY_ID if tech_focus else
+    policy_id = (CURRENT_TECH_INTELLIGENCE_POLICY_ID if reliability_v4 else
+                 TECH_INTELLIGENCE_POLICY_ID if tech_focus else
                  INTELLIGENCE_POLICY_ID if intelligence else REQUIRED_POLICY_ID if required
                  else "tiger.public-active-paper-policy.v1" if active else POLICY_ID)
+    if reliability_v4:
+        readiness = validate_readiness(research_readiness() if readiness is None else readiness)
+    elif readiness is not None:
+        raise EvidenceInvalid("RESULT_INVALID", "Run readiness is restricted to the v4 profile")
     execution = ExecutionPolicy(policy_id=policy_id, model_mode="enabled",
                                 search_source_names=INTELLIGENCE_SEARCH_SOURCES if intelligence
-                                else ("deepseek_search",)) if required else ExecutionPolicy(policy_id=policy_id)
+                                else ("deepseek_search",),
+                                reduced_evidence=bool(readiness and readiness["reduced_evidence"])) if required else ExecutionPolicy(policy_id=policy_id)
+    execution_value = asdict(execution)
+    if not reliability_v4:
+        execution_value.pop("reduced_evidence", None)
     value = {
         "schema": "tiger.policy.v1", "profile": profile,
         "paper_account": ACCOUNT, "execution_mode": "paper",
@@ -214,7 +355,7 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
         "strategy": ("tech-intelligence-first-v1" if tech_focus else
                      "evidence-complete-active-v1" if active else "reviewed_source_defaults"),
         "use_tuned": False, "real_broker": False,
-        "execution": asdict(execution),
+        "execution": execution_value,
         "market_timezone": "America/New_York",
         "date_basis": "admission instant in market timezone",
         "search_collection_budget_seconds": 45.0,
@@ -231,6 +372,12 @@ def policy_manifest(profile: str = PROFILE, *, scene_policy_path: Path | None = 
             "Local cooperative processes; no hostile same-user or external rollback anchoring guarantee.",
         ],
     }
+    if readiness is not None:
+        value["readiness"] = readiness
+        value["reliability_contract"] = "tiger.reliability-contract/v4"
+        if readiness["reduced_evidence"]:
+            value["limitations"].append(
+                "Reduced evidence: SEC operator identity is incomplete; BUY is forbidden and missing evidence can only produce WAIT/AVOID.")
     if runtime_input is not None:
         runtime_input = validate_runtime_input(runtime_input, profile)
         value["business_deadline_seconds"] = runtime_input["business_deadline_seconds"]
@@ -734,6 +881,9 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
             or not isinstance(request.get("profile"), str)
             or request.get("profile") not in SUPPORTED_PROFILES):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy or request identity differs")
+    if (request.get("profile") == CURRENT_TECH_INTELLIGENCE_PROFILE
+            and not isinstance(policy.get("readiness"), dict)):
+        raise EvidenceInvalid("RESULT_INVALID", "v4 admission lacks frozen readiness")
     expected = {"schema_version": "tiger.agent-request/v1", "profile": request["profile"],
                 "paper_account": ACCOUNT, "idempotency_key": request.get("idempotency_key")}
     if (request != expected or not isinstance(request.get("idempotency_key"), str)
@@ -807,7 +957,8 @@ def validate_admission(run: Path, *, validate_working_calendar: bool = True) -> 
                                       runtime_input=runtime_input,
                                       model_counter_id=model_counter_id,
                                       response_observation_contract=source_observation_contract(
-                                          source["files"], request["profile"]))
+                                          source["files"], request["profile"]),
+                                      readiness=policy.get("readiness"))
     if policy != strict_json(json_bytes(expected_policy)):
         raise EvidenceInvalid("RESULT_INVALID", "Admission policy differs from frozen source")
     calendar_content, calendar_record = _calendar_input(run)
@@ -1014,6 +1165,8 @@ def business_summary(run: Path, admission: dict, artifacts: list[dict]) -> dict:
         if any(ref["path"] == RESEARCH_AUDIT_SOURCE for ref in read_json(run, "source-manifest.json")["files"]):
             summary["disclosures"]["research_audit"] = verify_audit(run, raw.get("research_audit"))
         policy = read_json(run, "policy.json")
+        if policy.get("readiness") is not None:
+            summary["disclosures"]["readiness"] = validate_readiness(policy["readiness"])
         if policy.get("paper_ledger_contract") == PAPER_LEDGER_CONTRACT:
             from .paper_proof import verify_paper_execution
             summary["disclosures"]["paper_execution"] = verify_paper_execution(run, admission, result, sim)
@@ -1127,7 +1280,7 @@ def verify_run(state: Path, run_id: str, *, require_committed: bool = True,
               if prepared_stages is None else prepared_stages)
     if receipt.get("event_tail_sha256") != stages["last_event_sha256"]:
         raise EvidenceInvalid("EVIDENCE_HASH_MISMATCH", "Receipt event tail differs")
-    status = "completed_degraded" if stages["degraded"] else "completed"
+    status = completion_status(policy["profile"], stages["degraded"])
     if receipt.get("status") != status:
         raise EvidenceInvalid("RESULT_INVALID", "Receipt completion state differs")
     before = read_json(run, "account-input.json")
@@ -1338,6 +1491,7 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         from .research_resume import publish_parent_events
         publish_parent_events(run, admission, policy)
     stages = verify_events(run, run.name, policy["stages"])
+    completion_status(policy["profile"], stages["degraded"])
     summary = business_summary(run, admission, engine["artifacts"])
     research_history = None
     research_history_value = None
@@ -1350,7 +1504,7 @@ def seal_and_publish(state: Path, run: Path, *, deadline: float | None = None) -
         "schema": "tiger.receipt.v1", "run_id": run.name, "profile": policy["profile"],
         "sealed_at_utc": datetime.now(timezone.utc).isoformat(),
         "paper_account": ACCOUNT,
-        "status": "completed_degraded" if stages["degraded"] else "completed",
+        "status": completion_status(policy["profile"], stages["degraded"]),
         "parent": admission["parent"],
         "account_version_sha256": digest(read_bytes(run, "account-version.json")),
         "event_tail_sha256": stages["last_event_sha256"],

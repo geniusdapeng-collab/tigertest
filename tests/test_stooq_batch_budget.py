@@ -123,11 +123,11 @@ def test_strict_fallback_records_exhaustion_and_reaches_existing_trusted_source(
     constructors, source_calls = [], []
     class Primary:
         name, synthetic = "yahoo", False
-        def ohlcv_batch(self, tickers, days=400):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
             return {}
     class Backup:
         name, synthetic = "sina", False
-        def ohlcv_batch(self, tickers, days=400):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
             source_calls.append(list(tickers))
             return {ticker: frame() for ticker in tickers}
     def stooq_factory(**kwargs):

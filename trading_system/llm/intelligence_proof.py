@@ -1072,10 +1072,17 @@ def _verify_phase_status(archive, snapshot, bundle, plan, *, research_work_polic
         "fetches": sum(row["operation"] == "fetch" for row in attempts),
         "bytes": sum(row["result"]["bytes_received"] for row in attempts),
         "unreconciled_attempts": sum(bool(row["result"]["usage"].get("requires_reconciliation")) for row in attempts)}
+    quarantines = [row for row in archive.quarantined_attempts(bundle["job_id"])
+                   if row["event_sequence"] <= status["revision"]]
+    quarantined_ids = {row["attempt_id"] for row in quarantines}
     expected = {"job_id": bundle["job_id"], "run_id": bundle["run_id"], "state": state,
         "revision": len(events), "created_at": archive.status(bundle["job_id"])["created_at"],
         "plan_hash": plan["plan_hash"], "gaps": _project_gaps(events), "attempts": attempts,
-        "inflight_attempts": [], "usage": usage, "effective_concurrency": 1, "bundle": None}
+        "inflight_attempts": [], "usage": usage, "effective_concurrency": 1, "bundle": None,
+        "quarantined_attempts": quarantines,
+        "unresolved_attempts": [row["attempt_id"] for row in attempts
+                                if row["status"] in {"inflight", "unknown"}
+                                and row["attempt_id"] not in quarantined_ids]}
     if research_work_policy is not None:
         from .work_proof import source_runtime_from_events, source_usage
         expected["usage"] = source_usage(attempts)
@@ -1216,6 +1223,30 @@ def _verify_acquisition(replay):
     for stage in ("search.collect", "clean.llm_semantic"):
         observed.extend(replay.source_io(stage, bundle, registry, archive))
     attempts = bundle["attempts"]
+    quarantines = bundle.get("quarantined_attempts", [])
+    archive_quarantines = archive.quarantined_attempts(bundle["job_id"])
+    _same(quarantines, archive_quarantines, "search.collect")
+    known_targets = {row["target_id"] for row in plan["coverage_cells"]}
+    by_attempt = {row["attempt_id"]: row for row in attempts}
+    for row in quarantines:
+        attempt = by_attempt.get(row.get("attempt_id"))
+        if (attempt is None or attempt["status"] not in {"inflight", "unknown"}
+                or row.get("scope") != "source"
+                or not isinstance(row.get("affected_targets"), list)
+                or not row["affected_targets"] or not set(row["affected_targets"]) <= known_targets
+                or row.get("usage_state") != "unknown"
+                or row.get("reservation_state") not in {"held", "not_applicable"}):
+            _fail("search.collect")
+        later = [
+            event for event in archive.events(bundle["job_id"], kind="attempt_started")
+            if event["sequence"] > row["event_sequence"]
+            and event["payload"].get("source_id") == attempt["source_id"]
+            and event["payload"].get("operation") == attempt["operation"]
+            and event["payload"].get("request_sha256") == attempt["request_sha256"]
+            and event["payload"].get("ordinal") == attempt["ordinal"]
+        ]
+        if later:
+            _fail("search.collect")
     # A locally denied request before observe_io can remain a settled not-sent
     # attempt; it is never allowed to contribute a source document.
     absent = [row for row in attempts if row["attempt_id"] not in observed]
@@ -1223,6 +1254,11 @@ def _verify_acquisition(replay):
             or row["result"].get("request_count") != 0
             or row["result"].get("usage", {}).get("state") != "not_sent" for row in absent)):
         _fail()
+    quarantine_ids = {row["attempt_id"] for row in quarantines}
+    if not quarantine_ids <= {row["attempt_id"] for row in absent}:
+        # A quarantined dispatch must remain an absent source receipt, never a
+        # document-producing success or an observed business result.
+        _fail("search.collect")
     _verify_document_attempts(bundle, packet, research_work=(replay.policy or {}).get("research_work") is not None)
     usage = {"requests": sum(row["result"]["request_count"] for row in attempts),
         "fetches": sum(row["operation"] == "fetch" for row in attempts),
@@ -1363,7 +1399,8 @@ def _verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, 
         "documents": cleaned, "stats": stats}, "intelligence.freeze")
     assessment = _normalized_assessment(semantic.assessment_rows(cleaned, plan))
     _same(bundle["claims"], assessment["claims"], "intelligence.freeze")
-    _same(bundle["coverage"], assessment["coverage"], "intelligence.freeze")
+    from .coverage_proof import compare_coverage_base
+    compare_coverage_base(bundle["coverage"], assessment["coverage"], "intelligence.freeze")
     gaps = [{**row, "reason": row.get("reason", "DETERMINISTIC_ASSESSMENT"),
              "required": cell["required"]} for row, cell in zip(assessment["coverage"], plan["coverage_cells"], strict=True)]
     observed_gaps = [{key: value for key, value in row.items() if key not in {"source_diagnostics", "source_reason"}}
@@ -1791,9 +1828,10 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
         cleaned, scored, stats = _verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, phases)
         signals = _verify_analysis(replay, scored)
         _verify_decision(replay, cleaned, frontier, bundle, market, result)
+        research_work_proof = None
         if (replay.policy or {}).get("research_work") is not None:
             from .work_proof import work_proof
-            work_proof(replay).assert_complete()
+            research_work_proof = work_proof(replay).assert_complete()
         if not all(replay.counts.values()):
             _fail()
         summary = {"provider": "deepseek", "model": MODEL, "release": RELEASE, "required": True,
@@ -1803,6 +1841,11 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
             "search_mode": SEARCH_MODE, "all_required_completed": True,
             "acquisition_contract": ACQUISITION_CONTRACT, "bundle_id": bundle["bundle_id"],
             "source_requests": bundle["usage"]["requests"]}
+        if (replay.policy or {}).get("profile") == "us-tech-intelligence-paper-v4":
+            summary["research_work"] = {
+                "quarantined_attempts": research_work_proof["quarantined_attempts"],
+                "quarantined_targets": research_work_proof["quarantined_targets"],
+            }
         _same(result["raw"]["model"], summary)
         _same(result["raw"]["cross_validation"], stats)
         _same(result["raw"]["tech_signals"], [signal.to_dict() for signal in signals])
@@ -1848,6 +1891,15 @@ def verify_intelligence_model(run, result, admission, *, scene_policy_path=None,
                 or raw["gaps"] != disclosed_gaps or raw["source_registry_sha256"] != registry.public_manifest()["sha256"]
                 or raw["holdings_connection"] != ("unknown" if frontier["holdings"] is None else "connected")):
             _fail()
+        _same(raw.get("quarantined_attempts"), bundle.get("quarantined_attempts"),
+              "search.collect")
+        if "quarantined_attempts" in bundle:
+            _same(raw.get("quarantined_targets"), sorted({
+                target for row in bundle["quarantined_attempts"]
+                for target in row["affected_targets"]
+            }), "search.collect")
+        elif "quarantined_targets" in raw:
+            _fail("search.collect")
         packet = validate_input_packet(read_json(replay.run, "intelligence-input.json"))
         if acquisition_mode(packet["config"]) == "snapshot_only":
             if raw.get("acquisition_mode") != "snapshot_only":

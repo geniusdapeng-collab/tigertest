@@ -150,10 +150,14 @@ class Coordinator:
                     context.publish_result(value, validator=validator)
             except BaseException as error:
                 code = _handler_error_code(error)
+                diagnostic = getattr(error, "diagnostic", None)
+                if not (isinstance(diagnostic, dict)
+                        and diagnostic.get("schema") == "tiger.validation-diagnostic/v1"):
+                    diagnostic = None
                 try:
                     self.store.fail(lease, code, retryable=code in {
                         "STORE_BUSY", "RESOURCE_COST_INVALID",
-                    })
+                    }, diagnostic=diagnostic)
                 except WorkUnitError as persistence:
                     if persistence.code not in {"LEASE_FENCED", "TASK_CANCELLED"}:
                         raise

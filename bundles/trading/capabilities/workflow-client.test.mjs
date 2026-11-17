@@ -115,6 +115,22 @@ test("P04: fixed argv, code cwd and allowlisted environment do not inherit crede
   const env = runtimeEnvironment({ PATH: "/bin", HOME: "/home/test", OPENAI_API_KEY: "fake", PYTHONPATH: "/untrusted", NODE_OPTIONS: "--require bad", WORKLOOM_KEYS_FILE: "/secret", HTTPS_PROXY: "http://127.0.0.1:7890" });
   assert.equal(env.HOME, "/home/test"); assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:7890");
   assert.equal(env.OPENAI_API_KEY, undefined); assert.equal(env.PYTHONPATH, undefined); assert.equal(env.NODE_OPTIONS, undefined); assert.equal(env.WORKLOOM_KEYS_FILE, undefined);
+  const readiness = runtimeEnvironment({
+    LLM_API_KEY: "fixture-key", LLM_BACKEND: "api", LLM_BASE_URL: "https://api.deepseek.com",
+    LLM_MODEL: "deepseek-flash", TIGER_SEC_CONTACT: "operator@example.com",
+    TIGER_INTEL_SEC_USER_AGENT: "TigerTest operator@example.com",
+    TIGER_INTEL_BRAVE_API_KEY: "unneeded-provider-key", OPENAI_API_KEY: "unrelated",
+  }, false, true);
+  const readinessInput = JSON.parse(readiness.TIGER_READINESS_INPUT);
+  assert.deepEqual(readinessInput, {
+    schema: "tiger.readiness-input/v1", api_key_present: true, model_ready: true,
+    sec_contact: true, sec_user_agent: true,
+  });
+  assert.equal(readiness.LLM_API_KEY, undefined);
+  assert.equal(readiness.TIGER_SEC_CONTACT, undefined);
+  assert.equal(readiness.TIGER_INTEL_SEC_USER_AGENT, undefined);
+  assert.equal(readiness.TIGER_INTEL_BRAVE_API_KEY, undefined);
+  assert.equal(readiness.OPENAI_API_KEY, undefined);
   const response = await invokeWorkflow("doctor", {}, fixture.options);
   assert.equal(response.operation_ok, true);
   const [call] = await fixture.calls();
@@ -122,6 +138,8 @@ test("P04: fixed argv, code cwd and allowlisted environment do not inherit crede
   assert.equal(call.cwd, ROOT);
   assert.equal(call.envNames.some((key) => /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/u.test(key)), false);
   assert.equal(existsSync(fixture.stateRoot), false);
+  assert.equal(validateEnvelope(result("doctor", { status: "runtime_ready" }), "doctor").status, "runtime_ready");
+  assert.equal(validateEnvelope(result("doctor", { status: "reduced_evidence" }), "doctor").status, "reduced_evidence");
 });
 
 test("N06: accepted/recovered identity and status are distinct from verified receipt", async (t) => {

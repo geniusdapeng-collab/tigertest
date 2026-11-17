@@ -165,12 +165,21 @@ class ResearchWorkProof:
             observation = validate_reference_observation(failure["response_observation"])
             attempts = replay._observed_attempts(stage, request, observation)
             failure_code = DOCUMENT_FORMAT_FAILURES.get(diagnostic.get("code"))
+            quarantined = {row["attempt_id"] for row in self.store.quarantines()}
+            call_attempts = [
+                row for row in self.store.attempts()
+                if self.store.read_attempt_request(row["attempt_id"])["call_id"] == call_id
+            ]
+            quarantine_covered = bool(call_attempts) and all(
+                row["attempt_id"] in quarantined for row in call_attempts)
+            expected_stages = ({"http_envelope", "assistant_content"}
+                               if quarantine_covered else {"assistant_content"})
             if (failure_code is None
-                    or diagnostic.get("json_stage") != "assistant_content"
+                    or diagnostic.get("json_stage") not in expected_stages
                     or attempts[-1][2]["diagnostic"] != diagnostic):
                 _fail(stage)
             for _, native, result in attempts:
-                if result["usage"] is None:
+                if result["usage"] is None and not quarantine_covered:
                     _fail(stage)
             replay.call_ids.add(call_id)
             self.work_call_ids.add(call_id)
@@ -272,11 +281,15 @@ class ResearchWorkProof:
         stage = "clean.llm_semantic"
         if raw.doc_id in self.document_hashes:
             _fail(stage)
+        assessment = dict(self.replay.assessment)
+        if self.replay.policy.get("profile") == "us-tech-intelligence-paper-v4":
+            from .intelligence_required import DECISION_FORMAT_CONTRACT
+            assessment["decision_format_contract"] = DECISION_FORMAT_CONTRACT
         plan = (plan_document_segments(Planner(self), raw, legacy.TARGET_IDS,
-            self.replay.assessment, self.policy)
+            assessment, self.policy)
             if "segment_input_token_limit" in self.policy else None)
         specs, units, _entries = document_unit_specs(raw, plan, legacy.TARGET_IDS,
-            self.replay.assessment, validation_context, self.policy)
+            assessment, validation_context, self.policy)
         by_id = {spec.unit_id: spec for spec in specs}
 
         index = 0
@@ -336,7 +349,7 @@ class ResearchWorkProof:
 
         if plan is None:
             extract_spec = by_id[units["extracts"][0]]
-            args = document_arguments("extract", raw, legacy.TARGET_IDS, self.replay.assessment)
+            args = document_arguments("extract", raw, legacy.TARGET_IDS, assessment)
             value, native, result = consume(extract_spec, args,
                 stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
                              "unit_id": extract_spec.unit_id, "arguments": args})
@@ -358,7 +371,7 @@ class ResearchWorkProof:
                 "validation": validation}, stage)
             _same(result["dispositions"], {}, stage)
             args = document_arguments("document_review", raw, legacy.TARGET_IDS,
-                self.replay.assessment, annotation=annotation_payload(document))
+                assessment, annotation=annotation_payload(document))
             value, native, result = consume(review_spec, args,
                 stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "document_review",
                              "unit_id": review_spec.unit_id, "arguments": args})
@@ -382,7 +395,7 @@ class ResearchWorkProof:
             for number, segment in enumerate(segments, 1):
                 extract_spec = by_id[units["extracts"][number - 1]]
                 args = document_arguments("extract", segment, legacy.TARGET_IDS,
-                                         self.replay.assessment)
+                                         assessment)
                 value, native, result = consume(extract_spec, args,
                     stage_input={"contract": WORK_CLEAN_CONTRACT, "phase": "extract",
                                  "unit_id": extract_spec.unit_id, "arguments": args})
@@ -407,7 +420,7 @@ class ResearchWorkProof:
                     "annotation": annotation_payload(local), "validation": validation}, stage)
                 _same(result["dispositions"], {}, stage)
                 args = document_arguments("document_review", segment, legacy.TARGET_IDS,
-                    self.replay.assessment, annotation=annotation_payload(local))
+                    assessment, annotation=annotation_payload(local))
                 value, native, result = consume(review_spec, args,
                     stage_input={"contract": WORK_CLEAN_CONTRACT,
                                  "phase": "document_review",
@@ -441,7 +454,7 @@ class ResearchWorkProof:
             segment_rows = [{"segment_id": manifest["segments"][number]["id"],
                              "summary_zh": row["summary_zh"]}
                             for number, row in enumerate(annotations)]
-            args = segment_summary_arguments(raw, segment_rows, self.replay.assessment)
+            args = segment_summary_arguments(raw, segment_rows, assessment)
             value, native, result = consume(summary_spec, args,
                 stage_input={"contract": self.policy["segment_contract"],
                              "phase": "metadata_synthesis",
@@ -544,22 +557,46 @@ class ResearchWorkProof:
     def assert_complete(self):
         self.store.verify()
         status = self.store.status()
-        if (status["graph_state"] != "completed" or status["unknown_attempts"]
+        quarantines = self.store.quarantines()
+        quarantined_ids = {row["attempt_id"] for row in quarantines}
+        if (status["graph_state"] != "completed" or status["active_unknown_attempts"]
+                or status["unknown_attempts"] != len(quarantined_ids)
                 or {row["unit_id"] for row in status["units"]} != self.verified_units
                 or self.store.document_dispositions()["documents"].keys() != self.document_hashes.keys()
                 or status["format_reanswers"] > 1):
             _fail()
         observations = [row for row in self.replay.chat_observations if row["call_id"] in self.work_call_ids]
+        with self.store._tx() as connection:
+            attempts = self.store._rows(connection, "attempts")
+        call_by_attempt = {
+            row["attempt_id"]: self.store.read_attempt_request(row["attempt_id"])["call_id"]
+            for row in attempts
+        }
+        reservations = [
+            {"attempt_id": row["attempt_id"], "unit_id": row["unit_id"],
+             "reservation": deepcopy(row["reservation"]),
+             "ledger_state": row["state"],
+             "requires_reconciliation": row["attempt_id"] not in quarantined_ids}
+            for row in attempts if row["state"] in {"dispatched", "observed"}
+        ]
+        quarantined_calls = {call_by_attempt.get(attempt_id) for attempt_id in quarantined_ids}
         amount = {key: sum(row["usage"][key] for row in observations if row["usage"] is not None)
                   for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
-        if (len(observations) != status["settled_attempts"]
-                or any(row["usage"] is None for row in observations)
+        if (len(observations) != status["settled_attempts"] + len(quarantined_ids)
+                or any(row["usage"] is None and row["call_id"] not in quarantined_calls
+                       for row in observations)
+                or any(row["usage"] is not None and row["call_id"] in quarantined_calls
+                       for row in observations)
                 or amount != status["known_usage"]
                 or sum(row["ordinal"] == 2 for row in observations) != status["format_reanswers"]):
             _fail()
         return {"schema": SUMMARY_SCHEMA, "manifest_sha256": self.store.manifest_sha256,
             "verified_units": len(self.verified_units), "document_count": len(self.document_hashes),
             "native_count": len(observations), "known_usage": amount,
+            "unknown_reservations": reservations,
+            "quarantined_attempts": deepcopy(quarantines),
+            "quarantined_targets": sorted({target for row in quarantines
+                                           for target in row["affected_targets"]}),
             "format_reanswers": status["format_reanswers"],
             "snapshot_sha256": None if self.snapshot_reference is None else self.snapshot_reference["manifest_sha256"]}
 
@@ -691,6 +728,8 @@ def partial_work_accounting(replay, *, parent_accounting=None):
                           key=lambda row: (row["unit_id"], row["ordinal"], row["attempt_id"]))
         observations = store._rows(connection, "observations")
         retry_claims = store._rows(connection, "retry_claims")
+        quarantines = store._rows(connection, "attempt_quarantines")
+    quarantined = {row["attempt_id"]: row for row in quarantines}
     by_attempt = {}
     for row in observations:
         by_attempt.setdefault(row["attempt_id"], []).append(row)
@@ -765,6 +804,7 @@ def partial_work_accounting(replay, *, parent_accounting=None):
                 or attached["usage"] != attempt["usage"]):
             _fail(stage)
         unresolved = attempt["state"] in {"dispatched", "observed"}
+        quarantine = quarantined.get(identity)
         if unresolved and (attached is None or not attached["usage_known"]):
             unknown_native.add(identity)
         if attempt["state"] not in {"settled", "not_sent"}:
@@ -772,12 +812,18 @@ def partial_work_accounting(replay, *, parent_accounting=None):
                 "call_id": request["call_id"], "ordinal": attempt["ordinal"],
                 "dispatch_state": "not_sent" if attempt["state"] == "prepared" else attempt["state"],
                 "ledger_state": attempt["state"], "reservation": deepcopy(attempt["reservation"]),
-                "requires_reconciliation": unresolved})
+                "requires_reconciliation": unresolved and quarantine is None,
+                "quarantine": None if quarantine is None else {
+                    key: deepcopy(quarantine[key]) for key in (
+                        "scope", "affected_targets", "usage_state",
+                        "reservation_state", "reason", "event_sha256")}})
         rows.append({"attempt_id": identity, "unit_id": attempt["unit_id"], "stage": stage,
             "call_id": request["call_id"], "ordinal": attempt["ordinal"],
             "request_sha256": request["request_sha256"], "request_ref": attempt["request_ref"],
             "dispatch_state": "not_sent" if attempt["state"] == "prepared" else attempt["state"],
             "ledger_state": attempt["state"],
+            "quarantined": quarantine is not None,
+            "affected_targets": [] if quarantine is None else deepcopy(quarantine["affected_targets"]),
             "provider_response_id": None if attached is None else attached["provider_response_id"],
             "usage_known": attached is not None and attached["usage_known"],
             "usage": None if attached is None else attached["usage"],
@@ -822,6 +868,9 @@ def partial_work_accounting(replay, *, parent_accounting=None):
         "known_usage_settled": status["known_usage_observed"],
         "unknown_attempts": len(unknown_ids), "unknown_attempt_ids": unknown_ids,
         "requires_reconciliation": any(row["requires_reconciliation"] for row in reservations),
+        "quarantined_attempts": [deepcopy(row) for row in quarantines],
+        "quarantined_targets": sorted({target for row in quarantines
+                                       for target in row["affected_targets"]}),
         "unknown_reservations": reservations,
         "format_reanswers": status["format_reanswers"],
         "already_parent_counted_native_attempts": len(parent_known),
@@ -1004,7 +1053,8 @@ def verify_clean(replay, registry, archive, bundle, frontier, plan, snapshots, p
         "documents": cleaned, "stats": stats}, "intelligence.freeze")
     assessment = _normalized_assessment(assessment_rows(cleaned, plan))
     _same(bundle["claims"], assessment["claims"], "intelligence.freeze")
-    _same(bundle["coverage"], assessment["coverage"], "intelligence.freeze")
+    from .coverage_proof import compare_coverage_base
+    compare_coverage_base(bundle["coverage"], assessment["coverage"], "intelligence.freeze")
     gaps = [{**row, "reason": row.get("reason", "DETERMINISTIC_ASSESSMENT"), "required": cell["required"]}
             for row, cell in zip(assessment["coverage"], plan["coverage_cells"], strict=True)]
     observed = [{key: value for key, value in row.items() if key not in {"source_diagnostics", "source_reason"}}

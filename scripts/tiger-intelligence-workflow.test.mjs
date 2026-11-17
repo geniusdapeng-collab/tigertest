@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE, validateEnvelope, validateRequest, runtimeEnvironment,
+import { CURRENT_TECH_INTELLIGENCE_PROFILE, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE,
+  validateEnvelope, validateRequest, runtimeEnvironment,
   invokeWorkflow } from "../bundles/trading/capabilities/workflow-client.mjs";
 import { INSTRUCTIONS, toolDefinitions } from "./tiger-agent-mcp.mjs";
 import { REQUEST, RUN_ID, result, runnerFixture } from "./tiger-agent-test-support.mjs";
@@ -23,10 +24,10 @@ function receipt() {
   return row;
 }
 
-test("v3 tech profile reaches CLI/MCP schema without request-level source authority", () => {
+test("v4 tech profile reaches CLI/MCP schema; v3 remains replay-compatible", () => {
   assert.equal(validateRequest("run", { ...REQUEST, profile: INTELLIGENCE_PROFILE }).profile, INTELLIGENCE_PROFILE);
   assert.equal(validateRequest("describe", { profile: TECH_INTELLIGENCE_PROFILE }).profile, TECH_INTELLIGENCE_PROFILE);
-  assert.match(INSTRUCTIONS, /us-tech-intelligence-paper-v3/u);
+  assert.ok(INSTRUCTIONS.includes(CURRENT_TECH_INTELLIGENCE_PROFILE));
   const tool = toolDefinitions("paper").find(row => row.name === "tiger_workflow_run");
   assert.ok(tool.inputSchema.properties.profile.enum.includes(INTELLIGENCE_PROFILE));
   assert.ok(tool.inputSchema.properties.profile.enum.includes(TECH_INTELLIGENCE_PROFILE));

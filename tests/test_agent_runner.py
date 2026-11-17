@@ -59,7 +59,11 @@ def test_python_minimum_is_enforced_before_business_or_state_writes(
     state = tmp_path / "state"
     doctor = runner.doctor(state, "readonly")
     assert doctor["operation_ok"] is supported
-    assert doctor["status"] == ("ready" if supported else "not_ready")
+    assert doctor["status"] == ("runtime_ready" if supported else "not_ready")
+    if supported:
+        assert doctor["data"]["runtime_ready"] is True
+        assert doctor["data"]["full_research_ready"] is False
+        assert doctor["data"]["readiness"]["reduced_evidence"] is False
     if not supported:
         assert doctor["error"]["code"] == "RUNNER_FAILED"
         assert "3.11" in doctor["error"]["message"]

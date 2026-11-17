@@ -19,6 +19,19 @@ const END = "# END TIGER AGENT MCP v1";
 const JSON_BEGIN = "// BEGIN TIGER AGENT MCP v1";
 const JSON_END = "// END TIGER AGENT MCP v1";
 const MAX_CONFIG_BYTES = 1024 * 1024;
+const TIGER_IDENTITIES = new Map([
+  ["workroom-tiger", new Set([
+    "cnb.cool/workloom-ai/workroom-tiger",
+    "github.com/geniusdapeng-collab/workroom-tiger",
+    "geniusdapeng-collab/workroom-tiger",
+  ])],
+  ["workloom-ai-tigertest", new Set([
+    "github.com/geniusdapeng-collab/tigertest",
+    "geniusdapeng-collab/tigertest",
+  ])],
+]);
+const REVIEWED_MCP_IMPORT = "../bundles/trading/capabilities/workflow-client.mjs";
+const REVIEWED_MCP_EXPORT = "export function serve(";
 const PYTHON_PARSE = `import sys,json
 if sys.version_info < (3,11): raise SystemExit(3)
 import tomllib
@@ -123,6 +136,24 @@ function withoutQoder(value) {
   const copy = structuredClone(value);
   if (plain(copy.mcpServers)) { delete copy.mcpServers[SERVER]; if (!Object.keys(copy.mcpServers).length) delete copy.mcpServers; }
   return copy;
+}
+
+function normalizedRepository(value) {
+  if (typeof value !== "string" || !value || /[\x00-\x1f]/u.test(value)) return "";
+  return value.trim().replace(/^https?:\/\//u, "").replace(/^ssh:\/\/git@/u, "")
+    .replace(/^git@([^:]+):/u, "$1/").replace(/^www\./u, "").replace(/\.git$/u, "").replace(/\/$/u, "");
+}
+
+function reviewedTigerProject(manifest, entry) {
+  let value;
+  try { value = parseJson(manifest.text, MAX_CONFIG_BYTES); } catch { return false; }
+  if (!plain(value) || value.schemaVersion !== "workloom.product/v1"
+    || value.role !== "industry" || value.defaultBundle !== "trading") return false;
+  const identities = TIGER_IDENTITIES.get(value.productId);
+  if (!identities || !identities.has(normalizedRepository(value.repository))) return false;
+  if (!entry.exists || !entry.text.includes(REVIEWED_MCP_IMPORT)
+    || !entry.text.includes(REVIEWED_MCP_EXPORT)) return false;
+  return true;
 }
 
 /** Preserve offsets and all original bytes; only the owned member is ever regenerated. */
@@ -257,7 +288,10 @@ export function prepareConfiguration(options = {}) {
   if (project === realpathSync(homedir())) fail("User-global configuration is outside this generator's scope.");
   const entry = join(project, "scripts/tiger-agent-mcp.mjs");
   const manifest = readConfig(project, join(project, "product.manifest.json"));
-  if (!manifest.exists || parseJson(manifest.text).productId !== "workroom-tiger" || !readConfig(project, entry).exists) fail("Selected project is not a Tiger repository with the reviewed MCP entry.");
+  const mcpEntry = readConfig(project, entry);
+  if (!manifest.exists || !reviewedTigerProject(manifest, mcpEntry)) {
+    fail("Selected project is not a reviewed Tiger industry repository with the canonical MCP entry.");
+  }
   const mode = options.mode ?? "readonly";
   if (!["readonly", "paper"].includes(mode)) fail("Access mode must be readonly or paper.");
   const stateRoot = options.stateRoot ?? join(project, ".tiger-agent");

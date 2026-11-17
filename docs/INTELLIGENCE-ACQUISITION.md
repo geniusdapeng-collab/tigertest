@@ -2,7 +2,8 @@
 
 本指南面向通过 Codex CLI、DeepSeek Harness 或本仓 CLI 使用 Tiger 的操作者。
 新的 TigerTest 研究必须在业务请求中显式选择
-`us-tech-intelligence-paper-v3`。该焦点 profile 的研究范围由
+`us-tech-intelligence-paper-v4`；`us-tech-intelligence-paper-v3` 冻结用于历史重放。
+该焦点 profile 的研究范围由
 `docs/TIGERTEST-ARCHITECTURE.md` 定义；`us-public-intelligence-paper-v2`
 保留历史宽池语义。`run` 和
 `describe` 都要求 `profile` 字段，省略会被拒绝；历史 profile 保留旧回执语义。

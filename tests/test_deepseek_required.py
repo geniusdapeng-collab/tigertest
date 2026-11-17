@@ -199,6 +199,26 @@ def test_nonzero_reasoning_tokens_are_rejected_for_non_thinking_calls(configured
             system="s", user="u", schema_hint={}, schema=SCHEMA)
 
 
+def test_completion_exactly_at_output_ceiling_is_exhausted_not_success(configured, monkeypatch):
+    payload = chat_response()
+    ceiling = 393_216
+    payload["usage"] = {
+        "prompt_tokens": 1, "completion_tokens": ceiling,
+        "total_tokens": ceiling + 1,
+        "completion_tokens_details": {"reasoning_tokens": 0},
+    }
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Response(payload))
+    client = DeepSeekRequiredClient(configured)
+    with pytest.raises(RequiredModelUnavailable) as error:
+        client.complete_json(system="s", user="u", schema_hint={}, schema=SCHEMA)
+    assert error.value.diagnostic == {
+        "schema": "tiger.model-failure.v1",
+        "provider": "deepseek",
+        "code": "MODEL_OUTPUT_EXHAUSTED",
+    }
+    assert client.receipts == []
+
+
 def test_caller_max_tokens_override_is_explicitly_rejected(configured):
     client = DeepSeekRequiredClient(configured)
     with pytest.raises(LLMUnavailable, match="CALLER_OUTPUT_CAP_FORBIDDEN"):

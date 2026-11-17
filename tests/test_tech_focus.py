@@ -277,7 +277,7 @@ def test_focus_market_batch_deadline_returns_partial_without_entering_fallback(m
     class SlowProvider:
         name = "slow-fixture"
 
-        def ohlcv_batch(self, tickers, days=400):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
             time.sleep(0.03)
             return {}
 

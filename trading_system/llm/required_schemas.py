@@ -364,7 +364,8 @@ def validate_target_assessments(stage: str, output: dict, targets, target_source
         raise ValueError("TARGET_ASSESSMENT_INVALID") from None
 
 
-def decision_schema(symbols, doc_ids, market_ids, *, company_sources=None) -> dict:
+def decision_schema(symbols, doc_ids, market_ids, *, company_sources=None,
+                    format_contract=None) -> dict:
     candidates = _ids(symbols, allow_empty=True, symbols=True)
     docs = _ids(doc_ids, allow_empty=company_sources is not None)
     markets = _ids(market_ids, allow_empty=True)
@@ -385,9 +386,12 @@ def decision_schema(symbols, doc_ids, market_ids, *, company_sources=None) -> di
     )
     # A buy must carry at least its own market snapshot and one article. The
     # execution owner additionally verifies the exact citation types and owner.
+    watch_rule = {"properties": {"action": {"const": "watch"}}}
+    if format_contract == "decision-format-v1":
+        watch_rule["properties"]["source_ids"] = {"minItems": 1, "maxItems": 1}
     decision["allOf"] = [{"oneOf": [
         {"properties": {"action": {"const": "buy"}, "source_ids": {"minItems": 2}}},
-        {"properties": {"action": {"const": "watch"}}},
+        watch_rule,
     ]}]
     if company_sources is not None:
         if (set(company_sources) - set(candidates)

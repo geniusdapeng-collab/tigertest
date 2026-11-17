@@ -50,10 +50,10 @@ def _run(tmp_path, monkeypatch, *, account_bound=True, options_failure=False, nu
     execution, root, args, provider, denied, _ = intelligence_fixture(tmp_path, monkeypatch)
     if monitor_failure:
         original_batch = provider.ohlcv_batch
-        def batch(symbols, days=400):
+        def batch(symbols, days=400, **kwargs):
             if execution._active.spec.name == "tech.monitor":
                 raise TimeoutError("Offline observed monitor batch failure")
-            return original_batch(symbols, days)
+            return original_batch(symbols, days, **kwargs)
         monkeypatch.setattr(provider, "ohlcv_batch", batch)
     if numeric_buys:
         original = provider.ohlcv

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -55,6 +55,7 @@ _HEALTH: dict[str, dict] = {}
 # 回退失败与最终缺失的结构化披露；只记异常类型，避免把源端 URL/凭据写入报告。
 _DATA_ISSUES: list[dict] = []
 MAX_BATCH_GAP_FILL = 64
+PROGRESS_SCHEMA = "tiger.run-progress/v1"
 
 
 class ProviderDataError(RuntimeError):
@@ -73,14 +74,48 @@ def _provider_source(provider) -> str:
 
 
 def _data_issue(provider, method: str, symbols: list[str], issue: str,
-                *, error: Exception | None = None, label: str | None = None) -> None:
+                *, error: Exception | None = None, label: str | None = None,
+                details: dict | None = None) -> None:
     item = {"provider": provider.name, "synthetic": is_synthetic(provider),
             "method": method, "symbols": list(symbols), "issue": issue}
     if error is not None:
         item["error_type"] = type(error).__name__
     if label is not None:
         item["label"] = label
+    if details is not None:
+        item.update(details)
     _DATA_ISSUES.append(item)
+
+
+def _write_batch_progress(execution, *, provider: str, stage: str | None = None,
+                          completed: int = 0, failed: int = 0, timed_out: int = 0,
+                          attempted: int = 0, total: int = 0, current_chunk: int | None = None,
+                          deadline: float | None = None) -> None:
+    """Best-effort atomic progress projection; never a business receipt."""
+    if execution is None:
+        return
+    try:
+        from .agent_evidence import atomic_json
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        active_spec = getattr(getattr(execution, "_active", None), "spec", None)
+        value = {
+            "schema": PROGRESS_SCHEMA,
+            "stage": stage or getattr(active_spec, "name", None),
+            "provider": provider,
+            "completed": int(completed),
+            "failed": int(failed),
+            "timed_out": int(timed_out),
+            "attempted": int(attempted),
+            "total": int(total),
+            "current_chunk": current_chunk,
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "deadline": (None if remaining is None else
+                         (datetime.now(timezone.utc) + timedelta(seconds=remaining)).isoformat()),
+            "progress_is_not_receipt": True,
+        }
+        atomic_json(execution.paths.work_dir, "progress.json", value)
+    except (OSError, ValueError, TypeError, AttributeError):
+        logger.warning("progress projection could not be persisted")
 
 
 def _missing_data(out) -> bool:
@@ -372,13 +407,15 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
     if (chunk_size is not None
             and (type(chunk_size) is not int or chunk_size <= 0)):
         raise ValueError("Batch chunk size must be a positive integer or None")
-    deadline = (time.monotonic() + deadline_seconds
-                if deadline_seconds is not None else None)
+    deadline_seconds = (config.MARKET_BATCH_DEADLINE_SECONDS
+                        if deadline_seconds is None else deadline_seconds)
+    deadline = time.monotonic() + deadline_seconds
+    progress = {"last_write": 0.0, "last_completed": -1}
 
     def deadline_exhausted() -> bool:
         return deadline is not None and time.monotonic() >= deadline
 
-    def _fetch_once(src, missing: list[str]) -> dict[str, pd.DataFrame]:
+    def _fetch_once(src, missing: list[str], current_chunk: int | None = None) -> dict[str, pd.DataFrame]:
         if src is not provider and not is_synthetic(provider) and is_synthetic(src):
             _data_issue(src, "ohlcv_batch", missing, "synthetic_fallback_rejected", label=label)
             logger.warning("%s 是合成源，真实数据回退链跳过该源", src.name)
@@ -387,7 +424,24 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
             _data_issue(src, "ohlcv_batch", missing, "unsupported", label=label)
             return {}
         try:
-            batch = src.ohlcv_batch(missing, days=days)
+            def report(update):
+                nonlocal progress
+                now = time.monotonic()
+                count = int(update.get("completed", 0)) + int(update.get("failed", 0))
+                if (now - progress["last_write"] < 5.0
+                        and count - progress["last_completed"] < 5):
+                    return
+                progress["last_write"], progress["last_completed"] = now, count
+                _write_batch_progress(
+                    execution, provider=src.name, completed=update.get("completed", 0),
+                    failed=update.get("failed", 0), timed_out=update.get("timed_out", 0),
+                    attempted=update.get("attempted", count), total=len(missing),
+                    current_chunk=current_chunk, deadline=deadline,
+                )
+
+            batch = src.ohlcv_batch(
+                missing, days=days, hard_deadline=deadline, progress_callback=report,
+            )
         except (EvidenceWriteError, ExecutionContractError, StrictObservationError):
             raise
         except Exception as exc:
@@ -414,6 +468,18 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         if not got:
             _data_issue(src, "ohlcv_batch", missing, "no_data", label=label)
         availability = getattr(src, "last_batch_status", None)
+        if isinstance(availability, dict) and availability.get("timed_out_symbols"):
+            _data_issue(
+                src, "ohlcv_batch", availability["timed_out_symbols"],
+                "batch_deadline_exhausted", label=label,
+                details={
+                    "timed_out_symbols": list(availability["timed_out_symbols"]),
+                    "attempted": availability.get("attempted", 0),
+                    "completed": availability.get("completed", len(got)),
+                    "failed": availability.get("failed", 0),
+                    "service_failure_asserted": False,
+                },
+            )
         if (src.name == "stooq" and isinstance(availability, dict)
                 and availability.get("source_exhausted") is True):
             _data_issue(src, "ohlcv_batch", availability["unattempted_symbols"],
@@ -427,10 +493,21 @@ def _batch_with_fallback(provider, tickers: list[str], days: int,
         size = chunk_size or len(missing)
         merged: dict[str, pd.DataFrame] = {}
         for start in range(0, len(missing), size):
+            current_chunk = start // size + 1
             if deadline_exhausted():
+                _write_batch_progress(
+                    execution, provider=src.name, completed=len(merged),
+                    timed_out=len(missing) - len(merged), attempted=len(merged),
+                    total=len(missing), current_chunk=current_chunk, deadline=deadline,
+                )
                 break
             chunk = missing[start:start + size]
-            merged.update(_fetch_once(src, chunk))
+            merged.update(_fetch_once(src, chunk, current_chunk))
+            _write_batch_progress(
+                execution, provider=src.name, completed=len(merged),
+                failed=0, timed_out=0, attempted=min(len(missing), start + len(chunk)),
+                total=len(missing), current_chunk=current_chunk, deadline=deadline,
+            )
             batch_status = getattr(src, "last_batch_status", None)
             if (src.name == "stooq" and isinstance(batch_status, dict)
                     and batch_status.get("source_exhausted") is True):

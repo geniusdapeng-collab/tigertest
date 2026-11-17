@@ -100,14 +100,19 @@ class IfindGwProvider(DataProvider):
             raise RuntimeError(f"ifind {ticker} 历史不足: {len(df)} 行")
         return df
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         out: dict[str, pd.DataFrame] = {}
         started = time.time()
         pool = ThreadPoolExecutor(max_workers=3)   # 服务端单请求≤3只，并发取 3 路
         futs = {pool.submit(self._fetch, t, days): t for t in tickers}
         try:
-            for fut in as_completed(futs, timeout=self.batch_budget_s):
+            timeout = self.batch_budget_s
+            if hard_deadline is not None:
+                timeout = min(timeout, max(0.0, hard_deadline - time.monotonic()))
+            for fut in as_completed(futs, timeout=timeout):
                 t = futs[fut]
                 try:
                     df = fut.result()

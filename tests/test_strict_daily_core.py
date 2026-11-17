@@ -42,7 +42,7 @@ class OfflinePublicBoundaryFixture(DataProvider):
                              "Low": close * .99, "Close": close,
                              "Volume": np.full(len(index), 2_000_000)}, index=index)
 
-    def ohlcv_batch(self, tickers, days=400):
+    def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
         # A small observed subset deliberately tests honest missing-stock disclosure.
         from trading_system.markets import get_market
         allowed = set(get_market("us").sector_symbols) | {"AAA", "BBB", "CCC"}

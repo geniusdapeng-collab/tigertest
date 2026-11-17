@@ -32,7 +32,6 @@ from .model_budget import TokenBudgetError
 from .required_schemas import (clean_schema, sentiment_schema, risk_schema,
     narrative_schema, decision_schema, validate_target_assessments)
 
-assessment_context = legacy.assessment_context
 market_asof = legacy.market_asof
 market_snapshots = legacy.market_snapshots
 _ids = legacy._ids
@@ -86,6 +85,15 @@ SUMMARY_CLEAN_FORMAT_CONTRACT = "typed-clean-summary-characters/v1"
 IDENTIFIERS_CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
 COMPLETE_CLEAN_FORMAT_CONTRACT = "typed-clean-complete-format/v1"
 CLEAN_FORMAT_CONTRACT = "typed-clean-keyed-inline/v1"
+DECISION_FORMAT_CONTRACT = "decision-format-v1"
+
+
+def assessment_context(execution) -> dict:
+    value = legacy.assessment_context(execution)
+    if getattr(execution.policy, "policy_id", "") == (
+            "tiger.public-tech-intelligence-paper-policy.v4"):
+        value["decision_format_contract"] = DECISION_FORMAT_CONTRACT
+    return value
 LEGACY_CLEAN_TASK = (
     "逐篇完成实体消歧、情感、事件与中文摘要。每个输入id恰好返回一次。"
     "每篇tickers最多8个，先去重，再按文章主题只保留直接相关且能从文档核实的股票代码。"
@@ -205,11 +213,27 @@ def chat_arguments(stage, inputs, schema, assessment, *, clean_format_contract=C
             task += (f"本批输入documents恰好{len(documents)}行，输出documents对象必须恰好"
                      f"包含schema要求的{len(documents)}个输入id键；逐一完成每个键的完整annotation。")
             clean_protocol = {"contract": CLEAN_FORMAT_CONTRACT}
-    if stage == "decision.debate":
-        task += ("company_evidence来自评分前冻结的SEC原文；只有该证券自己的source_ids可用作下单新闻。"
-                 "本阶段不再联网补资料。partial必需覆盖或无action资格的证券只能watch；不得把行业资料代作公司证据。")
+    decision_v1 = (
+        stage == "decision.debate"
+        and assessment.get("decision_format_contract") == DECISION_FORMAT_CONTRACT
+    )
+    if decision_v1:
+        task += (
+            f"遵循{DECISION_FORMAT_CONTRACT}：每条decision必须含非空source_ids。"
+            "至少且恰好一次引用该symbol自己的market evidence ID；"
+            "watch可以只含该市场ID；buy还必须含至少一个同一证券的frozen company evidence ID。"
+            "不得引用其他证券的新闻、公司原文或行情ID，也不得把行业或宏观资料代作公司证据。"
+            "company_evidence来自评分前冻结的SEC原文；本阶段不再联网补资料。"
+            "partial必需覆盖或无action资格的证券只能watch。")
+    public = {
+        "assessment": {key: value for key, value in assessment.items()
+                       if key != "decision_format_contract"},
+        **inputs,
+    }
+    if decision_v1:
+        public["decision_format_contract"] = DECISION_FORMAT_CONTRACT
     arguments = {"system": SYSTEM, "user": task, "schema_hint": {}, "schema": schema,
-                 "public_payload": normalize({"assessment": assessment, **inputs})}
+                 "public_payload": normalize(public)}
     if clean_protocol is not None:
         arguments["clean_protocol"] = clean_protocol
     return arguments
@@ -446,6 +470,12 @@ class Acquisition:
                        "target_label": labels.get(row["target_id"], row["target_id"])} for row in status["gaps"]],
             "holdings_connection": "unknown" if self.frontier["holdings"] is None else "connected",
             "source_registry_sha256": self.registry.public_manifest()["sha256"]}
+        if status.get("quarantined_attempts"):
+            result["quarantined_attempts"] = status["quarantined_attempts"]
+            result["quarantined_targets"] = sorted({
+                target for row in status["quarantined_attempts"]
+                for target in row["affected_targets"]
+            })
         if self.baseline and self.baseline["manifest"].get("schema") == "topic_snapshot/v1":
             manifest = self.baseline["manifest"]
             result["baseline_snapshot"] = {key: manifest[key] for key in
@@ -544,7 +574,8 @@ def company_required_targets(symbol, security):
             *("sector:" + etf for etf in sectors)]
 
 
-def company_evidence_from_frozen(docs, approved, cutoff, *, security_ids, bundle=None):
+def company_evidence_from_frozen(docs, approved, cutoff, *, security_ids, bundle=None,
+                                 reduced_evidence=False):
     """Only current typed SEC originals owned by this security can support buy."""
     from .company_evidence import _published_in_window
     outcomes, documents = {}, {}
@@ -579,7 +610,11 @@ def company_evidence_from_frozen(docs, approved, cutoff, *, security_ids, bundle
                    if bundle is not None and security else [])
         if missing:
             owned = []
-        outcomes[symbol] = {"status": "filing_verified" if owned else "required_coverage_missing" if missing else "no_eligible_filing",
+        if reduced_evidence:
+            owned = []
+        outcomes[symbol] = {"status": ("reduced_evidence" if reduced_evidence else
+                                       "filing_verified" if owned else
+                                       "required_coverage_missing" if missing else "no_eligible_filing"),
                             "source_ids": owned, "missing_cells": [cell["cell_id"] for cell in missing],
                             "required_targets": required_targets}
     permitted = {source for row in outcomes.values() for source in row["source_ids"]}
@@ -598,7 +633,8 @@ def decision(llm, context, docs, account_usd):
     market_by_symbol = {row["symbol"]: row for row in market}
     market_by_id = {row["id"]: row for row in market}
     outcomes, documents = company_evidence_from_frozen(docs, list(approved), llm.execution.admitted_at,
-        security_ids=acquisition.frontier["security_ids"], bundle=acquisition.bundle)
+        security_ids=acquisition.frontier["security_ids"], bundle=acquisition.bundle,
+        reduced_evidence=getattr(llm.execution.policy, "reduced_evidence", False))
     company = {"contract": COMPANY_CONTRACT, "bundle_id": acquisition.bundle["bundle_id"],
                "manifest_sha256": acquisition.bundle["manifest_sha256"], "candidates": outcomes}
     original_action = context.get("action")
@@ -610,7 +646,8 @@ def decision(llm, context, docs, account_usd):
         "company_evidence": {**company, "documents": list(documents.values())},
         "market_asof": market_asof(context["market_data"], symbols, assessment)},
         decision_schema(symbols, list(documents), list(market_by_id),
-                        company_sources={symbol: row["source_ids"] for symbol, row in outcomes.items()}))
+                        company_sources={symbol: row["source_ids"] for symbol, row in outcomes.items()},
+                        format_contract=assessment.get("decision_format_contract")))
     _coverage(output["decisions"], "symbol", symbols)
     buys = {row["symbol"] for row in output["decisions"] if row["action"] == "buy"}
     if (not buys <= approved.keys() or (output["action"] == "BUY") != bool(buys)
@@ -652,10 +689,22 @@ def model_summary(llm):
     acquisition = getattr(llm, "intelligence_acquisition", None)
     if acquisition is None or acquisition.bundle is None:
         _fail("V2 model summary has no frozen acquisition")
-    return {"provider": "deepseek", "model": MODEL, "release": RELEASE, "required": True,
+    summary = {"provider": "deepseek", "model": MODEL, "release": RELEASE, "required": True,
         "response_ids": [row["response_id"] for row in llm.receipts], "call_count": len(llm.receipts),
         "required_stages": list(REQUIRED_MODEL_STAGES), "stage_counts": counts,
         "search_count": len(llm.search_receipts), "fetch_count": len(llm.fetch_receipts),
         "search_mode": SEARCH_MODE, "all_required_completed": True,
         "acquisition_contract": ACQUISITION_CONTRACT, "bundle_id": acquisition.bundle["bundle_id"],
         "source_requests": acquisition.bundle["usage"]["requests"]}
+    if (getattr(llm.execution.policy, "policy_id", "") ==
+            "tiger.public-tech-intelligence-paper-policy.v4"):
+        store = getattr(llm.execution, "research_work_store", None)
+        if store is None:
+            _fail("v4 model summary has no research-work ledger")
+        quarantines = store.quarantines()
+        summary["research_work"] = {
+            "quarantined_attempts": quarantines,
+            "quarantined_targets": sorted({target for row in quarantines
+                                           for target in row["affected_targets"]}),
+        }
+    return summary

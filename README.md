@@ -309,7 +309,8 @@ Agent 会先检查环境，再按固定 CLI/MCP 提交与查询同一个任务�
 同一 profile 的纸面账户保持同一 state-root，日常新任务只更换逻辑幂等键。
 
 ```bash
-bash scripts/setup.sh                # 一键安装+自检（或 pip install -r requirements.txt）
+bash scripts/setup.sh full           # Python 3.11+、Node 24+、pnpm、hash-locked 依赖+自检
+# backend-only：bash scripts/setup.sh backend
 python3 -m pytest tests/ -q          # 交易内核测试（本机实测 327 passed，2026-09-19）
 python3 main.py --demo --universe tech --top 16 --picks 5 # 离线双主题演示
 python3 main.py --universe tech --top 16 --picks 5        # TigerTest 默认焦点
@@ -323,7 +324,7 @@ python3 main.py --review-approve <id>                    # 批准 → 次日生�
 python3 main.py --review-reject <id> --reason "..."      # 驳回（原因必填）
 ```
 
-普通非受控旧入口保留离线演示与透传语义，详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。新的 AI 研究和官网更新必须显式使用受控 CLI/MCP 和 `us-tech-intelligence-paper-v3`，按 [Agent 操作指南](docs/AGENT-CLIENTS.md) 加载仓库外受保护环境文件；模板见 [`.env.example`](.env.example)。新配置先冻结两主题数值 frontier，再按六子链、板块和逐证券问题采集登记来源、原文与附件，逐目标验证实体、事件、时间和用途并冻结证据包。缺资料的目标保留 `null` 与缺口；搜索成功不会自动获得评分或行动资格。`us-public-intelligence-paper-v2`、`us-public-model-required-paper-v1` 和更早 profile 保留历史回放。
+普通非受控旧入口保留离线演示与透传语义，详见 [docs/QUICKSTART.md](docs/QUICKSTART.md)。新的 AI 研究和官网更新必须显式使用受控 CLI/MCP 和 `us-tech-intelligence-paper-v4`，按 [Agent 操作指南](docs/AGENT-CLIENTS.md) 加载仓库外受保护环境文件；模板见 [`.env.example`](.env.example)。v4 冻结两主题数值 frontier，再按六子链、板块和逐证券问题采集登记来源、原文与附件，逐目标验证实体、事件、时间和用途并冻结证据包；unknown source/model attempt 只做 append-only quarantine，保留费用预留且不重发，受影响目标最多 WAIT/AVOID。缺资料的目标保留 `null` 与缺口；搜索成功不会自动获得评分或行动资格。`us-tech-intelligence-paper-v3`、`us-public-intelligence-paper-v2`、`us-public-model-required-paper-v1` 和更早 profile 保留历史回放。v4 可靠性合同见 [TIGER-V4-RELIABILITY.md](docs/TIGER-V4-RELIABILITY.md)。
 
 TigerTest 默认用 `tech` 扫描池：半导体与 AI 基础设施两条母链的 79 只美国上市
 高流动性标的。焦点门槛为价格 ≥ $10、ADV20 ≥ $100M、历史 ≥ 260 日、ATR% ≤ 12%；

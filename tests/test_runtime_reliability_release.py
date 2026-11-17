@@ -179,7 +179,7 @@ class _BatchProvider(DataProvider):
             return self.frame.tail(days).copy()
         raise ValueError("TEST_FIXTURE missing")
 
-    def ohlcv_batch(self, tickers, days=400):
+    def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
         self.calls.append(tuple(tickers))
         return {ticker: self.frame.tail(days).copy() for ticker in tickers
                 if ticker in self.returned}

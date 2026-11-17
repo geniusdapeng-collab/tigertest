@@ -105,12 +105,16 @@ class TiingoProvider(DataProvider):
             raise RuntimeError(f"tiingo {ticker} 历史不足: {len(df)} 行")
         return df
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         out: dict[str, pd.DataFrame] = {}
         started = time.time()
         for t in tickers:
             if time.time() - started > self.batch_budget_s:
                 log.warning("tiingo 批量墙钟耗尽 %d/%d", len(out), len(tickers))
+                break
+            if hard_deadline is not None and time.monotonic() >= hard_deadline:
                 break
             try:
                 df = self._fetch(t, days)

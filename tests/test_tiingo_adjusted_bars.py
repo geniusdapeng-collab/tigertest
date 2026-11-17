@@ -264,7 +264,7 @@ def test_batch_continues_after_invalid_ticker_and_preserves_source_lineage(provi
         name = "stooq"
         synthetic = False
 
-        def ohlcv_batch(self, tickers, days):
+        def ohlcv_batch(self, tickers, days, *, hard_deadline=None, progress_callback=None):
             return {}
 
     actual = pipeline._batch_with_fallback(EmptyPrimary(), ["BAD", "GOOD"], 60)

@@ -204,6 +204,83 @@ def test_dispatch_unknown_survives_expiry_reopen_and_blocks_new_external_send(tm
         reopened.retry_units(["a"])
 
 
+def test_quarantined_unknown_preserves_hold_but_unblocks_unrelated_and_result_publication(tmp_path):
+    store = create(tmp_path, [unit("a"), unit("b")])
+    lease_a = store.claim("a", "worker-a")
+    attempt = store.begin_attempt(
+        lease_a, {"request": 1}, operation="model.deepseek.chat",
+        reservation={"output_tokens": 20},
+    )
+    store.mark_dispatch(lease_a, attempt.attempt_id)
+    quarantine = store.quarantine_attempt(
+        lease_a, attempt.attempt_id, scope="model",
+        affected_targets=["security:NVDA"], reason="MODEL_RESPONSE_UNKNOWN",
+    )
+    assert quarantine["usage_state"] == "unknown"
+    assert quarantine["reservation_state"] == "held"
+    assert store.attempt(attempt.attempt_id)["state"] == "dispatched"
+    accept(store, lease_a)
+    lease_b = store.claim("b", "worker-b")
+    unrelated = store.begin_attempt(
+        lease_b, {"request": 2}, operation="model.deepseek.chat",
+        reservation={"output_tokens": 20},
+    )
+    assert unrelated.attempt_id != attempt.attempt_id
+    store.mark_dispatch(lease_b, unrelated.attempt_id)
+    store.record_response(
+        lease_b, unrelated.attempt_id,
+        {"id": "known-unrelated", "ok": True}, usage=USAGE,
+    )
+    store.settle_attempt(unrelated.attempt_id)
+    accept(store, lease_b)
+    with pytest.raises(WorkUnitError):
+        store.begin_attempt(
+            lease_a, {"request": 1}, operation="model.deepseek.chat",
+            reservation={"output_tokens": 20},
+        )
+    status = store.status()
+    assert status["graph_state"] == "completed"
+    assert status["unknown_attempts"] == 1
+    assert status["active_unknown_attempts"] == 0
+    assert status["quarantined_targets"] == ["security:NVDA"]
+    assert status["held_reservations"][0]["attempt_id"] == attempt.attempt_id
+    assert store.verify()["unit_count"] == 2
+
+
+def test_quarantine_tamper_and_settled_attempt_are_rejected(tmp_path):
+    store = create(tmp_path)
+    lease = store.claim_ready("worker")
+    attempt, _ = observed(store, lease)
+    with pytest.raises(WorkUnitError):
+        store.quarantine_attempt(
+            lease, attempt.attempt_id, scope="model",
+            affected_targets=["security:NVDA"], reason="MODEL_RESPONSE_UNKNOWN",
+        )
+    fresh = create(tmp_path / "tamper")
+    lease = fresh.claim_ready("worker")
+    row = fresh.begin_attempt(
+        lease, {"request": 1}, operation="model.deepseek.chat",
+        reservation={"output_tokens": 20},
+    )
+    fresh.mark_dispatch(lease, row.attempt_id)
+    fresh.quarantine_attempt(
+        lease, row.attempt_id, scope="model",
+        affected_targets=["security:NVDA"], reason="MODEL_RESPONSE_UNKNOWN",
+    )
+    connection = sqlite3.connect(fresh.database)
+    try:
+        connection.execute("DROP TRIGGER immutable_attempt_quarantines_update")
+        connection.execute(
+            "UPDATE attempt_quarantines SET affected_targets=? WHERE attempt_id=?",
+            (json.dumps(["security:AMD"]), row.attempt_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(WorkUnitError):
+        fresh.verify()
+
+
 def test_late_native_is_preserved_but_requires_explicit_verified_reconciliation(tmp_path):
     clock = [BASE]
     store = create(tmp_path, clock=lambda: clock[0])
@@ -399,6 +476,45 @@ def test_validator_must_run_and_cannot_return_a_success_flag(tmp_path):
     with pytest.raises(WorkUnitError):
         store.publish_result(lease, {"ok": False}, validator=valid)
     assert store.unit("a")["state"] == "running"
+
+
+def test_result_rejected_exposes_only_closed_validation_location_and_persists_it(tmp_path):
+    from trading_system.redline.model_diagnostics import RequiredModelUnavailable
+
+    store = create(tmp_path)
+    lease = store.claim_ready("worker")
+
+    def reject(_value):
+        raise RequiredModelUnavailable(
+            "OUTPUT_SCHEMA_MISMATCH",
+            schema_path="/decisions/0/source_ids",
+            schema_keyword="minItems",
+        )
+
+    with pytest.raises(WorkUnitError) as caught:
+        store.publish_result(lease, {"ok": True}, validator=reject)
+    assert caught.value.code == "RESULT_REJECTED"
+    assert caught.value.diagnostic == {
+        "schema": "tiger.validation-diagnostic/v1",
+        "validator": "TEST_FIXTURE.exact/v1",
+        "reason": "OUTPUT_SCHEMA_MISMATCH",
+        "schema_path": "/decisions/0/source_ids",
+        "schema_keyword": "minItems",
+    }
+    store.fail(lease, "RESULT_REJECTED", diagnostic=caught.value.diagnostic)
+    status = store.status()
+    assert status["validation_diagnostics"] == [{
+        **caught.value.diagnostic,
+        "failure_id": status["validation_diagnostics"][0]["failure_id"],
+        "unit_id": "a",
+        "diagnostic_sha256": status["validation_diagnostics"][0]["diagnostic_sha256"],
+    }]
+    assert status["validation_diagnostics"][0]["failure_id"].startswith("failure-")
+    wrong_path = {**caught.value.diagnostic, "schema_path": "/secret/full model output"}
+    from trading_system.tasks.validation_diagnostic import validate as validate_diagnostic
+    with pytest.raises(ValueError):
+        validate_diagnostic(wrong_path)
+    assert store.verify()["unit_count"] == 1
 
 
 def test_context_owner_isolated_and_coordinator_cannot_be_waited_from_worker(tmp_path):

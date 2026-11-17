@@ -29,9 +29,13 @@ HASH = re.compile(r"[0-9a-f]{64}\Z")
 class WorkUnitError(EvidenceInvalid):
     """Value-free task contract or persistence failure with a stable code."""
 
-    def __init__(self, code, message, *, stage=None, cause_type=None):
+    def __init__(self, code, message, *, stage=None, cause_type=None, diagnostic=None):
         super().__init__(code, message, stage=stage)
         self.cause_type = cause_type
+        self.diagnostic = None
+        if diagnostic is not None:
+            from .validation_diagnostic import validate
+            self.diagnostic = validate(diagnostic)
 
 
 def identifier(value: object, label: str = "identity") -> str:

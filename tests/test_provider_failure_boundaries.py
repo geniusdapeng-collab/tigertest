@@ -41,7 +41,7 @@ class _Provider:
     def vol_index_for(self, symbol, days=400):
         return self._call("vol_index_for", symbol, days)
 
-    def ohlcv_batch(self, tickers, days=400):
+    def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
         return self._call("ohlcv_batch", list(tickers), days)
 
 
@@ -179,6 +179,45 @@ def test_existing_coverage_threshold_does_not_force_extra_sources(monkeypatch, s
     result = pipeline._batch_with_fallback(primary, list("ABCDEF"), 30)
     assert result == frames
     assert len(stooq.calls) == (0 if success_at == "primary" else 1)
+
+
+def test_batch_passes_one_hard_deadline_to_every_real_provider(monkeypatch, tmp_path):
+    calls = []
+    frame = _frame()
+    class DeadlineProvider(_Provider):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
+            calls.append((self.name, hard_deadline, tickers))
+            return {ticker: frame for ticker in tickers}
+    primary = DeadlineProvider("yahoo")
+    monkeypatch.setattr("trading_system.providers.stooq.StooqProvider", lambda: _Provider("stooq", result={}))
+    result = pipeline._batch_with_fallback(primary, ["A", "B"], 30, deadline_seconds=2)
+    assert set(result) == {"A", "B"}
+    assert calls and calls[0][0] == "yahoo" and calls[0][1] is not None
+
+
+def test_progress_projection_updates_while_batch_is_running(monkeypatch, tmp_path):
+    frame = _frame()
+    class ProgressProvider(_Provider):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
+            for index, ticker in enumerate(tickers, 1):
+                progress_callback({
+                    "attempted": index, "completed": index,
+                    "failed": 0, "timed_out": 0,
+                })
+            return {ticker: frame for ticker in tickers}
+    execution = type("Execution", (), {
+        "paths": type("Paths", (), {"work_dir": tmp_path})(),
+        "_active": type("Active", (), {"spec": type("Spec", (), {"name": "data.prepare"})()})(),
+    })()
+    provider = ProgressProvider("yahoo")
+    provider.execution = execution
+    result = pipeline._batch_with_fallback(provider, list("ABCDE"), 30, deadline_seconds=2)
+    assert len(result) == 5
+    progress = __import__("json").loads((tmp_path / "progress.json").read_text())
+    assert progress["schema"] == "tiger.run-progress/v1"
+    assert progress["provider"] == "yahoo"
+    assert progress["completed"] == 5 and progress["total"] == 5
+    assert progress["progress_is_not_receipt"] is True
 
 
 @pytest.mark.parametrize("invalid", [None, pd.DataFrame(),

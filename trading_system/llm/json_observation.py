@@ -212,7 +212,9 @@ Generic valid usage is retained even if a later budget/mode check rejects it.
         if inputs["thinking_mode"] == "disabled" and value["reasoning_state"] == "present":
             raise RequiredModelUnavailable("NON_THINKING_REASONING_CONTENT")
         DeepSeekRequiredClient._usage(usage, inputs["thinking_mode"])
-        if usage["completion_tokens"] > inputs["output_ceiling"] or usage["total_tokens"] > CONTEXT_TOKENS:
+        if usage["completion_tokens"] >= inputs["output_ceiling"]:
+            raise RequiredModelUnavailable("MODEL_OUTPUT_EXHAUSTED")
+        if usage["total_tokens"] > CONTEXT_TOKENS:
             raise RequiredModelUnavailable("MODEL_USAGE_EXCEEDS_BUDGET")
         if not value["fingerprint_valid"]:
             raise RequiredModelUnavailable("UNSAFE_RESPONSE_FINGERPRINT")

@@ -9,6 +9,7 @@ export const PROFILE = "us-public-paper-v1";
 export const REQUIRED_PROFILE = "us-public-model-required-paper-v1";
 export const INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2";
 export const TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v3";
+export const CURRENT_TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v4";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
   frameBytes: 131072, requestMs: 60000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
@@ -23,6 +24,7 @@ export const MODEL_ENV_NAMES = Object.freeze(["LLM_BACKEND", "LLM_BASE_URL", "LL
   "TIGER_INTEL_BRAVE_API_KEY", "TIGER_INTEL_TAVILY_API_KEY", "TIGER_INTEL_EXA_API_KEY",
   "TIGER_INTEL_FRED_API_KEY", "TIGER_INTEL_SEC_USER_AGENT",
   "TIGER_INTEL_REGISTRY_FILE", "TIGER_INTEL_ARCHIVE_ROOT", "TIGER_AGENT_RUNTIME_POLICY_FILE"]);
+const READINESS_ENV_NAMES = Object.freeze(["LLM_BACKEND", "LLM_BASE_URL", "LLM_MODEL"]);
 const EXIT_CODES = new Map([
   ...["INVALID_REQUEST", "INPUT_TOO_LARGE"].map((s) => [s, 2]),
   ...["READ_ONLY", "LIVE_FORBIDDEN", "UNAUTHORIZED"].map((s) => [s, 3]),
@@ -340,13 +342,34 @@ export function failureEnvelope(operation, error, runId = null) {
 }
 export function exitCode(envelope) { return envelope.operation_ok ? 0 : EXIT_CODES.get(envelope.error?.code) ?? 7; }
 
-export function runtimeEnvironment(env = process.env, modelRequired = false) {
+export function runtimeEnvironment(env = process.env, modelRequired = false, readinessInspection = false) {
   const result = Object.fromEntries(ENV_NAMES.filter((key) => typeof env[key] === "string").map((key) => [key, env[key]]));
-  // Read-only doctor/describe may inspect this non-secret trusted config;
-  // model credentials still cross only the explicit required-model boundary.
   if (typeof env.TIGER_AGENT_RUNTIME_POLICY_FILE === "string") result.TIGER_AGENT_RUNTIME_POLICY_FILE = env.TIGER_AGENT_RUNTIME_POLICY_FILE;
   if (modelRequired) for (const key of MODEL_ENV_NAMES) {
     if (typeof env[key] === "string") result[key] = env[key];
+  } else if (readinessInspection) for (const key of READINESS_ENV_NAMES) {
+    // Trusted doctor/describe inspect readiness only. Source-provider keys and
+    // unrelated credentials remain outside their child process.
+    if (typeof env[key] === "string") result[key] = env[key];
+  }
+  if (!modelRequired && readinessInspection) {
+    const key = typeof env.LLM_API_KEY === "string" ? env.LLM_API_KEY : "";
+    const contact = typeof env.TIGER_SEC_CONTACT === "string" ? env.TIGER_SEC_CONTACT : "";
+    const userAgent = typeof env.TIGER_INTEL_SEC_USER_AGENT === "string"
+      ? env.TIGER_INTEL_SEC_USER_AGENT : "";
+    const apiKeyPresent = key.length > 0 && key.length <= 4096 && key.trim() === key
+      && [...key].every(char => { const code = char.codePointAt(0); return code >= 33 && code <= 126; });
+    const contactValid = [...contact].length <= 254 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(contact);
+    const userAgentValid = [...userAgent].length >= 8 && [...userAgent].length <= 256
+      && !/[\x00-\x1f\x7f]/u.test(userAgent) && contactValid && userAgent.includes(contact);
+    result.TIGER_READINESS_INPUT = JSON.stringify({
+      schema: "tiger.readiness-input/v1",
+      api_key_present: apiKeyPresent,
+      model_ready: apiKeyPresent && env.LLM_BACKEND === "api"
+        && env.LLM_BASE_URL === "https://api.deepseek.com" && env.LLM_MODEL === "deepseek-flash",
+      sec_contact: contactValid,
+      sec_user_agent: userAgentValid,
+    });
   }
   return { ...result, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1" };
 }
@@ -372,6 +395,10 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
     if (signal?.aborted) throw new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id });
   } catch (error) { return failureEnvelope(operation, error, input?.run_id); }
   const args = ["-B", "-m", "trading_system.agent_runner", "--mode", config.mode, "--state-root", config.stateRoot, operation];
+  const modelRequired = ["run", "resume", "supplement"].includes(operation)
+    && (operation !== "run" || [REQUIRED_PROFILE, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE,
+      CURRENT_TECH_INTELLIGENCE_PROFILE].includes(input.profile));
+  const readinessInspection = ["doctor", "describe"].includes(operation);
   try {
     const output = await new Promise((resolveResult, rejectResult) => {
       let child;
@@ -407,10 +434,9 @@ export async function invokeWorkflow(operation, input, options = {}, { signal, t
         }, LIMITS.cleanupMs);
       }
       function onAbort() { stop(new WorkflowError("CANCELLED", "Request observation was cancelled.", { runId: input.run_id })); }
-      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT, env: runtimeEnvironment(process.env,
-        operation === "resume" || operation === "supplement" || operation === "run"
-          && [REQUIRED_PROFILE, INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE].includes(input.profile)
-      ), detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
+      try { child = spawn(config.python, args, { cwd: ENGINE_ROOT,
+        env: runtimeEnvironment(process.env, modelRequired, readinessInspection),
+        detached: true, stdio: ["pipe", "pipe", "pipe"] }); }
       catch (cause) { finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })); return; }
       child.on("error", (cause) => finish(new WorkflowError("RUNNER_FAILED", "Unable to start the configured Python executable.", { runId: input.run_id, cause })));
       child.stdout.on("data", (chunk) => {
