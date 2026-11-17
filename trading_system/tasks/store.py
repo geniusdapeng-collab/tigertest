@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import stat
+import threading
 import time
 from typing import Callable
 
@@ -60,6 +61,10 @@ class WorkStore:
             raise WorkUnitError("CONTRACT_INVALID", "Invalid task store clock or timeout")
         self.busy_timeout_ms = busy_timeout_ms
         self.write_busy_retry_ms = write_busy_retry_ms
+        # Coordinator workers share this store. Serialize their short write
+        # transactions in-process instead of making every worker race SQLite's
+        # immediate-lock retry deadline on slow or oversubscribed runners.
+        self._write_lock = threading.RLock()
 
     @classmethod
     def create(cls, root, manifest, **kwargs):
@@ -190,6 +195,8 @@ class WorkStore:
 
     @contextmanager
     def _tx(self, write=False):
+        if write:
+            self._write_lock.acquire()
         connection = None
         try:
             self._safe_database()
@@ -239,8 +246,12 @@ class WorkStore:
                 connection.rollback()
             raise
         finally:
-            if connection is not None:
-                connection.close()
+            try:
+                if connection is not None:
+                    connection.close()
+            finally:
+                if write:
+                    self._write_lock.release()
 
     def _now(self):
         return timestamp_number(self.clock())

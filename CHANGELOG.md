@@ -8,6 +8,9 @@
   SEC submissions and archive documents, including the robots product-token
   match. Non-SEC hosts continue to receive the generic Tiger research agent and
   never receive the operator email.
+- Same-process `WorkStore` writers serialize short SQLite transactions before
+  entering SQLite, preventing high-capacity coordinator runs from exhausting the
+  cross-process busy retry window on slow CI runners.
 
 ## 4.2.0 — 2026-11-17
 
