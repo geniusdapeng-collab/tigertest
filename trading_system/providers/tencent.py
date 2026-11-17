@@ -16,11 +16,11 @@ agentgw → ifind_gw → tiingo）。TNX/VIX 本通道不承接（腾讯 VIX 数
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
+from queue import Empty, Queue
 import re
-from threading import Lock
+from threading import Event, Lock, Thread
 import time
 
 import pandas as pd
@@ -194,27 +194,113 @@ class TencentProvider(DataProvider):
             raise RuntimeError(f"腾讯 {ticker} 历史不足: {len(df)} 行")
         return df
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
-        """Fetch independent symbols concurrently while preserving input order."""
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
+        """Fetch independent symbols concurrently with a non-blocking hard deadline.
+
+        Worker threads are daemonised so a provider socket that ignores its
+        per-request timeout cannot make ``shutdown`` wait forever. Completed
+        symbols are returned unchanged; unfinished symbols are disclosed and
+        never synthesized.
+        """
         requested = list(dict.fromkeys(tickers))
         if not requested:
             return {}
+        if hard_deadline is not None:
+            if type(hard_deadline) not in {int, float} or not hard_deadline > 0:
+                raise ValueError("hard_deadline must be a positive monotonic timestamp")
+            if time.monotonic() >= hard_deadline:
+                self.last_batch_status = {
+                    "schema": "tiger.source-availability.v1", "provider": self.name,
+                    "requested": len(requested), "attempted": 0, "completed": 0,
+                    "failed": 0, "timed_out_symbols": requested,
+                    "service_failure_asserted": False,
+                }
+                return {}
         # Resolve the official directory once on the owner thread. Doing this
         # inside every worker would serialize retries behind the module lock
         # and turn one metadata failure into a long tail.
         self._load_exchange_map()
-        result: dict[str, pd.DataFrame] = {}
-        with ThreadPoolExecutor(max_workers=min(self.BATCH_WORKERS, len(requested)),
-                                thread_name_prefix="tencent-batch") as pool:
-            futures = {pool.submit(self.ohlcv, ticker, days): ticker for ticker in requested}
-            for future in as_completed(futures):
-                ticker = futures[future]
+        work: Queue[str] = Queue()
+        completed: Queue[tuple] = Queue()
+        stop = Event()
+        for ticker in requested:
+            work.put(ticker)
+
+        def worker():
+            while True:
+                if stop.is_set():
+                    return
                 try:
-                    frame = future.result()
+                    ticker = work.get_nowait()
+                except Empty:
+                    return
+                try:
+                    frame = self.ohlcv(ticker, days)
                 except Exception:
-                    continue
-                if frame is not None and not frame.empty:
-                    result[ticker] = frame
+                    if stop.is_set():
+                        return
+                    completed.put(("failed", ticker, None))
+                else:
+                    if stop.is_set():
+                        return
+                    completed.put(("completed", ticker, frame))
+
+        threads = [
+            Thread(target=worker, daemon=True, name=f"tencent-batch-{index}")
+            for index in range(min(self.BATCH_WORKERS, len(requested)))
+        ]
+        for thread in threads:
+            thread.start()
+        result: dict[str, pd.DataFrame] = {}
+        pending = set(requested)
+        failed: set[str] = set()
+        last_progress = time.monotonic()
+        while pending:
+            now = time.monotonic()
+            if hard_deadline is not None and now >= hard_deadline:
+                break
+            timeout = 0.5 if hard_deadline is None else min(0.5, max(0.0, hard_deadline - now))
+            try:
+                outcome, ticker, frame = completed.get(timeout=timeout)
+            except Empty:
+                if not any(thread.is_alive() for thread in threads):
+                    break
+                continue
+            if ticker not in pending:
+                continue
+            pending.remove(ticker)
+            if outcome == "completed" and isinstance(frame, pd.DataFrame) and not frame.empty:
+                result[ticker] = frame
+            else:
+                failed.add(ticker)
+            now = time.monotonic()
+            if callable(progress_callback) and (
+                    now - last_progress >= 5.0
+                    or (len(requested) - len(pending)) % 5 == 0):
+                progress_callback({
+                    "attempted": len(requested) - len(pending),
+                    "completed": len(result),
+                    "failed": len(failed),
+                    "timed_out": 0,
+                })
+                last_progress = now
+        stop.set()
+        timed_out = sorted(pending)
+        self.last_batch_status = {
+            "schema": "tiger.source-availability.v1", "provider": self.name,
+            "requested": len(requested), "attempted": len(requested) - len(pending),
+            "completed": len(result), "failed": len(failed),
+            "timed_out_symbols": timed_out,
+            "service_failure_asserted": False,
+        }
+        if callable(progress_callback):
+            progress_callback({
+                "attempted": self.last_batch_status["attempted"],
+                "completed": len(result), "failed": len(failed),
+                "timed_out": len(timed_out),
+            })
         return {ticker: result[ticker] for ticker in requested if ticker in result}
 
     def quote(self, ticker: str) -> dict | None:

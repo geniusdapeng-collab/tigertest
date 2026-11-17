@@ -1,5 +1,40 @@
 # Changelog
 
+## 4.2.0 — 2026-11-17
+
+### Added
+
+- `us-tech-intelligence-paper-v4` and
+  `tiger.public-tech-intelligence-paper-policy.v4`; v3 prompt, hash and receipt
+  semantics remain frozen for history.
+- `tiger.run-readiness/v1`, `tiger.process-observation/v1`,
+  `tiger.attempt-quarantine/v1`, `tiger.validation-diagnostic/v1`,
+  `tiger.run-progress/v1` and `decision-format-v1`.
+- Append-only source/model quarantine for unknown attempts. Reservations and
+  unknown usage remain disclosed and are never silently freed or re-sent.
+- Atomic progress projection for market batches and provider-native batch
+  progress.
+- Hash-locked `requirements.lock` and backend/full setup profiles.
+
+### Fixed
+
+- Config generation now accepts only reviewed Tiger identities and rejects
+  role, bundle, repository or MCP-entry drift.
+- macOS process observation uses `libproc` rather than `/bin/ps`.
+- Model completion equal to the exact output ceiling is exhausted, not success.
+- Document-level schema failures are local in v4 and do not consume the global
+  format reanswer.
+- Provider batches share one hard deadline, preserve completed symbols and
+  disclose timed-out symbols.
+- Final buy/watch citations use exactly their own market ID; BUY additionally
+  requires owned frozen company evidence.
+
+### Preserved
+
+- MRS / SHS / ICS / TSS / L4 thresholds and 1R/20% risk limits.
+- Public-only data, paper account, append-only evidence and no broker orders.
+- v3 and earlier profiles for historical replay.
+
 ## 4.1.0 — 2026-11-13
 
 TigerTest is a complete isolated copy of

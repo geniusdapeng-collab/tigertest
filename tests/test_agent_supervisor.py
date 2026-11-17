@@ -9,6 +9,7 @@ import time
 import pytest
 
 from agent_workflow_fixtures import REQUEST, fixture_source, wait_terminal
+import trading_system
 from trading_system.agent_evidence import EvidenceInvalid, read_json
 from trading_system.agent_runner import submit
 from trading_system.agent_runtime import pointer_read
@@ -16,6 +17,7 @@ from trading_system.agent_supervisor import (
     BoundedLog, SupervisorInterrupted, _darwin_zombie_group, _kill_group,
     _safe_log_line, _wait_for_owned_exit, error_record,
 )
+from trading_system import platform_process
 from trading_system.redline.execution import StrictObservationError
 
 
@@ -141,17 +143,26 @@ def test_owned_exit_observation_keeps_leader_waitable_until_group_cleanup():
 
 
 @pytest.mark.parametrize("state", [
-    "", "PID PPID PGID STAT", "900001 1 900001 Z",
-    "900002 {parent} 900001 Z", "900001 {parent} 900002 Z",
-    "900001 {parent} 900001 Z\n900001 {parent} 900001 Z",
-    "900001 {parent} 900001 Z extra",
+    None,
+    {"pid": 900001, "ppid": 1, "pgid": 900001, "zombie": True},
+    {"pid": 900002, "ppid": "{parent}", "pgid": 900001, "zombie": True},
+    {"pid": 900001, "ppid": "{parent}", "pgid": 900002, "zombie": True},
+    {"pid": 900001, "ppid": "{parent}", "pgid": 900001, "zombie": False},
 ])
 def test_darwin_owned_exit_refuses_missing_or_conflicting_identity(monkeypatch, state):
     import trading_system.agent_supervisor as supervisor
-    from types import SimpleNamespace
     monkeypatch.setattr(supervisor.sys, "platform", "darwin")
-    monkeypatch.setattr(supervisor.subprocess, "run", lambda *_a, **_k:
-                        SimpleNamespace(stdout=state.format(parent=os.getpid())))
+    value = state
+    if isinstance(value, dict):
+        ppid = value["ppid"]
+        value = {**value, "ppid": ppid.format(parent=os.getpid())
+                 if isinstance(ppid, str) else ppid}
+    else:
+        monkeypatch.setattr(
+            platform_process, "process_group_observation",
+            lambda _pgid: {"leader_present": False, "all_zombies": False},
+        )
+    monkeypatch.setattr(platform_process, "process_identity", lambda _pid: value)
     with pytest.raises(EvidenceInvalid, match="identity"):
         _wait_for_owned_exit(900001, time.monotonic() + 5)
 
@@ -162,29 +173,23 @@ def test_owned_exit_query_failure_never_becomes_success(monkeypatch, failure):
     monkeypatch.setattr(supervisor.sys, "platform", "darwin")
 
     def broken(*args, **kwargs):
-        if failure == "failed":
-            raise subprocess.CalledProcessError(1, args[0])
-        if failure == "missing":
-            raise FileNotFoundError("private fixture")
-        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        raise platform_process.ProcessQueryError("private fixture")
 
-    monkeypatch.setattr(supervisor.subprocess, "run", broken)
+    monkeypatch.setattr(platform_process, "process_identity", broken)
     with pytest.raises(EvidenceInvalid, match="query"):
         _wait_for_owned_exit(900001, time.monotonic() + 5)
 
 
 def test_owned_exit_deadline_wins_over_late_zombie_observation(monkeypatch):
     import trading_system.agent_supervisor as supervisor
-    from types import SimpleNamespace
     monkeypatch.setattr(supervisor.sys, "platform", "darwin")
     clock = iter([10.0, 11.0])
     monkeypatch.setattr(supervisor.time, "monotonic", lambda: next(clock))
 
     def late(*args, **kwargs):
-        assert kwargs["timeout"] == 0.5
-        return SimpleNamespace(stdout=f"900001 {os.getpid()} 900001 Z")
+        return {"pid": 900001, "ppid": os.getpid(), "pgid": 900001, "zombie": True}
 
-    monkeypatch.setattr(supervisor.subprocess, "run", late)
+    monkeypatch.setattr(platform_process, "process_identity", late)
     with pytest.raises(TimeoutError):
         _wait_for_owned_exit(900001, 10.5)
 
@@ -196,9 +201,37 @@ def test_owned_exit_preserves_business_alarm_during_process_query(monkeypatch):
     def alarm(*_args, **_kwargs):
         raise TimeoutError("Business deadline elapsed")
 
-    monkeypatch.setattr(supervisor.subprocess, "run", alarm)
+    monkeypatch.setattr(platform_process, "process_identity", alarm)
     with pytest.raises(TimeoutError, match="Business deadline elapsed"):
         _wait_for_owned_exit(900001, time.monotonic() + 5)
+
+
+def test_platform_process_group_requires_retained_leader_and_all_zombies(monkeypatch):
+    monkeypatch.setattr(platform_process, "group_pids", lambda _pgid: [41, 42, 43])
+    records = {
+        41: {"pid": 41, "ppid": 1, "pgid": 41, "zombie": True},
+        42: {"pid": 42, "ppid": 41, "pgid": 41, "zombie": True},
+    }
+    monkeypatch.setattr(platform_process, "process_identity", lambda pid: records.get(pid))
+    expected = platform_process.process_group_observation(41)
+    assert expected["leader_present"] is True and expected["all_zombies"] is True
+    records[43] = {"pid": 43, "ppid": 41, "pgid": 41, "zombie": False}
+    live = platform_process.process_group_observation(41)
+    assert live["all_zombies"] is False
+    monkeypatch.setattr(platform_process, "group_pids", lambda _pgid: [42, 43])
+    missing = platform_process.process_group_observation(41)
+    assert missing["leader_present"] is False and missing["all_zombies"] is False
+    records[42]["pgid"] = 99
+    with pytest.raises(platform_process.ProcessQueryError, match="another process group"):
+        platform_process.process_group_observation(41)
+
+
+def test_supervisor_source_never_depends_on_external_ps():
+    source = Path(trading_system.__file__).parent / "agent_supervisor.py"
+    text = source.read_text(encoding="utf-8")
+    assert '["/bin/ps"' not in text
+    assert "platform_process.process_identity" in text
+    assert "platform_process.process_group_observation" in text
 
 
 @pytest.mark.parametrize("mode", ["fds", "descendant", "flood"])

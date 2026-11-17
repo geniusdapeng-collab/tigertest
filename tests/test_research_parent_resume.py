@@ -240,6 +240,53 @@ def test_inflight_original_source_attempt_blocks_even_before_a_model_unit(tmp_pa
     assert archive.attempts(job["job_id"])[0]["status"] == "inflight"
 
 
+def test_quarantined_source_attempt_keeps_reservation_but_allows_unrelated_resume(tmp_path):
+    from trading_system.intelligence.archive import Archive
+    from trading_system.intelligence.contracts import digest as source_digest
+    _state, run, _admission, _policy = prepared_parent(tmp_path)
+    archive = Archive(run / "intelligence")
+    plan = {
+        "run_id": run.name,
+        "coverage_cells": [{
+            "cell_id": "cell:security:NVDA", "target_id": "security:NVDA",
+            "required": True, "material_type": "news", "source_ids": ["deepseek"],
+        }],
+        "limits": {"requests": 5, "fetches": 2, "bytes": 1000},
+    }
+    plan["plan_hash"] = source_digest(plan)
+    job = archive.create_job(plan, "TEST_FIXTURE_source_quarantine")
+    attempt = archive.begin_attempt(
+        job["job_id"], "deepseek_search", "search",
+        {"parameters": {"query": "TEST_FIXTURE unknown"}, "reserved_requests": 1},
+        reserve_bytes=100,
+    )
+    archive.settle_attempt(job["job_id"], attempt, "unknown", {
+        "error": {"code": "SOURCE_TIMEOUT"},
+        "bytes_received": 0,
+        "request_count": 1,
+        "usage": {"state": "unknown", "requires_reconciliation": True},
+    })
+    before = archive.status(job["job_id"])
+    with pytest.raises(EvidenceInvalid) as caught:
+        resume.prepare_resume(run, _admission, _policy, stopped_verifier=lambda: None)
+    assert caught.value.code == "RECONCILIATION_REQUIRED"
+    archive.quarantine_attempt(
+        job["job_id"], attempt, affected_targets=["security:NVDA"],
+        reason="RECONCILIATION_REQUIRED", scope="source",
+    )
+    after = archive.status(job["job_id"])
+    assert after["quarantined_attempts"][0]["attempt_id"] == attempt
+    assert after["usage"] == before["usage"]
+    assert after["unresolved_attempts"] == []
+    assert resume.source_unknown_attempts(run) == []
+    unrelated = archive.begin_attempt(
+        job["job_id"], "deepseek_search", "search",
+        {"parameters": {"query": "TEST_FIXTURE unrelated"}, "reserved_requests": 1},
+        reserve_bytes=100,
+    )
+    assert unrelated != attempt
+
+
 def test_original_deadline_is_never_renewed_by_a_resume_request(tmp_path, monkeypatch):
     _state, run, admission, policy = prepared_parent(tmp_path)
     original = read_bytes(run, "admission.json")

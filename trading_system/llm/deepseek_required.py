@@ -898,6 +898,8 @@ class DeepSeekRequiredClient:
             if thinking_mode == "disabled" and (reasoning_content or "").strip():
                 _fail("NON_THINKING_REASONING_CONTENT")
             usage = self._usage(response.get("usage"), thinking_mode)
+            if usage["completion_tokens"] >= output_ceiling:
+                _fail("MODEL_OUTPUT_EXHAUSTED")
             if (usage["completion_tokens"] > output_ceiling
                     or usage["total_tokens"] > CONTEXT_TOKENS):
                 _fail("MODEL_USAGE_EXCEEDS_BUDGET")
@@ -1017,7 +1019,8 @@ class DeepSeekRequiredClient:
         observation = {"schema": contract, "call_id": call_id, "request_sha256": inputs["request_sha256"],
                        "attempts": [], "retry_used": False}
 
-        def record(ordinal, *, native=None, body_hash=None, error=None, rejected_native=None):
+        def record(ordinal, *, native=None, body_hash=None, error=None, rejected_native=None,
+                   policy_failure=False):
             transport = self._last_chat_transport
             if native is not None and transport is None:
                 # Test adapters may provide a complete decoded native object;
@@ -1030,7 +1033,8 @@ class DeepSeekRequiredClient:
             if contract == TOOL_CONTRACT and "final_response_url" not in transport:
                 transport = {**transport, "final_response_url": None, "redirected": None}
             transport = validate_transport(transport)
-            diagnostic = staged_diagnostic(error, "http_envelope", transport) if error is not None else None
+            diagnostic = (staged_diagnostic(error, "http_envelope", transport)
+                          if error is not None and not policy_failure else None)
             attempt = {"schema": schemas["attempt"], "call_id": call_id, "ordinal": ordinal,
                 "request_sha256": inputs["request_sha256"], "transport": transport,
                 "response": None, "response_sha256": None, "content_redacted": None,
@@ -1097,14 +1101,32 @@ class DeepSeekRequiredClient:
                                 or choice.get("finish_reason") != "stop" or not isinstance(message, dict)
                                 or message.get("role") != "assistant" or message.get("tool_calls") or message.get("function_call")):
                             _fail("INCOMPLETE_MODEL_RESPONSE")
-                        self._usage(native.get("usage"), "enabled")
+                        usage = self._usage(native.get("usage"), "enabled")
+                        if usage["completion_tokens"] >= ceiling:
+                            _fail("MODEL_OUTPUT_EXHAUSTED")
                         self._observed_response_ids.add(response_id)
                     except RequiredModelUnavailable as error:
                         from .rejected_native import capture
                         rejected = capture(native, inputs, ordinal=ordinal, body_hash=body_hash,
                             code=error.diagnostic["code"], secret=self._api_key,
                             sanitize_identifier=self._safe_native_content)
-                        _, entry = record(ordinal, error=error, rejected_native=rejected)
+                        preserve_native = (
+                            native if error.diagnostic["code"] in {
+                                "MODEL_USAGE_EXCEEDS_BUDGET",
+                                "MODEL_OUTPUT_EXHAUSTED",
+                                "NON_THINKING_OUTPUT_REQUIRED",
+                            } else None
+                        )
+                        if preserve_native is not None:
+                            rejected = None
+                        saved_attempt, entry = record(
+                            ordinal, native=preserve_native, body_hash=body_hash,
+                            error=error, rejected_native=rejected,
+                            policy_failure=preserve_native is not None,
+                        )
+                        if preserve_native is not None:
+                            verdict = replay_attempt(saved_attempt, inputs)
+                            entry["diagnostic"] = verdict["diagnostic"]
                         raise self._observation_failure(entry["diagnostic"], observation) from None
                     attempt, entry = record(ordinal, native=native, body_hash=body_hash)
                 else:
@@ -1131,7 +1153,9 @@ class DeepSeekRequiredClient:
                         verdict.update(parsed=None, diagnostic=staged_diagnostic(error, "assistant_content"), retry_eligible=False)
                 entry["diagnostic"] = verdict["diagnostic"]
                 if verdict["diagnostic"] is not None:
-                    if ordinal == 1 and verdict["retry_eligible"] and self.execution.claim_model_format_retry():
+                    if (ordinal == 1 and verdict["retry_eligible"]
+                            and not getattr(self, "document_local_failure", False)
+                            and self.execution.claim_model_format_retry()):
                         continue
                     raise self._observation_failure(verdict["diagnostic"], observation) from None
                 parsed = verdict["parsed"]

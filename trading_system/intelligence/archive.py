@@ -241,6 +241,10 @@ class Archive:
         fetches = sum(row["operation"] == "fetch" for row in attempts)
         received = sum(row.get("result", {}).get("bytes_received", 0) for row in attempts)
         unknown = sum(row.get("result", {}).get("usage", {}).get("requires_reconciliation", False) for row in attempts)
+        quarantined = self._quarantined_attempts(connection, job_id)
+        quarantined_ids = {row["attempt_id"] for row in quarantined}
+        unresolved = [row for row in attempts if row["status"] in {"inflight", "unknown"}
+                      and row["attempt_id"] not in quarantined_ids]
         bundle = connection.execute("SELECT bundle_id,manifest_sha256 FROM bundles WHERE job_id=? AND tenant=?", (job_id, self.tenant)).fetchone()
         reserved = [row for row in attempts if "reserved_bytes" in row["request"]]
         reservation_usage = {}
@@ -259,11 +263,71 @@ class Archive:
         return {"job_id": job_id, "run_id": job["run_id"], "state": job["state"], "revision": job["revision"], "created_at": job["created_at"],
                 "plan_hash": job["plan_hash"], "gaps": gaps, "attempts": attempts,
                 "inflight_attempts": [r["attempt_id"] for r in attempts if r["status"] == "inflight"],
+                "quarantined_attempts": quarantined,
+                "unresolved_attempts": [row["attempt_id"] for row in unresolved],
                 "usage": {"requests": requests, "fetches": fetches, "bytes": received,
                           "unreconciled_attempts": unknown, **reservation_usage},
                 "effective_concurrency": runtime["peak_source_operations"] if runtime else 1,
                 **({"source_runtime": runtime} if runtime else {}),
                 "bundle": dict(bundle) if bundle else None}
+
+    def _quarantined_attempts(self, connection, job_id):
+        rows = connection.execute(
+            "SELECT sequence,payload_json FROM events WHERE tenant=? AND job_id=? "
+            "AND kind='source_attempt_quarantined' ORDER BY sequence",
+            (self.tenant, job_id),
+        ).fetchall()
+        result = []
+        for sequence, raw in rows:
+            try:
+                payload = json.loads(raw)
+            except (ValueError, TypeError):
+                raise IntelligenceError("HASH_MISMATCH", "Source quarantine event is invalid") from None
+            if (not isinstance(payload, dict) or set(payload) != {
+                    "attempt_id", "scope", "affected_targets", "usage_state",
+                    "reservation_state", "reason"}):
+                raise IntelligenceError("HASH_MISMATCH", "Source quarantine event schema differs")
+            result.append({**payload, "event_sequence": sequence})
+        return result
+
+    def quarantined_attempts(self, job_id):
+        with self._session() as connection:
+            self._job(connection, job_id)
+            return self._quarantined_attempts(connection, job_id)
+
+    def quarantine_attempt(self, job_id, attempt_id, *, affected_targets, reason,
+                           scope="source"):
+        if scope not in {"source", "model"}:
+            raise IntelligenceError("CONTRACT_INVALID", "Invalid quarantine scope")
+        if not isinstance(affected_targets, list) or not affected_targets:
+            raise IntelligenceError("CONTRACT_INVALID", "Affected targets must be distinct identities")
+        affected_targets = [identifier(item, "affected target") for item in affected_targets]
+        if len(affected_targets) != len(set(affected_targets)):
+            raise IntelligenceError("CONTRACT_INVALID", "Affected targets must be distinct identities")
+        reason = identifier(reason, "quarantine reason")
+        with self.transaction() as connection:
+            self._ensure_open(connection, job_id)
+            attempts = {row["attempt_id"]: row for row in self._attempts(connection, job_id)}
+            attempt = attempts.get(attempt_id)
+            if attempt is None:
+                raise IntelligenceError("EVIDENCE_NOT_FOUND", "Source attempt is unavailable")
+            existing = self._quarantined_attempts(connection, job_id)
+            payload = {
+                "attempt_id": attempt_id, "scope": scope,
+                "affected_targets": affected_targets,
+                "usage_state": "unknown" if attempt.get("result", {}).get(
+                    "usage", {}).get("requires_reconciliation") else "known",
+                "reservation_state": ("held" if attempt["status"] in {"inflight", "unknown"}
+                                      and "reserved_bytes" in attempt["request"] else "not_applicable"),
+                "reason": reason,
+            }
+            if any({key: value for key, value in row.items() if key != "event_sequence"} == payload
+                   for row in existing):
+                return payload
+            if attempt["status"] not in {"inflight", "unknown"}:
+                raise IntelligenceError("CONTRACT_INVALID", "Only unresolved attempts can be quarantined")
+            self._event(connection, job_id, "source_attempt_quarantined", payload)
+            return payload
 
     def status(self, job_id):
         with self._session() as connection:
@@ -296,7 +360,9 @@ class Archive:
                 available_requests = limits["requests"] - status["usage"].get("committed_requests", status["usage"]["requests"]) - status["usage"].get("reserved_requests", 0)
                 available_bytes = limits["bytes"] - status["usage"].get("committed_bytes", status["usage"]["bytes"]) - status["usage"].get("reserved_bytes", 0)
                 if available_requests <= 0 or available_bytes <= 0:
-                    if any(row["status"] == "unknown" and "reserved_bytes" in row["request"] for row in status["attempts"]):
+                    quarantined = {row["attempt_id"] for row in status["quarantined_attempts"]}
+                    if any(row["status"] == "unknown" and "reserved_bytes" in row["request"]
+                           and row["attempt_id"] not in quarantined for row in status["attempts"]):
                         raise IntelligenceError("RECONCILIATION_REQUIRED", "Unknown source attempt retains its reservation")
                     if status["inflight_attempts"]:
                         raise IntelligenceError("RESOURCE_BUSY", "Concurrent source attempts retain the available quota")
@@ -653,6 +719,8 @@ class Archive:
                 "state": "partial" if missing else "completed", "attempts": status["attempts"],
                 "usage": status["usage"], "baseline_refs": baseline_refs or [], "event_head": head,
                 "freeze_event_sequence": head["sequence"] + 1, "frozen_at": timestamp(self.clock())}
+            if status["quarantined_attempts"]:
+                manifest["quarantined_attempts"] = status["quarantined_attempts"]
             sha = digest(manifest)
             bundle_id = "bundle_" + sha[:32]
             event = self._event(connection, job_id, "bundle_frozen", {"bundle_id": bundle_id, "manifest_sha256": sha,

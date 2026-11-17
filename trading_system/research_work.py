@@ -51,11 +51,24 @@ _LEGACY_POLICY = {key: value for key, value in _PREVIOUS_POLICY.items()
                   if key not in {"segment_contract", "segment_max_count",
                                  "segment_input_token_limit",
                                  "segment_context_characters"}}
-_ACCEPTED_POLICIES = (_POLICY, _PREVIOUS_POLICY, _LEGACY_POLICY)
+_V4_RELIABILITY = {
+    **_POLICY,
+    "reliability_contract": "tiger.reliability-contract/v4",
+    "task_quarantine_contract": "tiger.attempt-quarantine/v1",
+    "validation_diagnostic_contract": "tiger.validation-diagnostic/v1",
+    "progress_contract": "tiger.run-progress/v1",
+    "decision_format_contract": "decision-format-v1",
+    "output_exhaustion_code": "MODEL_OUTPUT_EXHAUSTED",
+    "market_batch_deadline_seconds": 180,
+}
+_ACCEPTED_POLICIES = (_POLICY, _PREVIOUS_POLICY, _LEGACY_POLICY, _V4_RELIABILITY)
 
 
-def research_work_policy(*, legacy: bool = False) -> dict:
-    return deepcopy(_LEGACY_POLICY if legacy else _POLICY)
+def research_work_policy(*, legacy: bool = False, reliability: bool = False) -> dict:
+    if legacy and reliability:
+        raise ValueError("RESEARCH_WORK_POLICY_CONFLICT")
+    return deepcopy(_LEGACY_POLICY if legacy else
+                    _V4_RELIABILITY if reliability else _POLICY)
 
 
 def validate_research_work_policy(value) -> dict:

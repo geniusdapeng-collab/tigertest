@@ -10,6 +10,7 @@ yield 类数据（TNX）统一约定为【百分数收益率】（如 4.25 表�
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import time
 
 import pandas as pd
 
@@ -26,16 +27,23 @@ class DataProvider(ABC):
     def ohlcv(self, ticker: str, days: int = 400) -> pd.DataFrame:
         """单标的 OHLCV，至少 days 个交易日的历史。"""
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         """批量拉取（默认逐个调用，子类可优化为并发）。"""
         out: dict[str, pd.DataFrame] = {}
         for t in tickers:
+            if hard_deadline is not None and time.monotonic() >= hard_deadline:
+                break
             try:
                 df = self.ohlcv(t, days=days)
                 if df is not None and len(df) > 0:
                     out[t] = df
             except Exception:
                 continue
+            if callable(progress_callback):
+                progress_callback({"attempted": len(out), "completed": len(out),
+                                   "failed": 0, "timed_out": 0})
         return out
 
     @abstractmethod

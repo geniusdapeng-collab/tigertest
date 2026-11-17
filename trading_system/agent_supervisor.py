@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 
+from trading_system import platform_process
 from trading_system.agent_evidence import (
     EvidenceInvalid, EvidenceStore, atomic_json, checked_root, digest, file_ref,
     read_bytes, read_json, safe_path, strict_json,
@@ -202,27 +203,18 @@ def _kill_group(pgid: int, *, grace_seconds: float = 0.25) -> None:
 def _darwin_zombie_group(pgid: int) -> bool:
     """Darwin returns EPERM for a group containing only unreaped zombies.
 
-    Only accept that case after an OS table read proves the retained group
-    leader is still that zombie and every listed member is also dead. A live
-    member, missing leader, malformed ps output, or any other platform fails.
+    Only accept that case after libproc proves the retained group leader is
+    still present and every visible member is also a zombie. A live member,
+    missing leader, failed query, or identity conflict fails closed.
     The caller has deliberately not reaped the leader, preventing PID reuse.
     """
     if sys.platform != "darwin":
         return False
-    result = subprocess.run(
-        ["/bin/ps", "-ax", "-o", "pid=,pgid=,stat="],
-        capture_output=True, text=True, timeout=3, check=True,
-        env={"PATH": os.defpath, "LC_ALL": "C"},
-    )
-    members = []
-    for line in result.stdout.splitlines():
-        parts = line.split()
-        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
-            return False
-        if int(parts[1]) == pgid:
-            members.append((int(parts[0]), parts[2]))
-    return (any(pid == pgid for pid, _ in members)
-            and all(status.startswith("Z") for _, status in members))
+    try:
+        observation = platform_process.process_group_observation(pgid)
+    except platform_process.ProcessQueryError:
+        return False
+    return observation["leader_present"] and observation["all_zombies"]
 
 
 def _guardian_abort(control_fd: int, reason: str) -> None:
@@ -390,27 +382,22 @@ def _wait_for_owned_exit(pid: int, deadline: float) -> None:
                 raise EvidenceInvalid("RUNNER_FAILED", "Unexpected guardian wait state")
         elif sys.platform == "darwin":
             try:
-                result = subprocess.run(
-                    ["/bin/ps", "-p", str(pid), "-o", "pid=,ppid=,pgid=,stat="],
-                    capture_output=True, text=True, timeout=min(3, remaining), check=True,
-                    env={"PATH": os.defpath, "LC_ALL": "C"},
-                )
-            except subprocess.TimeoutExpired as exc:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("Business deadline elapsed") from exc
-                raise EvidenceInvalid("RUNNER_FAILED", "Guardian state query timed out") from exc
-            except TimeoutError:
-                # The supervisor's business alarm may interrupt the query.
-                # Its TimeoutError is an OSError, but retains TIMEOUT semantics.
-                raise
-            except (OSError, subprocess.CalledProcessError) as exc:
+                identity = platform_process.process_identity(pid)
+            except platform_process.ProcessQueryError as exc:
                 raise EvidenceInvalid("RUNNER_FAILED", "Guardian state query failed") from exc
-            rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
-            if (len(rows) != 1 or len(rows[0]) != 4
-                    or not all(value.isdigit() for value in rows[0][:3])
-                    or tuple(map(int, rows[0][:3])) != (pid, os.getpid(), pid)):
-                raise EvidenceInvalid("RUNNER_FAILED", "Guardian process identity differs")
-            exited = rows[0][3].startswith("Z")
+            if identity is None:
+                try:
+                    group = platform_process.process_group_observation(pid)
+                except platform_process.ProcessQueryError as exc:
+                    raise EvidenceInvalid("RUNNER_FAILED", "Guardian group query failed") from exc
+                if not group["leader_present"]:
+                    raise EvidenceInvalid("RUNNER_FAILED", "Guardian process identity differs")
+                exited = True
+            else:
+                if (identity["pid"], identity["ppid"], identity["pgid"]) != (
+                        pid, os.getpid(), pid):
+                    raise EvidenceInvalid("RUNNER_FAILED", "Guardian process identity differs")
+                exited = identity["zombie"] is True
         else:
             raise EvidenceInvalid("RUNNER_FAILED", "Unsupported guardian wait platform")
         remaining = deadline - time.monotonic()

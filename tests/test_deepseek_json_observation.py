@@ -158,7 +158,7 @@ def test_retry_budget_is_shared_when_the_client_is_recreated(observed, monkeypat
 
 
 @pytest.mark.parametrize("usage,code", [
-    ({"prompt_tokens": 40, "completion_tokens": 400000, "total_tokens": 400040}, "MODEL_USAGE_EXCEEDS_BUDGET"),
+        ({"prompt_tokens": 40, "completion_tokens": 400000, "total_tokens": 400040}, "MODEL_OUTPUT_EXHAUSTED"),
     ({"prompt_tokens": 40, "completion_tokens": 10, "total_tokens": 50,
       "completion_tokens_details": {"reasoning_tokens": 1}}, "NON_THINKING_OUTPUT_REQUIRED"),
 ])
@@ -170,7 +170,9 @@ def test_known_usage_is_not_clipped_or_lost_on_later_policy_failure(observed, mo
         with observed.step("clean.llm_semantic", {"fixture": "TEST_FIXTURE"}): invoke(observed)
     assert error.value.diagnostic["code"] == code and len(sent) == 1
     attempt = snapshot(observed, error.value.observation["attempts"][0]["observation_ref"])
-    assert attempt["response"]["usage"] == usage
+    stored_usage = (attempt["response"]["usage"] if attempt["response"] is not None
+                    else attempt["rejected_native"]["usage"])
+    assert stored_usage == usage
 
 
 @pytest.mark.parametrize("encoded", [False, True])

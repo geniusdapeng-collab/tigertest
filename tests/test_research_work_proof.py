@@ -16,7 +16,10 @@ from test_research_work_execution import review
 from test_research_work_semantics import annotation, raw
 from trading_system.agent_evidence import (EvidenceInvalid, atomic_bytes, atomic_json,
     digest, json_bytes, read_json, read_snapshot, strict_json)
-from trading_system.agent_runtime import INTELLIGENCE_PROFILE, policy_manifest
+from trading_system.agent_runtime import (
+    CURRENT_TECH_INTELLIGENCE_PROFILE, INTELLIGENCE_PROFILE, policy_manifest,
+    research_readiness,
+)
 from trading_system.llm import model_budget
 from trading_system.llm.deepseek_required import DeepSeekRequiredClient
 from trading_system.llm.intelligence_proof import _Replay
@@ -25,7 +28,9 @@ from trading_system.llm.work_proof import ResearchWorkProof, partial_work_accoun
 from trading_system.llm.work_required import clean_round, document_arguments
 from trading_system.research_snapshot import snapshot_manifest
 from trading_system.research_work import research_work_policy, work_manifest
-from trading_system.redline.execution import REQUIRED_MODEL_STAGES
+from trading_system.redline.execution import (
+    CURRENT_TECH_INTELLIGENCE_POLICY_ID, REQUIRED_MODEL_STAGES, ExecutionPolicy,
+)
 from trading_system.tasks import WorkStore, UnitSpec, WorkUnitError
 
 
@@ -48,14 +53,19 @@ class FixtureReplay(_Replay):
         self.inputs = {stage: self.snapshot(row, "input") for stage, row in self.ends.items()}
 
 
-def prepare_proof_context(context):
+def prepare_proof_context(context, *, profile=INTELLIGENCE_PROFILE, readiness=None):
     destination = context.store.root.with_name(context.run_id)
     context.store.root.rename(destination)
     context.store.root = destination
     context.response_observation_contract = TOOL_CONTRACT
-    research = research_work_policy()
-    policy = strict_json(json_bytes(policy_manifest(INTELLIGENCE_PROFILE, authoritative_paper=False,
-        response_observation_contract=TOOL_CONTRACT, research_work=research)))
+    research = research_work_policy(
+        reliability=profile == CURRENT_TECH_INTELLIGENCE_PROFILE,
+    )
+    policy = strict_json(json_bytes(policy_manifest(
+        profile, authoritative_paper=False,
+        response_observation_contract=TOOL_CONTRACT,
+        research_work=research, readiness=readiness,
+    )))
     clock = {"admitted_at_utc": context.admitted_at.isoformat(),
         "deadline_at_utc": (context.admitted_at + timedelta(hours=2)).isoformat(),
         "run_date": context.run_date.isoformat(), "market_timezone": "America/New_York"}
@@ -63,6 +73,12 @@ def prepare_proof_context(context):
         "runtime_input_sha256": "2" * 64, "source_sha256": "3" * 64,
         "policy_sha256": digest(json_bytes(policy)), "parent": {}, "clock": clock}
     context.research_work_policy = research
+    if profile == CURRENT_TECH_INTELLIGENCE_PROFILE:
+        context.policy = ExecutionPolicy(
+            CURRENT_TECH_INTELLIGENCE_POLICY_ID, model_mode="enabled",
+            search_source_names=context.policy.search_source_names,
+            reduced_evidence=readiness["reduced_evidence"],
+        )
     context.research_work_store = WorkStore.create(destination / "tasks", work_manifest(admission),
         clock=lambda: context.admitted_at.timestamp())
     atomic_json(destination, "policy.json", policy, exclusive=True)
@@ -258,6 +274,67 @@ def schema_retry_exhausted(observed, monkeypatch):
 
 
 @pytest.fixture
+def schema_retry_v4(observed, monkeypatch):
+    from trading_system.research_work import _POLICY
+    monkeypatch.setitem(_POLICY, "document_workers", 1)
+    for name, value in {
+        "TIGER_SEC_CONTACT": "operator@example.com",
+        "TIGER_INTEL_SEC_USER_AGENT": "TigerTest research operator@example.com",
+    }.items():
+        monkeypatch.setenv(name, value)
+    readiness = research_readiness()
+    admission, policy, acquisition, client = prepare_proof_context(
+        observed, profile=CURRENT_TECH_INTELLIGENCE_PROFILE, readiness=readiness,
+    )
+    wires = synthetic_transport(monkeypatch, schema_retry=True)
+    originals = [raw(), raw("source-2")]
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "v4 local schema failure"}) as scope:
+        documents = clean_round(client, originals, acquisition=acquisition)
+        scope.output({"documents": [document.raw.doc_id for document in documents]})
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+    return SimpleNamespace(
+        context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store,
+        documents=documents, originals=originals, joins=joins,
+        replay=replay, wires=wires,
+    )
+
+
+@pytest.fixture
+def model_unknown_v4(observed, monkeypatch):
+    for name, value in {
+        "TIGER_SEC_CONTACT": "operator@example.com",
+        "TIGER_INTEL_SEC_USER_AGENT": "TigerTest research operator@example.com",
+    }.items():
+        monkeypatch.setenv(name, value)
+    readiness = research_readiness()
+    admission, policy, acquisition, client = prepare_proof_context(
+        observed, profile=CURRENT_TECH_INTELLIGENCE_PROFILE, readiness=readiness,
+    )
+    from trading_system.redline.model_diagnostics import RequiredModelUnavailable
+
+    def uncertain(self, request):
+        self.execution.model_transport_dispatch(request)
+        raise RequiredModelUnavailable("NETWORK_TIMEOUT")
+
+    monkeypatch.setattr(DeepSeekRequiredClient, "_post_chat_bounded", uncertain)
+    original = raw()
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "v4 model unknown"}) as scope:
+        documents = clean_round(client, [original], acquisition=acquisition)
+        scope.output({"documents": []})
+        joins = deepcopy(scope.io_calls)
+    replay = FixtureReplay(observed, admission, policy)
+    return SimpleNamespace(
+        context=observed, admission=admission, policy=policy,
+        acquisition=acquisition, store=observed.research_work_store,
+        documents=documents, originals=[original], joins=joins,
+        replay=replay, wires=[],
+    )
+
+
+@pytest.fixture
 def review_schema_failed(observed, monkeypatch):
     admission, policy, acquisition, client = prepare_proof_context(observed)
     wires = synthetic_transport(
@@ -393,6 +470,68 @@ def test_exhausted_schema_retry_is_replayed_through_the_failed_model_child(schem
     summary = verifier.assert_complete()
     assert summary["verified_units"] == 4 and summary["document_count"] == 2
     assert summary["native_count"] == len(fixture.wires) == 4
+
+
+def test_v4_document_schema_failures_are_local_and_do_not_consume_global_reanswer(
+        schema_retry_v4):
+    fixture = schema_retry_v4
+    assert fixture.documents == []
+    assert len(fixture.wires) == len(fixture.joins) == 2
+    verifier = ResearchWorkProof(fixture.replay)
+    cleaned, index = [], 0
+    for original in fixture.originals:
+        document, consumed = verifier.verify_document(
+            original, fixture.joins[index:],
+            validation_context=validation_context(fixture), return_count=True,
+        )
+        index += consumed
+        if document is not None:
+            cleaned.append(document)
+    assert cleaned == [] and index == len(fixture.joins)
+    dispositions = verifier.store.document_dispositions()
+    assert dispositions["eligible"] == 0 and dispositions["unverifiable"] == 2
+    summary = verifier.assert_complete()
+    assert summary["format_reanswers"] == 0
+    assert summary["native_count"] == 2
+    failure_units = [
+        row for row in verifier.store.status()["units"]
+        if row["spec"]["kind"] == "document.extract"
+    ]
+    assert len(failure_units) == 2
+    for unit in failure_units:
+        failure = verifier.store.read_result(unit["unit_id"])["value"]["output"]
+        assert failure["error_code"] == "WORK_OUTPUT_SCHEMA_MISMATCH"
+
+
+def test_v4_unknown_model_attempt_is_quarantined_and_can_only_produce_unverifiable_document(
+        model_unknown_v4):
+    fixture = model_unknown_v4
+    assert fixture.documents == []
+    assert len(fixture.joins) == 1
+    verifier = ResearchWorkProof(fixture.replay)
+    document = verifier.verify_document(
+        fixture.originals[0], fixture.joins,
+        validation_context=validation_context(fixture),
+    )
+    assert document is None
+    quarantines = fixture.store.quarantines()
+    assert len(quarantines) == 1
+    assert quarantines[0]["scope"] == "model"
+    assert quarantines[0]["usage_state"] == "unknown"
+    assert quarantines[0]["reservation_state"] == "held"
+    assert quarantines[0]["affected_targets"] == ["global:macro"]
+    status = fixture.store.status()
+    assert status["active_unknown_attempts"] == 0
+    assert status["unknown_attempts"] == 1
+    assert status["graph_state"] == "completed"
+    summary = verifier.assert_complete()
+    assert summary["quarantined_targets"] == ["global:macro"]
+    assert summary["unknown_reservations"][0]["requires_reconciliation"] is False
+    with pytest.raises(WorkUnitError):
+        fixture.store.begin_attempt(
+            fixture.store.claim_ready("must-not-exist"), {"request": 1},
+            operation="model.deepseek.chat", reservation={"output_tokens": 1},
+        )
 
 
 def test_review_schema_failure_replays_its_failed_child_without_inventing_a_review(review_schema_failed):
@@ -922,7 +1061,11 @@ def test_source_operational_counter_is_bound_to_closed_start_finish_receipts(mut
         assert source_runtime_from_events(events, configured_workers=4, concurrency_limit=3) == finish
 
 
-@pytest.mark.parametrize("kind,code", [("length", "MODEL_OUTPUT_TRUNCATED"), ("choices", "INVALID_CHOICES")])
+@pytest.mark.parametrize("kind,code", [
+    ("length", "MODEL_OUTPUT_TRUNCATED"),
+    ("choices", "INVALID_CHOICES"),
+    ("ceiling", "MODEL_OUTPUT_EXHAUSTED"),
+])
 def test_explicit_rejected_native_keeps_known_usage_without_success_or_format_retry(observed, monkeypatch, kind, code):
     admission, policy, acquisition, client = prepare_proof_context(observed)
     sent = []
@@ -931,8 +1074,16 @@ def test_explicit_rejected_native_keeps_known_usage_without_success_or_format_re
         value = native("{truncated assistant content", "known-rejected-" + kind)
         if kind == "length":
             value["choices"][0]["finish_reason"] = "length"
-        else:
+        elif kind == "choices":
             value["choices"] = []
+        else:
+            ceiling = json.loads(kwargs["data"])["max_tokens"]
+            value["usage"] = {
+                "prompt_tokens": 100,
+                "completion_tokens": ceiling,
+                "total_tokens": ceiling + 100,
+                "completion_tokens_details": {"reasoning_tokens": 0},
+            }
         response = Response(value)
         response.url, response.history = url, []
         return response
@@ -942,7 +1093,10 @@ def test_explicit_rejected_native_keeps_known_usage_without_success_or_format_re
             clean_round(client, [raw()], acquisition=acquisition)
     replay = FixtureReplay(observed, admission, policy)
     result = partial_work_accounting(replay)
-    assert len(sent) == 1 and result["known_usage"]["total_tokens"] == 50
+    expected_total = 50
+    if kind == "ceiling":
+        expected_total = json.loads(sent[0])["max_tokens"] + 100
+    assert len(sent) == 1 and result["known_usage"]["total_tokens"] == expected_total
     assert result["unknown_attempts"] == 0 and not result["unknown_reservations"]
     assert result["format_reanswers"] == 0 and result["semantics_state"] == "unverified"
     row = result["attempts"][0]
@@ -950,7 +1104,11 @@ def test_explicit_rejected_native_keeps_known_usage_without_success_or_format_re
     assert row["native_observations"][0]["diagnostic"]["code"] == code
     store = observed.research_work_store
     native_value = store.read_attempt_response(row["attempt_id"])
-    assert native_value["response"] is None and "rejected_native" in native_value
+    if kind == "ceiling":
+        assert native_value["response"]["usage"]["completion_tokens"] == (
+            json.loads(sent[0])["max_tokens"])
+    else:
+        assert native_value["response"] is None and "rejected_native" in native_value
     if kind == "length":
         assert native_value["rejected_native"]["finish_reason"] == "length"
 

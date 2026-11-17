@@ -50,10 +50,21 @@ INTELLIGENCE_PROFILE = "us-public-intelligence-paper-v2"
 INTELLIGENCE_POLICY_ID = "tiger.public-intelligence-paper-policy.v2"
 TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v3"
 TECH_INTELLIGENCE_POLICY_ID = "tiger.public-tech-intelligence-paper-policy.v3"
-INTELLIGENCE_PROFILES = frozenset({INTELLIGENCE_PROFILE, TECH_INTELLIGENCE_PROFILE})
-INTELLIGENCE_POLICY_IDS = frozenset({INTELLIGENCE_POLICY_ID, TECH_INTELLIGENCE_POLICY_ID})
+CURRENT_TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v4"
+CURRENT_TECH_INTELLIGENCE_POLICY_ID = "tiger.public-tech-intelligence-paper-policy.v4"
+TECH_INTELLIGENCE_PROFILES = frozenset({
+    TECH_INTELLIGENCE_PROFILE, CURRENT_TECH_INTELLIGENCE_PROFILE,
+})
+INTELLIGENCE_PROFILES = frozenset({
+    INTELLIGENCE_PROFILE, *TECH_INTELLIGENCE_PROFILES,
+})
+INTELLIGENCE_POLICY_IDS = frozenset({
+    INTELLIGENCE_POLICY_ID, TECH_INTELLIGENCE_POLICY_ID,
+    CURRENT_TECH_INTELLIGENCE_POLICY_ID,
+})
 MODEL_REQUIRED_POLICIES = frozenset({
     REQUIRED_POLICY_ID, INTELLIGENCE_POLICY_ID, TECH_INTELLIGENCE_POLICY_ID,
+    CURRENT_TECH_INTELLIGENCE_POLICY_ID,
 })
 INTELLIGENCE_SEARCH_SOURCES = (
     "deepseek_search", "brave_news", "tavily_search", "exa_search",
@@ -78,6 +89,7 @@ class ExecutionPolicy:
     provider_names: tuple[str, ...] = PUBLIC_PROVIDER_NAMES
     search_source_names: tuple[str, ...] = PUBLIC_SEARCH_SOURCE_NAMES
     market_timezone: str = "America/New_York"
+    reduced_evidence: bool = False
 
     def __post_init__(self):
         required = self.policy_id in MODEL_REQUIRED_POLICIES
@@ -85,6 +97,8 @@ class ExecutionPolicy:
             raise ExecutionContractError("Strict public paper requires a disabled model policy")
         if self.market_timezone != "America/New_York":
             raise ExecutionContractError("Strict public paper has a fixed market timezone")
+        if type(self.reduced_evidence) is not bool:
+            raise ExecutionContractError("Reduced evidence must be explicit")
         for values, allowed, label in (
             (self.provider_names, PUBLIC_PROVIDER_NAMES, "provider"),
             (self.search_source_names, INTELLIGENCE_SEARCH_SOURCES
@@ -580,9 +594,13 @@ class RecordingProvider:
         if not callable(value) or name.startswith("_"):
             return value
         def invoke(*args, **kwargs):
+            evidence_kwargs = {
+                key: item for key, item in kwargs.items()
+                if key not in {"progress_callback", "hard_deadline"}
+            }
             raw = self.execution.call_io(
                 f"provider.{self.name}.{name}",
-                {"provider": self.name, "method": name, "args": args, "kwargs": kwargs},
+                {"provider": self.name, "method": name, "args": args, "kwargs": evidence_kwargs},
                 lambda: value(*args, **kwargs),
             )
             try:

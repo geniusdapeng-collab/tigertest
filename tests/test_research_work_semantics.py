@@ -45,7 +45,24 @@ def test_closed_document_output_failures_become_document_scoped_gaps(diagnostic)
     from trading_system.llm.work_required import semantic_failure_code
     from trading_system.redline.model_diagnostics import RequiredModelUnavailable
 
-    assert semantic_failure_code(RequiredModelUnavailable(diagnostic)) == "WORK_OUTPUT_JSON_INVALID"
+    assert semantic_failure_code(
+        RequiredModelUnavailable(diagnostic),
+        profile_id="tiger.public-tech-intelligence-paper-policy.v4",
+    ) == "WORK_OUTPUT_JSON_INVALID"
+
+
+@pytest.mark.parametrize("diagnostic", [
+    "MODEL_OUTPUT_TRUNCATED", "MODEL_OUTPUT_EXHAUSTED",
+    "NETWORK_TIMEOUT", "RESPONSE_DEADLINE", "TRANSPORT_FAILURE",
+])
+def test_transport_document_failures_stay_outside_frozen_v3_scope(diagnostic):
+    from trading_system.llm.work_required import semantic_failure_code
+    from trading_system.redline.model_diagnostics import RequiredModelUnavailable
+
+    assert semantic_failure_code(
+        RequiredModelUnavailable(diagnostic),
+        profile_id="tiger.public-tech-intelligence-paper-policy.v3",
+    ) is None
 
 
 def test_new_document_contract_keeps_multi_issuer_roundups_but_legacy_stays_bounded():

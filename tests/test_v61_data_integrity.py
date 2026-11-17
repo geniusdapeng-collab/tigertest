@@ -53,8 +53,9 @@ class _PartialEtfProvider(DemoProvider):
     """板块 ETF 只能拉到 3/12 的数据源。"""
     name = "partial-demo"
 
-    def ohlcv_batch(self, tickers, days=400):
-        out = super().ohlcv_batch(tickers, days)
+    def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
+        out = super().ohlcv_batch(tickers, days, hard_deadline=hard_deadline,
+                                  progress_callback=progress_callback)
         etfs = [t for t in out if t in (
             "XLK", "SMH", "XLF", "XLE", "XLV", "XLP", "XLY", "XLI", "XLU", "XLRE", "IBB", "IWM")]
         for t in etfs[3:]:
@@ -91,7 +92,7 @@ def test_etf_coverage_gate(monkeypatch):
     class _DeadStooq:
         name = "stooq"
 
-        def ohlcv_batch(self, tickers, days=400):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
             raise RuntimeError("stooq dead in test")
 
     monkeypatch.setattr("trading_system.providers.stooq.StooqProvider", _DeadStooq)

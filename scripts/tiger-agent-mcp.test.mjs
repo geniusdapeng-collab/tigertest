@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
-import { LIMITS, PROFILE, REQUEST_SCHEMAS, RESULT_SCHEMA } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { CURRENT_TECH_INTELLIGENCE_PROFILE, LIMITS, PROFILE, REQUEST_SCHEMAS, RESULT_SCHEMA } from "../bundles/trading/capabilities/workflow-client.mjs";
 import { toolDefinitions, validateToolDefinitions } from "./tiger-agent-mcp.mjs";
 import { REQUEST, RUN_ID, eventually, mcpProcess, runnerFixture } from "./tiger-agent-test-support.mjs";
 
@@ -54,7 +54,7 @@ test("MCP discovery: short instructions and tool metadata explain new research w
     const prefix = initialized.result.instructions.slice(0, 512);
     const paragraph = initialized.result.instructions.split("\n\n")[0];
     assert.ok(paragraph.length <= 512); assert.match(paragraph.trim(), /[.!?]$/u);
-    assert.match(prefix, /us-tech-intelligence-paper-v3/u); assert.match(prefix, /public-usd/u);
+  assert.ok(prefix.includes(CURRENT_TECH_INTELLIGENCE_PROFILE)); assert.match(prefix, /public-usd/u);
     assert.match(prefix, /idempotency_key/u); assert.match(prefix, /run_id/u);
     assert.match(prefix, /accepted\/running (?:status )?is not completion/u);
     assert.match(prefix, /receipt.*verify/u); assert.match(prefix, /completed.*verified receipt/u);
@@ -77,11 +77,11 @@ test("MCP discovery: short instructions and tool metadata explain new research w
         idempotentHint: true, openWorldHint: openWorld });
     }
     assert.match(tools.find((tool) => tool.name === "tiger_workflow_describe").description,
-      /\{"profile":"us-tech-intelligence-paper-v3"\}/u);
+      new RegExp(`\\{"profile":"${CURRENT_TECH_INTELLIGENCE_PROFILE}"\\}`, "u"));
     if (mode === "paper") {
       const description = tools.find((tool) => tool.name === "tiger_workflow_run").description;
       for (const field of REQUEST_SCHEMAS.run.required) assert.ok(description.includes(field), `Run explains ${field}`);
-      for (const phrase of ["us-tech-intelligence-paper-v3", "identical request/key", "run_id", "receipt and verify"]) {
+      for (const phrase of [CURRENT_TECH_INTELLIGENCE_PROFILE, "identical request/key", "run_id", "receipt and verify"]) {
         assert.ok(description.includes(phrase), `Run discovery retains ${phrase}`);
       }
     }

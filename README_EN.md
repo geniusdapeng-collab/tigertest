@@ -45,7 +45,8 @@ receipt verification. Keep one trusted state root for a continuing paper account
 and profile; a new daily task changes its logical idempotency key.
 
 ```bash
-pip install -r requirements.txt
+bash scripts/setup.sh full
+# backend-only: bash scripts/setup.sh backend
 python3 -m pytest tests/ -q          # 252 tests
 python3 main.py --demo               # offline demo (synthetic data, end-to-end 21 steps)
 python3 main.py --universe full --top 30 --picks 8   # production mode (daily full market)

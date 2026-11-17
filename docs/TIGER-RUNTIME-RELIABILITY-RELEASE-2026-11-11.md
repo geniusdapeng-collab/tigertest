@@ -1,5 +1,11 @@
 # Tiger 大运行可靠性与数据覆盖发布（2026-11-11）
 
+> 后续现行合同见
+> [TIGER-V4-RELIABILITY.md](TIGER-V4-RELIABILITY.md)。`us-tech-intelligence-paper-v4`
+> 在保留本文件所述历史语义的基础上，新增 readiness、append-only quarantine、
+> hard provider deadline、decision-format-v1 和 v4-only no-degraded completion。
+> 本文件中的 v2/v3 与通过数量保留为当时发布的冻结记录。
+
 任务：`T-2026-1111-0002`
 
 任务卡：GitHub Issue #73

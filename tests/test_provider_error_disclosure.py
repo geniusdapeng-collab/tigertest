@@ -65,7 +65,7 @@ class _Provider:
     def vol_index_for(self, symbol, days=400):
         return self._call("vol_index_for", symbol, days)
 
-    def ohlcv_batch(self, tickers, days=400):
+    def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
         return self._call("ohlcv_batch", list(tickers), days)
 
     def quote(self, ticker):
@@ -375,11 +375,12 @@ def test_completed_report_keeps_lineage_health_and_safe_data_issues(monkeypatch,
                 raise TimeoutError(MARKER)
             return super().ohlcv(ticker, days)
 
-        def ohlcv_batch(self, tickers, days=400):
+        def ohlcv_batch(self, tickers, days=400, *, hard_deadline=None, progress_callback=None):
             if not self.batch_failed:
                 self.batch_failed = True
                 raise PermissionError(MARKER)
-            return super().ohlcv_batch(tickers, days)
+            return super().ohlcv_batch(tickers, days, hard_deadline=hard_deadline,
+                                       progress_callback=progress_callback)
 
     _pipeline_fixtures(monkeypatch, FailingDemo())
     backup = DemoProvider()

@@ -113,8 +113,11 @@ def intelligence_fixture(tmp_path, monkeypatch, *, failure_stage=None, corrupt=N
     allowed = {"AAPL", "MU", "NVDA"}
     from trading_system.markets import get_market
     allowed.update(get_market("us").sector_symbols)
-    monkeypatch.setattr(provider, "ohlcv_batch", lambda symbols, days=400:
-        {symbol: provider.ohlcv(symbol, days) for symbol in symbols if symbol in allowed})
+    monkeypatch.setattr(
+        provider, "ohlcv_batch",
+        lambda symbols, days=400, *, hard_deadline=None, progress_callback=None:
+        {symbol: provider.ohlcv(symbol, days) for symbol in symbols if symbol in allowed},
+    )
     execution = ExecutionContext(run_id=root.name, run_date=original.run_date,
         paths=original.paths, policy=ExecutionPolicy(INTELLIGENCE_POLICY_ID, model_mode="enabled",
             provider_names=("yahoo",), search_source_names=INTELLIGENCE_SEARCH_SOURCES),

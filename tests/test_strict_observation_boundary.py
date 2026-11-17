@@ -98,8 +98,8 @@ def test_future_observation_stops_each_consumer_before_stage_success(tmp_path, m
                 or (target == "html" and active == "report.html")):
             return future(frame)
         return frame
-    def batch(tickers, days=400):
-        actual = original_batch(tickers, days)
+    def batch(tickers, days=400, **kwargs):
+        actual = original_batch(tickers, days, **kwargs)
         active = execution._active.spec.name
         chosen = (next(iter(actual), None) if target == "etf" and "XLK" in tickers else
                   "AAA" if target == "stock" and "AAA" in actual else None)

@@ -145,7 +145,9 @@ class StooqProvider(DataProvider):
     def ohlcv(self, ticker: str, days: int = 400) -> pd.DataFrame:
         return self._fetch(ticker.lower() + ".us", days)
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         """Bound strict serial no-output probes, then let the existing chain fill gaps.
 
         Exhaustion means this batch's availability budget was consumed. Ordinary

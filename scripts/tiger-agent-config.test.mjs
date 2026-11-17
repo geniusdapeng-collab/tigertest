@@ -19,8 +19,14 @@ async function fixture(t) {
   const project = await realpath(temporary);
   t.after(() => rm(project, { recursive: true, force: true }));
   const file = async (name, text) => { const path = join(project, name); await mkdir(join(path, ".."), { recursive: true }); await writeFile(path, text); return path; };
-  await file("product.manifest.json", JSON.stringify({ productId: "workroom-tiger" }));
-  await file("scripts/tiger-agent-mcp.mjs", "// Configuration target fixture only.\n");
+  await file("product.manifest.json", JSON.stringify({
+    schemaVersion: "workloom.product/v1", productId: "workloom-ai-tigertest",
+    role: "industry", defaultBundle: "trading",
+    repository: "geniusdapeng-collab/tigertest",
+  }));
+  await file("scripts/tiger-agent-mcp.mjs",
+    'import { invokeWorkflow } from "../bundles/trading/capabilities/workflow-client.mjs";\n'
+    + "export function serve() { return invokeWorkflow; }\n");
   return { project, file, options: { project, python, client: "codex" } };
 }
 function withoutBlock(text) { return text.replace(/^# BEGIN TIGER AGENT MCP v1[\s\S]*?^# END TIGER AGENT MCP v1/gmu, "<owned>"); }
@@ -39,6 +45,39 @@ test("R04: Codex preserves unrelated bytes, supports spaces/Unicode, is idempote
   assert.match(paper.proposed, /"--mode",\s*"paper"/u); writeConfiguration(paper);
   const readonly = prepareConfiguration(f.options); writeConfiguration(readonly);
   assert.equal(await readFile(readonly.file, "utf8"), again.proposed);
+});
+
+test("MC-001: both reviewed Tiger identities are admitted and identity drift fails closed", async (t) => {
+  for (const identity of [
+    { productId: "workroom-tiger", repository: "cnb.cool/workloom-ai/workroom-tiger" },
+    { productId: "workroom-tiger", repository: "github.com/geniusdapeng-collab/workroom-tiger" },
+    { productId: "workloom-ai-tigertest", repository: "github.com/geniusdapeng-collab/tigertest" },
+  ]) {
+    const f = await fixture(t);
+    await f.file("product.manifest.json", JSON.stringify({
+      schemaVersion: "workloom.product/v1", role: "industry", defaultBundle: "trading", ...identity,
+    }));
+    assert.equal(prepareConfiguration(f.options).client, "codex");
+  }
+  for (const change of [
+    { productId: "another-product" },
+    { role: "base" },
+    { defaultBundle: "hotel" },
+    { repository: "geniusdapeng-collab/workroom-tiger" },
+    { schemaVersion: "workloom.product/v2" },
+  ]) {
+    const f = await fixture(t);
+    await f.file("product.manifest.json", JSON.stringify({
+      schemaVersion: "workloom.product/v1", productId: "workloom-ai-tigertest",
+      role: "industry", defaultBundle: "trading",
+      repository: "geniusdapeng-collab/tigertest", ...change,
+    }));
+    assert.throws(() => prepareConfiguration(f.options), { code: "INVALID_REQUEST" });
+  }
+  const f = await fixture(t);
+  await f.file("scripts/tiger-agent-mcp.mjs",
+    "export function serve() { return 'replacement transport'; }\n");
+  assert.throws(() => prepareConfiguration(f.options), { code: "INVALID_REQUEST" });
 });
 
 test("R04: DSH block and flow lists preserve plugins and owned separators across repeated generation", async (t) => {

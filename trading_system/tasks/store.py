@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import os
+import re
 import sqlite3
 import stat
 import time
@@ -35,8 +36,13 @@ TABLES = {
                                "observation_id", "usage")),
     "observations": ("observation_id", ("observation_id", "attempt_id", "ref", "usage", "late")),
     "retry_claims": ("slot", ("slot", "unit_id", "attempt_id")),
+    "attempt_quarantines": ("attempt_id", ("attempt_id", "unit_id", "scope",
+        "affected_targets", "usage_state", "reservation_state", "reason", "event_sha256")),
+    "failure_diagnostics": ("failure_id", ("failure_id", "schema", "unit_id", "validator",
+        "reason", "schema_path", "schema_keyword", "diagnostic_sha256")),
 }
-JSON_COLUMNS = frozenset({"value", "spec", "result_ref", "request_ref", "reservation", "usage", "ref"})
+JSON_COLUMNS = frozenset({"value", "spec", "result_ref", "request_ref", "reservation", "usage", "ref",
+                          "affected_targets"})
 
 
 class WorkStore:
@@ -95,13 +101,16 @@ class WorkStore:
                     "CREATE TABLE attempts(attempt_id TEXT PRIMARY KEY,unit_id TEXT NOT NULL REFERENCES units(unit_id),ordinal INTEGER NOT NULL,operation TEXT NOT NULL,request_ref TEXT NOT NULL,reservation TEXT NOT NULL,state TEXT NOT NULL,epoch INTEGER NOT NULL,owner TEXT NOT NULL,observation_id TEXT,usage TEXT,UNIQUE(unit_id,ordinal))",
                     "CREATE TABLE observations(observation_id TEXT PRIMARY KEY,attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),ref TEXT NOT NULL,usage TEXT,late INTEGER NOT NULL)",
                     "CREATE TABLE retry_claims(slot INTEGER PRIMARY KEY CHECK(slot=1),unit_id TEXT NOT NULL REFERENCES units(unit_id),attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id))",
+                    "CREATE TABLE attempt_quarantines(attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id),unit_id TEXT NOT NULL REFERENCES units(unit_id),scope TEXT NOT NULL,affected_targets TEXT NOT NULL,usage_state TEXT NOT NULL,reservation_state TEXT NOT NULL,reason TEXT NOT NULL,event_sha256 TEXT NOT NULL)",
+                    "CREATE TABLE failure_diagnostics(failure_id TEXT PRIMARY KEY,schema TEXT NOT NULL,unit_id TEXT NOT NULL REFERENCES units(unit_id),validator TEXT NOT NULL,reason TEXT NOT NULL,schema_path TEXT NOT NULL,schema_keyword TEXT,diagnostic_sha256 TEXT NOT NULL)",
                     "CREATE TABLE events(sequence INTEGER PRIMARY KEY,payload TEXT NOT NULL,event_sha256 TEXT NOT NULL UNIQUE)",
                     "CREATE INDEX attempts_unit_state ON attempts(unit_id,state)",
                     "CREATE INDEX units_state ON units(state)",
                     "CREATE INDEX attempts_state_unit ON attempts(state,unit_id)",
                 ):
                     connection.execute(statement)
-                for table in ("observations", "retry_claims", "events"):
+                for table in ("observations", "retry_claims", "attempt_quarantines",
+                              "failure_diagnostics", "events"):
                     for operation in ("UPDATE", "DELETE"):
                         connection.execute(f"CREATE TRIGGER immutable_{table}_{operation.lower()} BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT,'immutable evidence'); END")
                 changes = {"meta": [{"key": "manifest", "value": result.manifest},
@@ -140,8 +149,11 @@ class WorkStore:
     def _error(self, exc):
         busy = isinstance(exc, sqlite3.OperationalError) and getattr(exc, "sqlite_errorcode", None) in {
             sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+        detail = str(exc)
+        suffix = f": {detail}" if re.fullmatch(r"[A-Z][A-Z0-9_ ]{0,96}", detail) else ""
         return WorkUnitError("STORE_BUSY" if busy else "STORE_INVALID",
-                             "Work-unit store is busy" if busy else "Work-unit persistence is invalid",
+                             "Work-unit store is busy" if busy else
+                             f"Work-unit persistence is invalid ({type(exc).__name__}{suffix})",
                              cause_type=type(exc).__name__)
 
     @staticmethod
@@ -242,7 +254,13 @@ class WorkStore:
     def _rows(self, connection, table):
         key, columns = TABLES[table]
         rows = []
-        for raw in connection.execute(f"SELECT {','.join(columns)} FROM {table} ORDER BY {key}"):
+        try:
+            source = connection.execute(f"SELECT {','.join(columns)} FROM {table} ORDER BY {key}")
+        except sqlite3.OperationalError as exc:
+            if table in {"attempt_quarantines", "failure_diagnostics"} and "no such table" in str(exc):
+                return rows
+            raise
+        for raw in source:
             rows.append({name: strict_json(raw[name]) if name in JSON_COLUMNS and raw[name] is not None else raw[name]
                          for name in columns})
         return rows
@@ -567,10 +585,13 @@ class WorkStore:
             f"SELECT {','.join(columns)} FROM attempts "
             f"WHERE state IN ('dispatched','observed') ORDER BY unit_id,ordinal")
         unresolved = []
+        quarantined = {row["attempt_id"] for row in self._rows(connection, "attempt_quarantines")}
         for raw in raw_rows:
             row = {name: strict_json(raw[name]) if name in JSON_COLUMNS and raw[name] is not None
                    else raw[name] for name in columns}
             if row["attempt_id"] == except_id:
+                continue
+            if row["attempt_id"] in quarantined:
                 continue
             unit = self._row(connection, "units", row["unit_id"])
             if (row["state"] == "observed" and row["usage"] is None
@@ -679,6 +700,41 @@ class WorkStore:
     def attempts(self):
         with self._tx() as connection:
             return self._rows(connection, "attempts")
+
+    def quarantines(self):
+        with self._tx() as connection:
+            return self._rows(connection, "attempt_quarantines")
+
+    def quarantine_attempt(self, lease, attempt_id, *, scope, affected_targets, reason):
+        if not isinstance(lease, UnitLease):
+            raise WorkUnitError("LEASE_INVALID", "Quarantine requires a work-unit lease")
+        if scope not in {"source", "model"}:
+            raise WorkUnitError("CONTRACT_INVALID", "Invalid quarantine scope")
+        if not isinstance(affected_targets, (list, tuple)) or not affected_targets:
+            raise WorkUnitError("CONTRACT_INVALID", "Quarantine requires affected target identities")
+        targets = sorted(set(identifier(target, "affected target") for target in affected_targets))
+        reason = identifier(reason, "quarantine reason")
+        attempt_id = identifier(attempt_id, "attempt")
+        with self._tx(write=True) as connection:
+            self._lease(connection, lease)
+            attempt = self._attempt_lease(connection, lease, attempt_id)
+            if attempt["state"] not in {"dispatched", "observed"}:
+                raise WorkUnitError("CONTRACT_INVALID", "Only an unresolved attempt can be quarantined")
+            body = {
+                "attempt_id": attempt_id, "unit_id": lease.unit_id, "scope": scope,
+                "affected_targets": targets,
+                "usage_state": "known" if attempt["usage"] is not None else "unknown",
+                "reservation_state": "held",
+                "reason": reason,
+            }
+            row = {**body, "event_sha256": digest(json_bytes(body))}
+            existing = self._row(connection, "attempt_quarantines", attempt_id)
+            if existing is not None:
+                if existing != row:
+                    raise WorkUnitError("ATTEMPT_MISMATCH", "Quarantine identity differs")
+                return row
+            self._change(connection, "attempt_quarantined", {"attempt_quarantines": [row]})
+            return row
 
     def format_retry_claim(self):
         with self._tx() as connection:
@@ -809,11 +865,16 @@ class WorkStore:
         if not callable(validator):
             raise WorkUnitError("VALIDATOR_REQUIRED", "Unit result requires its trusted validator")
         value = detached(value)
+        declared = self.unit(lease.unit_id)["spec"]["contract"]["validator"]
         try:
             if validator(detached(value)) is not None:
                 raise ValueError
-        except Exception:
-            raise WorkUnitError("RESULT_REJECTED", "Work-unit validator rejected the result") from None
+        except Exception as error:
+            from .validation_diagnostic import from_exception
+            raise WorkUnitError(
+                "RESULT_REJECTED", "Work-unit validator rejected the result",
+                diagnostic=from_exception(error, declared),
+            ) from None
         snapshot = self._result_validation_snapshot(lease.unit_id)
         unit = snapshot["units"].get(lease.unit_id)
         if unit is None:
@@ -884,7 +945,9 @@ class WorkStore:
                 dependency = self._row(connection, "units", name)
                 if dependency["state"] != "validated" or dependency["result_ref"]["sha256"] != expected:
                     raise WorkUnitError("DEPENDENCY_INVALID", "Unit dependency changed before publication")
+            quarantined = {row["attempt_id"] for row in self._rows(connection, "attempt_quarantines")}
             if any(attempt["state"] not in {"settled", "not_sent"}
+                   and attempt["attempt_id"] not in quarantined
                    for attempt in self._attempts_for_unit_rows(connection, lease.unit_id)):
                 raise WorkUnitError("ATTEMPT_UNKNOWN", "Unsettled external attempt blocks result publication")
             row.update(state="validated", owner=None, lease_until=None, result_ref=ref, error_code=None, retryable=0)
@@ -946,7 +1009,7 @@ class WorkStore:
         identifier(unit_id, "unit")
         return self._read_result_from(unit_id, self._result_validation_snapshot(unit_id))
 
-    def fail(self, lease, error_code, *, retryable=False):
+    def fail(self, lease, error_code, *, retryable=False, diagnostic=None):
         identifier(error_code, "error code")
         if type(retryable) is not bool:
             raise WorkUnitError("CONTRACT_INVALID", "Retryability must be explicit")
@@ -958,7 +1021,23 @@ class WorkStore:
                 if attempt["state"] == "prepared":
                     attempt["state"] = "not_sent"
                     not_sent.append(attempt)
-            self._change(connection, "unit_failed", {"units": [row], "attempts": not_sent})
+            changes = {"units": [row], "attempts": not_sent}
+            if diagnostic is not None:
+                from .validation_diagnostic import validate
+                diagnostic = validate(diagnostic)
+                body = {"unit_id": lease.unit_id, **diagnostic}
+                failure = {
+                    "failure_id": "failure-" + digest(json_bytes(body)),
+                    "schema": diagnostic["schema"],
+                    **body,
+                    "diagnostic_sha256": digest(json_bytes(diagnostic)),
+                }
+                existing = self._row(connection, "failure_diagnostics", failure["failure_id"])
+                if existing is None:
+                    changes["failure_diagnostics"] = [failure]
+                elif existing != failure:
+                    raise WorkUnitError("EVIDENCE_HASH_MISMATCH", "Validation diagnostic collides")
+            self._change(connection, "unit_failed", changes)
 
     def recover_expired(self):
         ready, unknown = [], []
@@ -1011,7 +1090,9 @@ class WorkStore:
         with self._tx(write=True) as connection:
             self._admission(connection)
             attempts = self._rows(connection, "attempts")
-            if any(row["state"] in {"dispatched", "observed"} for row in attempts):
+            quarantined = {row["attempt_id"] for row in self._rows(connection, "attempt_quarantines")}
+            if any(row["state"] in {"dispatched", "observed"} and row["attempt_id"] not in quarantined
+                   for row in attempts):
                 raise WorkUnitError("ATTEMPT_UNKNOWN", "Unresolved external attempt requires native reconciliation")
             units = self._rows(connection, "units")
             if any(row["state"] == "failed" and not row["retryable"] for row in units):
@@ -1136,6 +1217,8 @@ class WorkStore:
                 "SELECT state,COUNT(*) FROM units GROUP BY state")}
             attempt_counts = {state: count for state, count in connection.execute(
                 "SELECT state,COUNT(*) FROM attempts GROUP BY state")}
+            quarantines = self._rows(connection, "attempt_quarantines")
+            failure_count = len(self._rows(connection, "failure_diagnostics"))
             usage = tuple(connection.execute(
                 "SELECT COALESCE(SUM(json_extract(usage,'$.prompt_tokens')),0),"
                 "COALESCE(SUM(json_extract(usage,'$.completion_tokens')),0),"
@@ -1150,10 +1233,12 @@ class WorkStore:
             units = self._rows(connection, "units") if include_units else []
         total = sum(unit_counts.values())
         unknown = attempt_counts.get("dispatched", 0) + attempt_counts.get("observed", 0)
+        quarantined_ids = {row["attempt_id"] for row in quarantines}
+        active_unknown = max(0, unknown - len(quarantined_ids))
         held = sum(count for state, count in attempt_counts.items()
                    if state not in {"settled", "not_sent"})
         states = {state for state, count in unit_counts.items() if count}
-        graph_state = ("cancelling" if unknown else "cancelled") if cancelled else (
+        graph_state = ("cancelling" if active_unknown else "cancelled") if cancelled else (
             "completed" if total and states == {"validated"} else
             "failed" if states & {"failed", "unknown"} else
             "running" if "running" in states else "ready")
@@ -1166,8 +1251,14 @@ class WorkStore:
                 "unit_counts": {state: unit_counts.get(state, 0) for state in
                                 ("ready", "blocked", "running", "validated", "failed", "unknown", "cancelled")},
                 "unknown_attempts": unknown,
+                "unresolved_attempts": unknown,
+                "active_unknown_attempts": active_unknown,
+                "quarantined_attempts": len(quarantines),
+                "quarantined_targets": sorted({target for row in quarantines
+                                               for target in row["affected_targets"]}),
+                "validation_diagnostics": failure_count,
                 "settled_attempts": attempt_counts.get("settled", 0),
-                "known_usage": None if unknown else observed_usage,
+                "known_usage": None if active_unknown else observed_usage,
                 "known_usage_observed": observed_usage,
                 "format_reanswers": retry_count,
                 "held_reservation_count": held, "held_reservations": []}
@@ -1176,20 +1267,29 @@ class WorkStore:
         with self._tx() as connection:
             units = self._rows(connection, "units")
             attempts = self._rows(connection, "attempts")
+            quarantines = self._rows(connection, "attempt_quarantines")
+            diagnostics = self._rows(connection, "failure_diagnostics")
             plan, cancelled = self._meta(connection, "plan"), self._meta(connection, "cancel")
             retry = self._rows(connection, "retry_claims")
         unknown = [row for row in attempts if row["state"] in {"dispatched", "observed"}]
+        quarantined_ids = {row["attempt_id"] for row in quarantines}
+        active_unknown = [row for row in unknown if row["attempt_id"] not in quarantined_ids]
         settled = [row for row in attempts if row["state"] == "settled"]
         usage = {key: sum(row["usage"][key] for row in settled) for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
         states = {row["state"] for row in units}
-        graph_state = ("cancelling" if unknown else "cancelled") if cancelled else (
+        graph_state = ("cancelling" if active_unknown else "cancelled") if cancelled else (
             "completed" if units and states == {"validated"} else "failed" if states & {"failed", "unknown"}
             else "running" if "running" in states else "ready")
         return {"schema": CONTRACT, "manifest_sha256": self.manifest_sha256,
                 "plan_sha256": None if plan is None else value_hash(plan), "graph_state": graph_state,
                 "plan_revision": 0 if plan is None else plan["revision"],
                 "cancel_requested": cancelled, "units": units, "unknown_attempts": len(unknown),
-                "settled_attempts": len(settled), "known_usage": None if unknown else usage,
+                "active_unknown_attempts": len(active_unknown),
+                "quarantined_attempts": quarantines,
+                "quarantined_targets": sorted({target for row in quarantines
+                                               for target in row["affected_targets"]}),
+                "validation_diagnostics": diagnostics,
+                "settled_attempts": len(settled), "known_usage": None if active_unknown else usage,
                 "known_usage_observed": usage, "format_reanswers": len(retry),
                 "held_reservations": [{"attempt_id": row["attempt_id"], **row["reservation"]}
                                       for row in attempts if row["state"] not in {"settled", "not_sent"}]}
@@ -1271,6 +1371,29 @@ class WorkStore:
             if (row["attempt_id"] not in attempts
                     or native["request_sha256"] != attempts[row["attempt_id"]]["request_ref"]["sha256"]):
                 raise WorkUnitError("ATTEMPT_MISMATCH", "Native task receipt belongs to another intent")
+        for row in projections["attempt_quarantines"]:
+            attempt = attempts.get(row["attempt_id"])
+            body = {key: value for key, value in row.items() if key != "event_sha256"}
+            if (attempt is None or attempt["unit_id"] != row["unit_id"]
+                    or attempt["state"] not in {"dispatched", "observed"}
+                    or row["scope"] not in {"source", "model"}
+                    or not isinstance(row["affected_targets"], list) or not row["affected_targets"]
+                    or row["affected_targets"] != sorted(set(row["affected_targets"]))
+                    or row["usage_state"] not in {"known", "unknown"}
+                    or row["reservation_state"] != "held"
+                    or row["event_sha256"] != digest(json_bytes(body))):
+                raise WorkUnitError("ATTEMPT_MISMATCH", "Attempt quarantine binding differs")
+        for row in projections["failure_diagnostics"]:
+            from .validation_diagnostic import validate as validate_diagnostic
+            diagnostic = validate_diagnostic({
+                key: row[key] for key in (
+                    "schema", "validator", "reason", "schema_path", "schema_keyword")
+            })
+            body = {"unit_id": row["unit_id"], **diagnostic}
+            if (row["unit_id"] not in {unit["unit_id"] for unit in projections["units"]}
+                    or row["failure_id"] != "failure-" + digest(json_bytes(body))
+                    or row["diagnostic_sha256"] != digest(json_bytes(diagnostic))):
+                raise WorkUnitError("RESULT_REJECTED", "Validation diagnostic binding differs")
         documents = self._document_dispositions_from(result_snapshot)
         return {"schema": CONTRACT, "manifest_sha256": self.manifest_sha256, "event_count": len(events),
                 "last_event_sha256": previous, "unit_count": len(projections["units"]),

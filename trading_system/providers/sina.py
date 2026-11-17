@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import re
+import time
 
 import pandas as pd
 from curl_cffi import requests as curl_requests
@@ -85,23 +86,75 @@ class SinaProvider(DataProvider):
             raise RuntimeError(f"新浪 {ticker} 历史不足: {len(df)} 行")
         return df
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         """Fill the capability fallback with a bounded, deterministic batch."""
         requested = list(dict.fromkeys(tickers))
         if not requested:
             return {}
+        if hard_deadline is not None:
+            if type(hard_deadline) not in {int, float} or hard_deadline <= 0:
+                raise ValueError("hard_deadline must be a positive monotonic timestamp")
+            if time.monotonic() >= hard_deadline:
+                self.last_batch_status = {
+                    "schema": "tiger.source-availability.v1", "provider": self.name,
+                    "requested": len(requested), "attempted": 0, "completed": 0,
+                    "failed": 0, "timed_out_symbols": requested,
+                    "service_failure_asserted": False,
+                }
+                return {}
         result: dict[str, pd.DataFrame] = {}
-        with ThreadPoolExecutor(max_workers=min(self.BATCH_WORKERS, len(requested)),
-                                thread_name_prefix="sina-batch") as pool:
+        failed: set[str] = set()
+        pool = ThreadPoolExecutor(max_workers=min(self.BATCH_WORKERS, len(requested)),
+                                  thread_name_prefix="sina-batch")
+        try:
             futures = {pool.submit(self.ohlcv, ticker, days): ticker for ticker in requested}
-            for future in as_completed(futures):
-                ticker = futures[future]
-                try:
-                    frame = future.result()
-                except Exception:
-                    continue
-                if frame is not None and not frame.empty:
-                    result[ticker] = frame
+            timeout = None if hard_deadline is None else max(0.0, hard_deadline - time.monotonic())
+            try:
+                iterator = as_completed(futures, timeout=timeout)
+                for future in iterator:
+                    ticker = futures[future]
+                    try:
+                        frame = future.result()
+                    except Exception:
+                        failed.add(ticker)
+                        continue
+                    if frame is not None and not frame.empty:
+                        result[ticker] = frame
+                    else:
+                        failed.add(ticker)
+                    if callable(progress_callback):
+                        progress_callback({
+                            "attempted": len(result) + len(failed),
+                            "completed": len(result), "failed": len(failed),
+                            "timed_out": 0,
+                        })
+            except TimeoutError:
+                # The enclosing batch returns its completed subset. Pending
+                # symbols remain explicitly unresolved instead of being treated
+                # as failures or retried inside this source.
+                logger.warning(
+                    "新浪批量到达硬截止，保留已完成子集（未完成 %d）",
+                    sum(not future.done() for future in futures),
+                )
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        timed_out = [ticker for ticker in requested
+                     if ticker not in result and ticker not in failed]
+        self.last_batch_status = {
+            "schema": "tiger.source-availability.v1", "provider": self.name,
+            "requested": len(requested), "attempted": len(result) + len(failed),
+            "completed": len(result), "failed": len(failed),
+            "timed_out_symbols": timed_out,
+            "service_failure_asserted": False,
+        }
+        if callable(progress_callback):
+            progress_callback({
+                "attempted": len(result) + len(failed),
+                "completed": len(result), "failed": len(failed),
+                "timed_out": len(timed_out),
+            })
         return {ticker: result[ticker] for ticker in requested if ticker in result}
 
     _CN_KLINE = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/x/"

@@ -323,8 +323,10 @@ class IntelligenceService:
                 delivery=details.get("delivery", "unknown"), bytes_received=details.get("bytes_received", 0),
                 details={**details, "attempt_id": previous_attempt["attempt_id"]})
         if spec.kind == "search" or spec.credential_env:
+            quarantined = {row["attempt_id"] for row in self.archive.quarantined_attempts(job_id)}
             unresolved = [row for row in all_attempts
                 if row["source_id"] == source_id
+                and row["attempt_id"] not in quarantined
                 and (row["status"] in {"inflight", "unknown"}
                      or row.get("result", {}).get("usage", {}).get("requires_reconciliation"))]
             if unresolved:
@@ -616,6 +618,22 @@ class IntelligenceService:
                     **({"diagnostic_kind": "source"} if reason not in {"SEMANTIC_ASSESSMENT_REQUIRED",
                         "HOLDINGS_NOT_CONNECTED", "HOLDING_OUTSIDE_REVIEWED_ROSTER", "PENDING_OUTSIDE_REVIEWED_ROSTER"} else {})})
 
+    def _quarantine_source_attempt(self, job_id, attempt_id, cell_ids):
+        plan = self.archive.plan(job_id)
+        cells = {row["cell_id"]: row for row in plan["coverage_cells"]}
+        targets = sorted({cells[cell]["target_id"] for cell in cell_ids if cell in cells})
+        if not targets:
+            targets = ["global:macro"]
+        try:
+            self.archive.quarantine_attempt(
+                job_id, attempt_id, affected_targets=targets,
+                reason="RECONCILIATION_REQUIRED", scope="source",
+            )
+        except IntelligenceError as error:
+            if error.code not in {"CONTRACT_INVALID", "EVIDENCE_NOT_FOUND"}:
+                raise
+        return targets
+
     def _fetch(self, job_id, discovery_source, hit, discovery, index, search_attempt, request, cell_ids):
         plan = self.archive.plan(job_id)
         original_spec = self.registry.get(discovery_source)
@@ -689,6 +707,9 @@ class IntelligenceService:
                         # fact for the affected cell, not an exception that
                         # aborts unrelated source work. The attempt and its
                         # reservation stay in the append-only ledger.
+                        attempt_id = error.details.get("attempt_id")
+                        if attempt_id:
+                            self._quarantine_source_attempt(job_id, attempt_id, cell_ids)
                         self._mark(job_id, cell_ids, status="source_unresolved",
                             reason="RECONCILIATION_REQUIRED", attempt_refs=attempts)
                         return collected
@@ -793,9 +814,12 @@ class IntelligenceService:
             if error.code not in {"BUDGET_EXHAUSTED", "CONTRACT_INVALID", "SOURCE_AUTH_REQUIRED",
                                   "SOURCE_IDENTITY_REQUIRED", "RECONCILIATION_REQUIRED"}:
                 raise
+            attempt_id = error.details.get("attempt_id")
+            if error.code == "RECONCILIATION_REQUIRED" and attempt_id:
+                self._quarantine_source_attempt(job_id, attempt_id, entry["cell_ids"])
             self._mark(job_id, entry["cell_ids"],
                        status="source_unresolved" if error.code == "RECONCILIATION_REQUIRED" else "unverifiable",
-                       reason=error.code, attempt_refs=[error.details.get("attempt_id")] if error.details.get("attempt_id") else ())
+                       reason=error.code, attempt_refs=[attempt_id] if attempt_id else ())
             if error.code == "BUDGET_EXHAUSTED":
                 return False
         return True
@@ -965,8 +989,10 @@ class IntelligenceService:
                 "usage": result.get("usage", {"state": "unknown", "requires_reconciliation": True}),
                 "request_count": result.get("request_count", attempt["request"].get("reserved_requests", 1))})
         documents = self.archive.documents(job_id)
-        unknown = any(row["status"] in {"inflight", "unknown"}
-                      or row["usage"].get("requires_reconciliation") for row in observations)
+        quarantined = {row["attempt_id"] for row in status["quarantined_attempts"]}
+        unknown = any((row["status"] in {"inflight", "unknown"}
+                       or row["usage"].get("requires_reconciliation"))
+                      and row["attempt_id"] not in quarantined for row in observations)
         successful = any(row["status"] in {"completed", "empty"} for row in observations)
         errors = [row for row in observations if row["error"]]
         return {"job_id": job_id, "state": status["state"], "acquisition_complete": not unknown,
@@ -977,7 +1003,8 @@ class IntelligenceService:
                 for doc in documents], "observations": observations, "cursor": cursor,
             "not_modified": bool(observations) and all(row["not_modified"] for row in observations),
             "retry_after": max((row["retry_after"] or 0 for row in observations), default=0),
-            "requires_reconciliation": unknown, "gaps": status["gaps"]}
+            "requires_reconciliation": unknown, "gaps": status["gaps"],
+            "quarantined_attempts": status["quarantined_attempts"]}
 
     def _acquired(self, job_id):
         return {**self.status(job_id), "documents": self.archive.documents(job_id),

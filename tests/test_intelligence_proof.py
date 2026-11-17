@@ -470,10 +470,17 @@ def test_failed_discovery_calls_preserve_billing_certainty_and_never_become_clea
         with archive._session() as connection:
             job_id = connection.execute("SELECT job_id FROM jobs").fetchone()[0]
         attempts = archive.attempts(job_id)
-        assert len(attempts) == 1 and attempts[0]["status"] == "unknown"
-        assert attempts[0]["result"]["usage"]["requires_reconciliation"] is True
+        # v4 quarantines each distinct unresolved request and continues unrelated
+        # acquisition. It must never retry the same request after billing became
+        # uncertain; request hashes therefore remain unique.
+        assert attempts and all(attempt["status"] == "unknown" for attempt in attempts)
+        assert len({attempt["request_sha256"] for attempt in attempts}) == len(attempts)
+        assert all(attempt["result"]["usage"]["requires_reconciliation"] is True
+                   for attempt in attempts)
         status = archive.status(job_id)
         assert status["state"] == "partial"
+        assert len(status["quarantined_attempts"]) == len(attempts)
+        assert status["unresolved_attempts"] == []
         assert any(gap["status"] == "source_unresolved" for gap in status["gaps"])
         return
     output = main._daily(args, "yahoo", execution=execution)

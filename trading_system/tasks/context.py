@@ -19,6 +19,11 @@ _DOCUMENT_FORMAT_FAILURES = {
     "INVALID_JSON_OBJECT_KEY": "WORK_OUTPUT_JSON_INVALID",
     "INVALID_JSON_VALUE": "WORK_OUTPUT_JSON_INVALID",
     "INVALID_RESPONSE_JSON": "WORK_OUTPUT_JSON_INVALID",
+    "MODEL_OUTPUT_EXHAUSTED": "WORK_OUTPUT_JSON_INVALID",
+    "MODEL_OUTPUT_TRUNCATED": "WORK_OUTPUT_JSON_INVALID",
+    "NETWORK_TIMEOUT": "WORK_MODEL_UNKNOWN",
+    "RESPONSE_DEADLINE": "WORK_MODEL_UNKNOWN",
+    "TRANSPORT_FAILURE": "WORK_MODEL_UNKNOWN",
     "NONFINITE_RESPONSE_JSON": "WORK_OUTPUT_JSON_INVALID",
     "OUTPUT_SCHEMA_MISMATCH": "WORK_OUTPUT_SCHEMA_MISMATCH",
 }
@@ -128,6 +133,7 @@ class UnitExecutionContext(ExecutionContext):
         self._task_attempt = None
         self._task_request = None
         self._dispatch_recorded = False
+        self._failed_model_attempt = None
 
     def _check_thread(self):
         super()._check_thread()
@@ -163,6 +169,9 @@ class UnitExecutionContext(ExecutionContext):
         self._dispatch_recorded = False
         try:
             return super().call_io(method, self._task_request, fn)
+        except BaseException:
+            self._failed_model_attempt = attempt
+            raise
         finally:
             self._task_attempt, self._task_request = None, None
 
@@ -333,6 +342,18 @@ class UnitExecutionContext(ExecutionContext):
             self._dispatch_recorded = False
         return admitted
 
+    def quarantine_model_attempt(self, affected_targets):
+        attempt = self._task_attempt or self._failed_model_attempt
+        if attempt is None:
+            raise WorkUnitError("ATTEMPT_MISMATCH", "No active model attempt can be quarantined")
+        value = self.work_store.quarantine_attempt(
+            self.lease, attempt.attempt_id, scope="model",
+            affected_targets=affected_targets, reason="MODEL_RESPONSE_UNKNOWN",
+        )
+        if self._failed_model_attempt is attempt:
+            self._failed_model_attempt = None
+        return value
+
     def seal(self):
         self.assert_complete()
         spec = asdict(self._specs[0])
@@ -414,11 +435,18 @@ def verify_child_seal(work_store, ref):
     with work_store._tx() as connection:
         attempts = sorted((row for row in work_store._rows(connection, "attempts")
                            if row["unit_id"] == value["unit_id"]), key=lambda row: row["ordinal"])
+        quarantine_ids = {row["attempt_id"] for row in work_store._rows(
+            connection, "attempt_quarantines")}
     if len(attempts) != len(observations) or not attempts:
         raise WorkUnitError("CHILD_SEAL_INVALID", "Child model attempt count differs")
     for attempt, observation in zip(attempts, observations):
         native = read_snapshot(root, observation["observation_ref"], run_id=value["run_id"], stage=value["stage"]["name"], role="output")
-        if (attempt["state"] != "settled" or work_store.read_attempt_request(attempt["attempt_id"]) != request
+        quarantined_unknown = (
+            attempt["attempt_id"] in quarantine_ids
+            and attempt["state"] == "observed" and attempt["usage"] is None
+        )
+        if ((attempt["state"] != "settled" and not quarantined_unknown)
+                or work_store.read_attempt_request(attempt["attempt_id"]) != request
                 or native != work_store.read_attempt_response(attempt["attempt_id"])):
             raise WorkUnitError("CHILD_SEAL_INVALID", "Child native model receipt binding differs")
     return value

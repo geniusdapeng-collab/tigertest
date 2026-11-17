@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
+import time
 
 import pandas as pd
 import pytest
@@ -186,6 +187,98 @@ def test_provider_batches_are_bounded_and_preserve_requested_order():
     assert list(result) == tickers
 
 
+def test_tencent_hard_deadline_returns_completed_subset_without_waiting_for_hung_thread():
+    release = Event()
+
+    def frame():
+        return pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
+                             "Close": [1.0], "Volume": [1.0]},
+                            index=pd.DatetimeIndex([pd.Timestamp("2026-11-07")]))
+
+    class _DeadlineBatch(TencentProvider):
+        def _load_exchange_map(self):
+            return {}
+
+        def ohlcv(self, ticker, days=400):
+            if ticker == "HANG":
+                release.wait(30)
+                raise TimeoutError("fixture released")
+            return frame()
+
+    started = time.monotonic()
+    try:
+        provider = _DeadlineBatch()
+        result = provider.ohlcv_batch(
+            ["HANG", "A", "B", "C", "D"], 30,
+            hard_deadline=time.monotonic() + 0.4,
+        )
+        elapsed = time.monotonic() - started
+        assert elapsed < 2
+        assert list(result) == ["A", "B", "C", "D"]
+        status = provider.last_batch_status
+        assert status["timed_out_symbols"] == ["HANG"]
+        assert status["completed"] == 4
+        assert status["service_failure_asserted"] is False
+    finally:
+        release.set()
+
+
+def test_tencent_deadline_stops_queued_work_when_hung_worker_eventually_returns():
+    release = Event()
+    calls = []
+
+    class _NoFollowOn(TencentProvider):
+        BATCH_WORKERS = 1
+
+        def _load_exchange_map(self):
+            return {}
+
+        def ohlcv(self, ticker, days=400):
+            calls.append(ticker)
+            if ticker == "HANG":
+                assert release.wait(5)
+                raise TimeoutError("fixture released")
+            return pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
+                                 "Close": [1.0], "Volume": [1.0]},
+                                index=pd.DatetimeIndex([pd.Timestamp("2026-11-07")]))
+
+    provider = _NoFollowOn()
+    try:
+        result = provider.ohlcv_batch(
+            ["HANG", "MUST_NOT_START"], 30,
+            hard_deadline=time.monotonic() + 0.2,
+        )
+        assert result == {}
+        assert provider.last_batch_status["timed_out_symbols"] == [
+            "HANG", "MUST_NOT_START",
+        ]
+    finally:
+        release.set()
+    time.sleep(0.1)
+    assert calls == ["HANG"]
+
+
+def test_tencent_progress_emits_completed_batch_boundary():
+    updates = []
+
+    class _ProgressBatch(TencentProvider):
+        def _load_exchange_map(self):
+            return {}
+
+        def ohlcv(self, ticker, days=400):
+            return pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
+                                 "Close": [1.0], "Volume": [1.0]},
+                                index=pd.DatetimeIndex([pd.Timestamp("2026-11-07")]))
+
+    provider = _ProgressBatch()
+    result = provider.ohlcv_batch(
+        ["A", "B", "C", "D", "E"], 30, progress_callback=updates.append,
+    )
+    assert list(result) == ["A", "B", "C", "D", "E"]
+    assert len(updates) >= 2
+    assert updates[-1]["completed"] == 5 and updates[-1]["timed_out"] == 0
+
+
 # ---------------------------------------------------------------- 新浪解析
 
 _SINA_KLINE = ('/*x*/x([{"d":"2026-08-26","o":"310.00","h":"313.00","l":"309.00",'
@@ -229,6 +322,35 @@ def test_sina_kline_parsing():
 def test_sina_quote_parsing():
     q = _SinaFake().quote("AAPL")
     assert q["price"] == 319.70 and q["ts"] == "2026-08-29 06:32:33"
+
+
+def test_sina_hard_deadline_discloses_unresolved_batch_subset():
+    release = Event()
+    calls = []
+
+    class _DeadlineBatch(SinaProvider):
+        BATCH_WORKERS = 1
+
+        def ohlcv(self, ticker, days=400):
+            calls.append(ticker)
+            if ticker == "HANG":
+                assert release.wait(5)
+            return pd.DataFrame({"Open": [1.0], "High": [1.0], "Low": [1.0],
+                                 "Close": [1.0], "Volume": [1.0]},
+                                index=pd.DatetimeIndex([pd.Timestamp("2026-11-07")]))
+
+    provider = _DeadlineBatch()
+    try:
+        result = provider.ohlcv_batch(
+            ["HANG", "MUST_NOT_START"], 30,
+            hard_deadline=time.monotonic() + 0.2,
+        )
+        assert result == {}
+        assert provider.last_batch_status["timed_out_symbols"] == [
+            "HANG", "MUST_NOT_START",
+        ]
+    finally:
+        release.set()
 
 
 # ---------------------------------------------------------------- 东财解析

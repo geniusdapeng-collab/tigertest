@@ -41,7 +41,9 @@ class YahooProvider(DataProvider):
     def ohlcv(self, ticker: str, days: int = 400) -> pd.DataFrame:
         return self._download(ticker, days)
 
-    def ohlcv_batch(self, tickers: list[str], days: int = 400) -> dict[str, pd.DataFrame]:
+    def ohlcv_batch(self, tickers: list[str], days: int = 400, *,
+                    hard_deadline: float | None = None,
+                    progress_callback=None) -> dict[str, pd.DataFrame]:
         import time
         import yfinance as yf
         out: dict[str, pd.DataFrame] = {}
@@ -52,6 +54,8 @@ class YahooProvider(DataProvider):
         t_start = time.time()
         timezone_options = {"ignore_tz": False} if self.keep_exchange_timezone else {}
         for chunk in chunks:
+            if hard_deadline is not None and time.monotonic() >= hard_deadline:
+                break
             # 墙钟保护：总预算 = 8s × chunk 数 + 120s，防止限流环境卡死整层
             if time.time() - t_start > 8 * len(chunks) + 120:
                 logger.warning("yahoo 批量墙钟耗尽（%d/%d 只），提前返回部分结果",
