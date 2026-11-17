@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.2.1 — 2026-11-17
+
+### Fixed
+
+- SEC `robots.txt` requests now use the same admitted operator User-Agent as
+  SEC submissions and archive documents, including the robots product-token
+  match. Non-SEC hosts continue to receive the generic Tiger research agent and
+  never receive the operator email.
+
 ## 4.2.0 — 2026-11-17
 
 ### Added

@@ -21,7 +21,7 @@ from .contracts import IntelligenceError, SourceError, identifier
 
 class HostRequestPolicy:
     def __init__(self, root, *, tenant="public", minimum_interval_seconds=1.0,
-                 respect_robots=False, public_api_exemptions=()):
+                 respect_robots=False, public_api_exemptions=(), sec_user_agent=None):
         self.tenant = identifier(tenant, "tenant")
         if (isinstance(minimum_interval_seconds, bool)
                 or not isinstance(minimum_interval_seconds, (int, float))
@@ -45,7 +45,10 @@ class HostRequestPolicy:
             raise IntelligenceError("ARCHIVE_UNAVAILABLE", "Cannot initialize source host ledger") from None
         if respect_robots:
             from .robots_policy import RobotsPolicy
-            self.robots = RobotsPolicy(root, tenant=tenant, public_api_exemptions=public_api_exemptions)
+            self.robots = RobotsPolicy(
+                root, tenant=tenant, public_api_exemptions=public_api_exemptions,
+                sec_user_agent=sec_user_agent,
+            )
         else:
             self.robots = None
 

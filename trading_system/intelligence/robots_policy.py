@@ -39,6 +39,16 @@ def _blocked(reason, *, retry_after=None, http_status=None, bytes_received=0, re
         details={"reason": reason, "policy": "robots", "request_count": request_count})
 
 
+def _sec_user_agent(value):
+    if value is None:
+        return None
+    if (not isinstance(value, str) or not 8 <= len(value) <= 256
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+            or re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", value) is None):
+        raise _blocked("ROBOTS_CONFIG_INVALID")
+    return value
+
+
 def _invalid_constant(_value):
     raise ValueError("Non-finite robots observation")
 
@@ -110,7 +120,7 @@ class _Rule:
     specificity: int
 
 
-def _rules(body):
+def _rules(body, user_agent=USER_AGENT):
     try:
         text = body.decode("utf-8-sig")
     except UnicodeError:
@@ -160,7 +170,8 @@ def _rules(body):
             raise _blocked("ROBOTS_UNSUPPORTED_DIRECTIVE")
     if agents:
         groups.append((tuple(agents), tuple(rules)))
-    exact = [group for group in groups if USER_AGENT.lower() in group[0]]
+    product_token = user_agent.split()[0].lower()
+    exact = [group for group in groups if product_token in group[0]]
     selected = exact or [group for group in groups if "*" in group[0]]
     combined = tuple(rule for _, group_rules in selected for rule in group_rules)
     if not combined:
@@ -170,7 +181,8 @@ def _rules(body):
 
 class RobotsPolicy:
     def __init__(self, root, tenant="public", *, cache_ttl_seconds=3600.0,
-                 failure_ttl_seconds=60.0, public_api_exemptions=(), clock=None):
+                 failure_ttl_seconds=60.0, public_api_exemptions=(), clock=None,
+                 sec_user_agent=None):
         self.tenant = identifier(tenant, "tenant")
         for value in (cache_ttl_seconds, failure_ttl_seconds):
             if (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -179,6 +191,7 @@ class RobotsPolicy:
         self.cache_ttl_seconds = float(cache_ttl_seconds)
         self.failure_ttl_seconds = float(failure_ttl_seconds)
         self.clock = clock or time.time
+        self.sec_user_agent = _sec_user_agent(sec_user_agent)
         self.exemptions = []
         for entry in public_api_exemptions:
             if (not isinstance(entry, dict) or set(entry) != {"origin", "exact_path", "contract_sha256", "method"}
@@ -197,6 +210,7 @@ class RobotsPolicy:
             self.exemptions.append(value)
         self.exemptions = tuple(self.exemptions)
         self.policy_sha256 = digest({"schema": "tiger.robots-policy/v1", "user_agent": USER_AGENT,
+            "sec_user_agent": self.sec_user_agent,
             "max_bytes": MAX_ROBOTS_BYTES, "cache_ttl_seconds": self.cache_ttl_seconds,
             "failure_ttl_seconds": self.failure_ttl_seconds, "exemptions": self.exemptions,
             "duplicate_media_type_policy": "text_plain_present_only_known_text_labels_and_strict_rules"})
@@ -285,13 +299,21 @@ class RobotsPolicy:
             raise _blocked("ROBOTS_CLOCK_INVALID")
         return float(now)
 
+    def user_agent_for(self, host):
+        normalized = host.rstrip(".").lower()
+        if (self.sec_user_agent is not None
+                and (normalized == "sec.gov" or normalized.endswith(".sec.gov"))):
+            return self.sec_user_agent
+        return USER_AGENT
+
     def _record(self, origin, now, *, body=None, result="failure", reason="ROBOTS_FETCH_FAILED",
-                http_status=None, retry_after=None, request_count=0, bytes_received=0):
+                http_status=None, retry_after=None, request_count=0, bytes_received=0,
+                user_agent=USER_AGENT):
         retry = retry_after if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool) else 0.0
         retry = retry if math.isfinite(retry) and retry >= 0 else 0.0
         ttl = self.cache_ttl_seconds if result == "valid" else max(self.failure_ttl_seconds, retry)
         return {"schema": "tiger.robots-observation/v1", "tenant": self.tenant, "origin": origin,
-            "policy_sha256": self.policy_sha256, "user_agent": USER_AGENT, "observed_at": now,
+            "policy_sha256": self.policy_sha256, "user_agent": user_agent, "observed_at": now,
             "expires_at": now + ttl, "retry_at": now + ttl if result == "failure" else None,
             "result": result, "reason": reason, "http_status": http_status,
             "body_available": body is not None, "body_sha256": hashlib.sha256(body).hexdigest() if body is not None else None,
@@ -302,10 +324,12 @@ class RobotsPolicy:
         try:
             identity, serialized, body = row
             record = json.loads(serialized, parse_constant=_invalid_constant)
+            host = urlsplit(origin).hostname or ""
             if (set(record) != _FIELDS or canonical(record).decode() != serialized or digest(record) != identity
                     or record["schema"] != "tiger.robots-observation/v1"
                     or record["tenant"] != self.tenant or record["origin"] != origin
-                    or record["policy_sha256"] != self.policy_sha256 or record["user_agent"] != USER_AGENT
+                    or record["policy_sha256"] != self.policy_sha256
+                    or record["user_agent"] != self.user_agent_for(host)
                     or record["result"] not in {"valid", "failure"}
                     or not isinstance(record["reason"], str) or not record["reason"].startswith("ROBOTS_")):
                 raise ValueError
@@ -339,10 +363,11 @@ class RobotsPolicy:
             raise _blocked("ROBOTS_CACHE_TAMPERED") from None
 
     def _fetch(self, origin, host, transport, deadline):
+        user_agent = self.user_agent_for(host)
         try:
             response = transport.request("GET", origin + "/robots.txt", allowed_hosts=(host,),
                 deadline=deadline, max_bytes=MAX_ROBOTS_BYTES, _policy_probe=True,
-                headers={"User-Agent": USER_AGENT, "Accept": "text/plain"})
+                headers={"User-Agent": user_agent, "Accept": "text/plain"})
         except SourceError as error:
             reason = "ROBOTS_BACKOFF" if error.http_status == 429 or error.code == "RATE_LIMITED" else "ROBOTS_FETCH_FAILED"
             if error.code == "RESPONSE_TOO_LARGE":
@@ -351,7 +376,7 @@ class RobotsPolicy:
                 reason = "ROBOTS_FETCH_TIMEOUT"
             return self._record(origin, self._now(), reason=reason, http_status=error.http_status,
                 retry_after=error.retry_after, bytes_received=error.bytes_received,
-                request_count=error.details.get("request_count", 0)), None
+                request_count=error.details.get("request_count", 0), user_agent=user_agent), None
         now = self._now()
         body = response.body
         media_types = [value.split(";", 1)[0].strip().lower()
@@ -371,13 +396,13 @@ class RobotsPolicy:
                 if _origin(response.url)[0] != origin:
                     reason = "ROBOTS_REDIRECT_ORIGIN_DENIED"
                 else:
-                    _rules(body)
+                    _rules(body, user_agent)
             except SourceError as error:
                 reason = "ROBOTS_REDIRECT_ORIGIN_DENIED" if error.details["reason"] == "ROBOTS_URL_INVALID" else error.details["reason"]
         record = self._record(origin, now, body=body, result="failure" if reason else "valid",
             reason=reason or ("ROBOTS_OBSERVED_DUPLICATE_MEDIA_TYPES" if len(media_types) > 1 else "ROBOTS_OBSERVED"), http_status=response.status,
             retry_after=retry_after_seconds(response.headers.get("retry-after")),
-            request_count=response.request_count, bytes_received=len(body))
+            request_count=response.request_count, bytes_received=len(body), user_agent=user_agent)
         return record, body
 
     def _decision(self, identity, record, body, parts, *, cache_hit):
@@ -387,14 +412,14 @@ class RobotsPolicy:
                 http_status=record["http_status"], bytes_received=0 if cache_hit else record["bytes_received"],
                 request_count=0 if cache_hit else record["request_count"])
         path = _normalized_path((parts.path or "/") + ("?" + parts.query if parts.query else ""))
-        matching = [rule for rule in _rules(body) if _matches(rule.pattern, path)]
+        matching = [rule for rule in _rules(body, record["user_agent"]) if _matches(rule.pattern, path)]
         selected = max(matching, key=lambda rule: (rule.specificity, rule.allow)) if matching else None
         if selected is not None and not selected.allow:
             raise _blocked("ROBOTS_DISALLOWED", retry_after=max(0.0, record["expires_at"] - now),
                 bytes_received=0 if cache_hit else record["bytes_received"],
                 request_count=0 if cache_hit else record["request_count"])
         return {"schema": "tiger.robots-decision/v1", "allowed": True, "reason": "ROBOTS_ALLOWED",
-            "origin": record["origin"], "user_agent": USER_AGENT, "observation_id": identity,
+            "origin": record["origin"], "user_agent": record["user_agent"], "observation_id": identity,
             "robots_sha256": record["body_sha256"], "observed_at": record["observed_at"],
             "expires_at": record["expires_at"], "cache_hit": cache_hit,
             "probe_requests": 0 if cache_hit else record["request_count"],
@@ -417,7 +442,8 @@ class RobotsPolicy:
         for exemption in self.exemptions:
             if origin == exemption["origin"] and parts.path == exemption["exact_path"] and not parts.query:
                 return {"schema": "tiger.robots-decision/v1", "allowed": True,
-                    "reason": "ROBOTS_PUBLIC_CONTRACT_EXEMPT", "origin": origin, "user_agent": USER_AGENT,
+                    "reason": "ROBOTS_PUBLIC_CONTRACT_EXEMPT", "origin": origin,
+                    "user_agent": self.user_agent_for(host),
                     "method": "GET", "exact_path": exemption["exact_path"],
                     "contract_sha256": exemption["contract_sha256"], "robots_sha256": None,
                     "cache_hit": False, "probe_requests": 0, "probe_bytes": 0}
