@@ -32,8 +32,6 @@ from .model_budget import TokenBudgetError
 from .required_schemas import (clean_schema, sentiment_schema, risk_schema,
     narrative_schema, decision_schema, validate_target_assessments)
 
-market_asof = legacy.market_asof
-market_snapshots = legacy.market_snapshots
 _ids = legacy._ids
 _fail = legacy._fail
 _coverage = legacy._coverage
@@ -86,6 +84,24 @@ IDENTIFIERS_CLEAN_FORMAT_CONTRACT = "typed-clean-identifiers/v1"
 COMPLETE_CLEAN_FORMAT_CONTRACT = "typed-clean-complete-format/v1"
 CLEAN_FORMAT_CONTRACT = "typed-clean-keyed-inline/v1"
 DECISION_FORMAT_CONTRACT = "decision-format-v1"
+
+
+def _market_assessment(assessment):
+    """Project the v4 decision contract out of the market-timestamp contract."""
+    if (type(assessment) is dict
+            and set(assessment) == {
+                "run_date", "market_timezone", "decision_format_contract"}
+            and assessment["decision_format_contract"] == DECISION_FORMAT_CONTRACT):
+        return {key: assessment[key] for key in ("run_date", "market_timezone")}
+    return assessment
+
+
+def market_asof(market_data, symbols, assessment):
+    return legacy.market_asof(market_data, symbols, _market_assessment(assessment))
+
+
+def market_snapshots(market_data, symbols, assessment):
+    return legacy.market_snapshots(market_data, symbols, _market_assessment(assessment))
 
 
 def assessment_context(execution) -> dict:

@@ -16,7 +16,7 @@ from trading_system import pipeline
 from trading_system.agent_evidence import (EvidenceInvalid, normalize, read_bytes,
     read_json, read_snapshot, verify_events)
 from trading_system.data_models import StockCandidate, TradePick
-from trading_system.llm import required
+from trading_system.llm import intelligence_required, required
 from trading_system.llm import market_evidence
 from trading_system.llm.market_evidence import market_snapshots
 from trading_system.llm.required_proof import verify_required_model, _same_watch_facts
@@ -92,6 +92,29 @@ def test_empty_selection_requires_no_frame_and_stock_date_is_not_guessed_from_be
     rows = market_snapshots(market, ["BBB", "AAA"], ASSESSMENT)
     assert [(row["symbol"], row["as_of"]) for row in rows] == [
         ("BBB", "2026-10-22"), ("AAA", "2026-10-24")]
+
+
+def test_v4_decision_contract_is_removed_only_for_market_time_binding():
+    assessment = {
+        **ASSESSMENT,
+        "decision_format_contract": intelligence_required.DECISION_FORMAT_CONTRACT,
+    }
+    market = _market()
+    assert intelligence_required.market_asof(market, ["AAA"], assessment) == \
+        required.market_asof(market, ["AAA"], ASSESSMENT)
+    assert intelligence_required.market_snapshots(market, ["AAA"], assessment) == \
+        market_evidence.market_snapshots(market, ["AAA"], ASSESSMENT)
+
+    with pytest.raises(RequiredModelFailed):
+        market_evidence.market_snapshots(market, ["AAA"], assessment)
+    for invalid in (
+        {**assessment, "decision_format_contract": "forged"},
+        {**assessment, "extra": "unexpected"},
+    ):
+        with pytest.raises(RequiredModelFailed):
+            intelligence_required.market_asof(market, ["AAA"], invalid)
+        with pytest.raises(RequiredModelFailed):
+            intelligence_required.market_snapshots(market, ["AAA"], invalid)
 
 
 @pytest.mark.parametrize("assessment", [
