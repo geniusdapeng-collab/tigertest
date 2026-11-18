@@ -17,7 +17,8 @@ from .adapters import DeepSeekBridge, isolate_source_transports
 from .archive import Archive
 from .contracts import (DOCUMENT_SCHEMA, FetchResult, IntelligenceError, SearchRequest,
                         SearchResult, SourceError, aware, canonical, canonical_url,
-                        digest, safe_value, source_time, timestamp, utc_now)
+                        digest, issuer_directory_reference, safe_value, source_time,
+                        timestamp, utc_now)
 from .planner import compile_requests
 from .registry import default_registry
 
@@ -601,12 +602,8 @@ class IntelligenceService:
             row = entries.get(request.context.get("ticker"))
             if row:
                 return replace(request, context={**request.context, "cik": row["cik"],
-                    "issuer_directory_ref": {"document_id": directory["id"],
-                        "content_sha256": directory["text_blob"]["sha256"],
-                        "raw_response_ref": directory["raw_blob"], "ticker": request.context["ticker"],
-                        "text_blob": directory["text_blob"], "source_id": directory["source_id"],
-                        "normalization": directory["normalization"],
-                        "cik": row["cik"], "first_seen_at": directory["times"]["first_seen"]["value"]}})
+                    "issuer_directory_ref": issuer_directory_reference(
+                        directory, request.context["ticker"], row["cik"])})
         return request
 
     def _mark(self, job_id, cells, *, status, reason, attempt_refs=(), document_ids=()):

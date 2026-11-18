@@ -158,6 +158,21 @@ def safe_value(value: object, secrets: tuple[str, ...] = (), depth: int = 0):
     raise IntelligenceError("CONTRACT_INVALID", "Metadata must be finite JSON")
 
 
+def issuer_directory_reference(directory, ticker, cik):
+    """Bind an SEC request to the exact frozen directory document."""
+    return {
+        "document_id": directory["id"],
+        "content_sha256": directory["text_blob"]["sha256"],
+        "raw_response_ref": directory["raw_blob"],
+        "ticker": ticker,
+        "text_blob": directory["text_blob"],
+        "source_id": directory["source_id"],
+        "normalization": directory["normalization"],
+        "cik": cik,
+        "first_seen_at": directory["times"]["first_seen"]["value"],
+    }
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

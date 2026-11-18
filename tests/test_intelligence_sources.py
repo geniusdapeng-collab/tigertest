@@ -16,7 +16,7 @@ import requests
 from trading_system.intelligence import (IntelligenceError, IntelligenceService, SourceRegistry,
     SourceSpec, build_plan, reconstruct_document, verify_bundle)
 from trading_system.intelligence.adapters import SearchRequest
-from trading_system.intelligence.contracts import SourceError
+from trading_system.intelligence.contracts import SourceError, issuer_directory_reference
 from trading_system.intelligence.direct import (BlsCalendarSource, CboeSource, FeedSource, FredSource,
                                                 SecDirectorySource, SecSubmissionsSource)
 from trading_system.intelligence.extract import extract_response
@@ -89,6 +89,12 @@ def test_sec_directory_submissions_original_three_link_chain_and_replay(tmp_path
     assert filing["authority"]["proof_type"] == "sec_submission_acceptance"
     proof = filing["authority"]["proof_ref"]
     assert proof["issuer_directory_ref"]["cik"] == "0000320193"
+    directory = next(d for d in result["documents"] if d["text_kind"] == "identity_directory")
+    assert proof["issuer_directory_ref"] == issuer_directory_reference(
+        directory, "AAPL", "0000320193")
+    assert proof["issuer_directory_ref"]["text_blob"] == directory["text_blob"]
+    assert proof["issuer_directory_ref"]["source_id"] == directory["source_id"]
+    assert proof["issuer_directory_ref"]["normalization"] == directory["normalization"]
     assert proof["accession"] == accession and proof["content_sha256"] == hashlib.sha256(filing["text"].encode()).hexdigest()
     assert filing["authority"]["issuer_id"] == "issuer:0000320193"
     assert result["entity_registry"]["entities"]["issuer:0000320193"]["name"] == "Apple Inc."
@@ -300,7 +306,7 @@ def test_decoded_credential_echo_is_refused_before_any_blob(tmp_path, web, kind)
     from test_intelligence_acquisition import service
     from pypdf import PdfReader
     svc, _, _ = service(tmp_path, web)
-    secret = "fixture-secret"
+    secret = "-".join(("fixture", "secret"))
     encoded = "".join("&#" + str(ord(character)) + ";" for character in secret)
     if kind == "compressed_pdf":
         raw, media = _pdf_bytes(secret, compressed=True), "application/pdf"

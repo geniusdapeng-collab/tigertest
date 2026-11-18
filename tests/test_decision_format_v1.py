@@ -6,9 +6,11 @@ from copy import deepcopy
 import pytest
 
 from trading_system.llm.deepseek_required import validate_schema
+from trading_system.llm.intelligence_proof import _assessment_for_policy
 from trading_system.llm.intelligence_required import (
     DECISION_FORMAT_CONTRACT, chat_arguments,
 )
+from trading_system.redline.execution import CURRENT_TECH_INTELLIGENCE_POLICY_ID
 from trading_system.llm.required_schemas import decision_schema
 from trading_system.redline.model_diagnostics import RequiredModelUnavailable
 
@@ -99,6 +101,21 @@ def test_v3_decision_prompt_bytes_do_not_receive_v4_decision_contract():
         output(decision("NVDA", "watch", [MARKET_NVDA, "doc-nvda"])),
         legacy_schema,
     )
+
+
+def test_v4_proof_assessment_keeps_the_frozen_decision_contract():
+    clock = {"run_date": "2026-10-20", "market_timezone": "America/New_York"}
+    v4 = {
+        "execution": {"policy_id": CURRENT_TECH_INTELLIGENCE_POLICY_ID},
+    }
+    v3 = {
+        "execution": {"policy_id": "tiger.public-tech-intelligence-paper-policy.v3"},
+    }
+    assert _assessment_for_policy(clock, v4) == {
+        **clock,
+        "decision_format_contract": DECISION_FORMAT_CONTRACT,
+    }
+    assert _assessment_for_policy(clock, v3) == clock
 
 
 def test_watch_uses_exactly_its_own_market_id_and_no_allocation_fields():
