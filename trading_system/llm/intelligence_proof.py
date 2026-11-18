@@ -25,7 +25,8 @@ from ..cleaning.pipeline import rule_base_clean
 from ..intelligence import (build_plan, default_registry,
                             project_to_rawdocuments, replay_observation, verify_bundle)
 from ..intelligence.archive import Archive
-from ..intelligence.contracts import IntelligenceError, SearchRequest, SearchResult, safe_value, source_time
+from ..intelligence.contracts import (IntelligenceError, SearchRequest, SearchResult,
+    issuer_directory_reference, safe_value, source_time)
 from ..intelligence.planner import compile_requests
 from ..intelligence.registry import acquisition_mode
 from ..intelligence.adapters import deepseek_query, _hit
@@ -35,7 +36,8 @@ from ..intelligence_workflow import (ACQUISITION_CONTRACT, SOURCE_CONTENT_CONTRA
 from ..intelligence_workflow import validate_baseline_manifest
 from ..redline import LLMUnavailable
 from ..redline.execution import (REQUIRED_MODEL_STAGES, RequiredModelFailed,
-                                 daily_stage_contract, ExecutionContractError)
+                                 daily_stage_contract, ExecutionContractError,
+                                 CURRENT_TECH_INTELLIGENCE_POLICY_ID)
 from ..redline.model_diagnostics import validate_model_diagnostic
 from ..search.credibility import evidence_for, scoring_docs
 from ..search.event_identity import (STRUCTURED_EVENT_CONTRACT, validate_structured_events,
@@ -176,6 +178,15 @@ def _source_parameters(spec, operation, parameters, *, research_work=False):
     return result
 
 
+def _assessment_for_policy(clock, policy):
+    assessment = {key: clock[key] for key in ("run_date", "market_timezone")}
+    if (policy is not None
+            and policy.get("execution", {}).get("policy_id")
+            == CURRENT_TECH_INTELLIGENCE_POLICY_ID):
+        assessment["decision_format_contract"] = semantic.DECISION_FORMAT_CONTRACT
+    return assessment
+
+
 class _Replay:
     def __init__(self, run, admission, scene_policy_path, *, _partial=False,
                  _event_relative="events.jsonl"):
@@ -189,8 +200,8 @@ class _Replay:
                 or clock["market_timezone"] != "America/New_York" or self.cutoff.utcoffset() is None
                 or self.cutoff.astimezone(ZoneInfo("America/New_York")).date().isoformat() != run_date):
             _fail()
-        self.assessment = {key: clock[key] for key in ("run_date", "market_timezone")}
         self.policy = read_json(self.run, "policy.json") if (self.run / "policy.json").exists() else None
+        self.assessment = _assessment_for_policy(clock, self.policy)
         if self.policy is not None:
             counter = self.policy.get("model_contract", {})
             expected_counter = self.model_budget_contract()
@@ -967,10 +978,8 @@ def _verify_attempt_plan(replay, registry, bundle, plan, initial_documents, roun
             row = directory["source_metadata"].get("identity_directory", {}).get(request.context.get("ticker"))
             if row:
                 request = replace(request, context={**request.context, "cik": row["cik"],
-                    "issuer_directory_ref": {"document_id": directory["id"],
-                        "content_sha256": directory["text_blob"]["sha256"], "raw_response_ref": directory["raw_blob"],
-                        "ticker": request.context["ticker"], "cik": row["cik"],
-                        "first_seen_at": directory["times"]["first_seen"]["value"]}})
+                    "issuer_directory_ref": issuer_directory_reference(
+                        directory, request.context["ticker"], row["cik"])})
         for compiled in compile_requests(entry["source_id"], request):
             allowed["search.collect"].add((entry["source_id"], _hash(compiled.to_dict())))
     # SEC explicitly paginates an issuer's older submissions files. A child
@@ -1511,7 +1520,8 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
     company = {"contract": semantic.COMPANY_CONTRACT, "bundle_id": bundle["bundle_id"],
                "manifest_sha256": bundle["manifest_sha256"], "candidates": outcomes}
     schema = decision_schema(symbols, list(documents), list(market_by_id),
-        company_sources={symbol: row["source_ids"] for symbol, row in outcomes.items()})
+        company_sources={symbol: row["source_ids"] for symbol, row in outcomes.items()},
+        format_contract=replay.assessment.get("decision_format_contract"))
     payload = semantic.plan_analysis_documents(cleaned, {
         "approved_picks": inputs["picks"], "watch_candidates": watch,
         "numeric_action": inputs["action"], "mrs": bound["mrs"], "sectors": bound["sectors"],

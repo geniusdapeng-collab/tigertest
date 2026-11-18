@@ -137,6 +137,11 @@ def reconstruct_document(document, read_blob, source_manifest):
             published = hit.get("published", source_time(None))
     except (KeyError, IndexError, TypeError, ValueError):
         raise IntelligenceError("HASH_MISMATCH", "Document normalization cannot be replayed") from None
+    # The service applies the deterministic public-text sanitizer before it
+    # stores a document. Replay must apply the same URL/JWT projection without
+    # requiring the process-only secret tuple; raw bytes remain unchanged and
+    # remain bound by their own archived hash.
+    text = safe_value(text)
     content_hash = hashlib.sha256(text.encode()).hexdigest()
     if recipe.get("raw_redacted"):
         completeness = "partial"

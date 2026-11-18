@@ -88,6 +88,46 @@ def test_independent_actual_source_archive_redacts_query_userinfo_nested_or_seco
     assert replay["completeness"] == document["completeness"]
 
 
+def test_visible_text_projection_replays_without_rewriting_archived_bytes(tmp_path, web):
+    base, routes, calls = web
+    first = "https://public.example/" + "a" * 5000
+    second = "https://public.example/" + "b" * 5000
+    embedded = first + second
+    body = (
+        '<!doctype html><html><head><title>TEST_FIXTURE original</title></head>'
+        '<body><article><h1>TEST_FIXTURE original</h1>'
+        '<p>Observed reference token: <span>' + first + '</span>'
+        '<span>' + second + '</span></p>'
+        '<p>Complete controlled operating evidence; no financial claim is made.</p>'
+        '</article></body></html>'
+    )
+    routes["/original"] = 200, "text/html", body
+    source = SourceSpec("TEST_FIXTURE_source", "page", base + "/original",
+        allowed_hosts=("127.0.0.1",), minimum_interval_seconds=0, max_retries=0,
+        options={"material_types": ["news_events"]})
+    registry = SourceRegistry([source])
+    service = IntelligenceService(tmp_path / "archive", registry,
+        registry.build_adapters(transport=HttpTransport(allow_local=True), environment={},
+            parser_policy={"html_engine": "scrapling"}))
+    plan = build_plan({"run_id": "TEST_FIXTURE-text-projection",
+        "as_of": datetime.now(timezone.utc).isoformat(), "universe": {},
+        "frontier_manifest_hash": "0" * 64, "source_ids": [source.source_id],
+        "required_cells": [{"target_id": "topic:TEST_FIXTURE",
+            "question": "Original text projection", "required": True}],
+        "limits": {"requests": 6, "fetches": 2, "bytes": 100000,
+            "rounds": 1, "concurrency": 1, "deadline_seconds": 30}}, registry)
+    job = service.create_job(plan, "TEST_FIXTURE-text-projection")
+    acquired = service.collect(job["job_id"])
+    assert len(calls) == 1 and len(acquired["documents"]) == 1
+    document = acquired["documents"][0]
+    assert service.archive.read_blob(document["raw_blob"]) == body.encode()
+    assert document["normalization"]["raw_redacted"] is False
+    assert embedded not in document["text"] and "[REDACTED_URL]" in document["text"]
+    replay = reconstruct_document(document, service.archive.read_blob,
+                                  registry.public_manifest())
+    assert replay["text_sha256"] == document["text_blob"]["sha256"]
+
+
 def test_independent_network_policy_still_refuses_literal_backslash_and_credential_urls():
     assert not credential_free_url("https://public.example/path\\")
     assert not credential_free_url("https://public.example/?token=" + CANARY)

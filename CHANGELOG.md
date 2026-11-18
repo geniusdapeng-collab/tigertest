@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.2.3 — 2026-11-18
+
+### Fixed
+
+- Offline source replay now reapplies the deterministic public URL/JWT
+  projection used when the document was stored, while preserving and binding
+  the untouched archived raw bytes.
+- SEC issuer-directory references now use one shared constructor in acquisition
+  and proof, including the complete `text_blob`, `source_id`, and normalization
+  binding.
+- The v4 proof assessment restores its versioned `decision_format_contract`,
+  and the reconstructed decision schema includes the matching v4 watch citation
+  constraint.
+
+### Verification
+
+- Python: 3,819 passed, 7 skipped.
+- Required Node governance suite: 188 passed.
+- Independent `business_summary()` replay passed over the real 4.2.2 run's 236
+  frozen source documents, 474 WorkUnits, model receipts, and AVOID decision.
+
 ## 4.2.2 — 2026-11-18
 
 ### Fixed
