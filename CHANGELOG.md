@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.2.2 — 2026-11-18
+
+### Fixed
+
+- v4 decision evidence now excludes the versioned `decision_format_contract`
+  before calling the strict market-timestamp and stock-series binders. The
+  known contract remains in the model prompt, while the lower-level evidence
+  functions continue to reject unknown assessment fields.
+
+### Verification
+
+- Python: 3,817 passed, 7 skipped.
+- Required Node governance suite: 188 passed.
+
 ## 4.2.1 — 2026-11-17
 
 ### Fixed
