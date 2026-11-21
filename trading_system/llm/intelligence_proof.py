@@ -1515,8 +1515,14 @@ def _verify_decision(replay, cleaned, frontier, bundle, market, result):
     _same(inputs["market_evidence"], market_evidence, stage)
     market_by_symbol = {row["symbol"]: row for row in market_evidence}
     market_by_id = {row["id"]: row for row in market_evidence}
+    execution = (replay.policy or {}).get("execution", {})
+    reduced_evidence = False
+    if execution.get("policy_id") == CURRENT_TECH_INTELLIGENCE_POLICY_ID:
+        reduced_evidence = execution.get("reduced_evidence")
+        if type(reduced_evidence) is not bool:
+            _fail(stage)
     outcomes, documents = semantic.company_evidence_from_frozen(cleaned, approved, replay.cutoff,
-        security_ids=frontier["security_ids"], bundle=bundle)
+        security_ids=frontier["security_ids"], bundle=bundle, reduced_evidence=reduced_evidence)
     company = {"contract": semantic.COMPANY_CONTRACT, "bundle_id": bundle["bundle_id"],
                "manifest_sha256": bundle["manifest_sha256"], "candidates": outcomes}
     schema = decision_schema(symbols, list(documents), list(market_by_id),
