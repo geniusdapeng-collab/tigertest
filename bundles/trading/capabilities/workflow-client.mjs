@@ -386,7 +386,9 @@ export function startupOptions(options = {}) {
 }
 
 /** No env/argv/root override comes from a business request. Accepted detached workers are owned by Python. */
-export async function invokeWorkflow(operation, input, options = {}, { signal, timeoutMs = LIMITS.requestMs } = {}) {
+export async function invokeWorkflow(operation, input, options = {}, {
+  signal, timeoutMs = operation === "receipt" || operation === "verify" ? LIMITS.receiptMs : LIMITS.requestMs,
+} = {}) {
   let config;
   try {
     config = startupOptions(options);

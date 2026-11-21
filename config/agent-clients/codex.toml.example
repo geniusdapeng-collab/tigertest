@@ -8,4 +8,4 @@ command = "/absolute/path/to/node"
 args = ["/absolute/path/to/workroom-tiger/scripts/tiger-agent-mcp.mjs", "--python", "/absolute/path/to/python", "--state-root", "/absolute/path/to/tiger-state", "--mode", "readonly"]
 cwd = "/absolute/path/to/workroom-tiger"
 startup_timeout_sec = 15
-tool_timeout_sec = 65
+tool_timeout_sec = 5405

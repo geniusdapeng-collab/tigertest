@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { waitForReceipt } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { LIMITS, invokeWorkflow, waitForReceipt } from "../bundles/trading/capabilities/workflow-client.mjs";
 import { REQUEST, RUN_ID, collectProcess, eventually, result, runnerFixture } from "./tiger-agent-test-support.mjs";
 import { parseArgs } from "./tiger-agent.mjs";
 
@@ -179,6 +179,22 @@ test("CLI input files with spaces/nonASCII work and failed status is only a quer
   const file = join(fixture.dir, "输入 request.json"); await writeFile(file, JSON.stringify({ run_id: RUN_ID }));
   const proc = launch(fixture, "status", ["--input-file", file]); proc.child.stdin.end();
   const value = envelope(await proc.closed, 0); assert.equal(value.status, "failed"); assert.equal(value.summary, null);
+});
+
+test("direct proof gets the longer observation budget and explicit options still win", async (t) => {
+  const fixture = await runnerFixture(t);
+  const scheduled = [];
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, timeout, ...args) => {
+    scheduled.push(timeout);
+    return schedule(callback, timeout, ...args);
+  });
+  const request = { run_id: RUN_ID };
+  await invokeWorkflow("receipt", request, fixture.options);
+  await invokeWorkflow("verify", request, fixture.options);
+  await invokeWorkflow("status", request, fixture.options);
+  await invokeWorkflow("receipt", request, fixture.options, { timeoutMs: 4321 });
+  assert.deepEqual(scheduled, [LIMITS.receiptMs, LIMITS.receiptMs, LIMITS.requestMs, 4321]);
 });
 
 test("CLI wait covers the business deadline plus bounded receipt proof", async (t) => {

@@ -158,7 +158,7 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 查询可以保持 readonly，但必须使用提交时同一个 state-root。`receipt` 独立验证证据和账户提交后才提供选股、持仓、挂单、现金、权益、日期及数据/模型限制；`verify` 提供验证结果而不重复业务动作。CLI 每次仅输出一个 JSON envelope；所有返回字段的契约在 `bundles/trading/agent-workflow.schema.json`。
 
-需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，可选 `--wait-timeout-seconds 1..3600`。默认观察窗口 2460 秒；Python 业务 deadline 默认独立为 2400 秒。Node 单次提交/查询上限 60 秒，等待循环只轮询已有 `run_id`，不会重新提交。
+直接调用 `receipt` 或 `verify` 时，每次独立验真的观察上限为 5400 秒。其他单次 CLI/MCP 操作的默认观察上限为 60 秒。需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，默认观察窗口为 14400 秒，可用 `--wait-timeout-seconds` 指定 1–14400 秒。等待循环沿用同一个 `run_id`，并以剩余观察时间约束回执调用。Python 业务截止仍按已冻结的运行合同计算，默认 2400 秒。
 
 仅对 `us-tech-intelligence-paper-v4`、冻结 `us-tech-intelligence-paper-v3`
 和历史 `us-public-intelligence-paper-v2`，
@@ -203,6 +203,8 @@ doctor/describe 可只读检查有效值。新运行把脱敏、无凭据的内�
 工具结果同时包含相同 envelope 的 `structuredContent` 和 JSON 文本；`isError` 表示操作失败。未知工具为 JSON-RPC 参数错误。MCP 取消只停止对应提交/查询的观察，不是业务撤销 API。帧最大 128 KiB，业务输入仍为 64 KiB；最多四个并发请求，重复在途 ID、畸形 JSON、过量输出和断开的流均有有界退出路径。
 
 `status` 的 `data.research_status` 提供四轴状态、稳定计数、逐证券原因和恢复条件。其 `basis` 明确区分 observed records 与完整 `verified_run`；只有后者可把账户轴标为 committed。`receipt` 和 `verify` 仍独立重建冻结源码、事件、模型原生回执、研究快照与账户提交，不用状态投影代替验真。
+
+生成的 Codex、Qoder CLI 和 DeepSeek Harness 配置为一次 MCP 工具观察预留 5405 秒，给最长的独立验真及子进程清理留出时间。更新旧项目的受管条目后，让宿主重新连接。如果实际宿主提前取消查询，可通过同权限 CLI 查询原 `run_id`。
 
 初始化行为和工具结果遵循已核实的 [MCP 生命周期规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 与 [工具规范](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)。本服务不要求 task-based execution 扩展。
 
