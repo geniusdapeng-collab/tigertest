@@ -158,7 +158,7 @@ node scripts/tiger-agent.mjs verify --python /absolute/path/to/python \
 
 查询可以保持 readonly，但必须使用提交时同一个 state-root。`receipt` 独立验证证据和账户提交后才提供选股、持仓、挂单、现金、权益、日期及数据/模型限制；`verify` 提供验证结果而不重复业务动作。CLI 每次仅输出一个 JSON envelope；所有返回字段的契约在 `bundles/trading/agent-workflow.schema.json`。
 
-直接调用 `receipt` 或 `verify` 时，每次独立验真的观察上限为 5400 秒。其他单次 CLI/MCP 操作的默认观察上限为 60 秒。需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，默认观察窗口为 14400 秒，可用 `--wait-timeout-seconds` 指定 1–14400 秒。等待循环沿用同一个 `run_id`，并以剩余观察时间约束回执调用。Python 业务截止仍按已冻结的运行合同计算，默认 2400 秒。
+直接调用 `receipt` 或 `verify` 时，每次独立验真的观察上限为 5400 秒。提交、恢复和补研的默认 CLI/MCP 观察上限为 660 秒，其他单次操作为 60 秒。需要持续等待时，`run`、`resume`、`supplement` 可加 `--wait`，默认观察窗口为 14400 秒，可用 `--wait-timeout-seconds` 指定 1–14400 秒。等待循环沿用同一个 `run_id`，并以剩余观察时间约束回执调用。Python 业务截止仍按已冻结的运行合同计算，默认 2400 秒。Python 请求读取和等待提交锁各有 45 秒上限，通过输入校验后的服务端准备最多 600 秒。准备包括复核上一版账户回执并冻结本次输入，仍计入原业务截止。长时间的验真期间，同键可查询已落盘的身份，另一研究无法取得同一账户的写入锁。
 
 仅对 `us-tech-intelligence-paper-v4`、冻结 `us-tech-intelligence-paper-v3`
 和历史 `us-public-intelligence-paper-v2`，

@@ -181,7 +181,7 @@ test("CLI input files with spaces/nonASCII work and failed status is only a quer
   const value = envelope(await proc.closed, 0); assert.equal(value.status, "failed"); assert.equal(value.summary, null);
 });
 
-test("direct proof gets the longer observation budget and explicit options still win", async (t) => {
+test("direct requests select admission, proof or short observation time and preserve overrides", async (t) => {
   const fixture = await runnerFixture(t);
   const scheduled = [];
   const schedule = globalThis.setTimeout;
@@ -193,8 +193,19 @@ test("direct proof gets the longer observation budget and explicit options still
   await invokeWorkflow("receipt", request, fixture.options);
   await invokeWorkflow("verify", request, fixture.options);
   await invokeWorkflow("status", request, fixture.options);
+  await invokeWorkflow("run", REQUEST, fixture.options);
+  await invokeWorkflow("resume", request, fixture.options);
+  await invokeWorkflow("supplement", {
+    schema_version: "tiger.research-supplement-request/v1",
+    parent_run_id: RUN_ID,
+    symbols: ["NVDA"],
+    idempotency_key: "supplement-transport-budget",
+  }, fixture.options);
   await invokeWorkflow("receipt", request, fixture.options, { timeoutMs: 4321 });
-  assert.deepEqual(scheduled, [LIMITS.receiptMs, LIMITS.receiptMs, LIMITS.requestMs, 4321]);
+  assert.deepEqual(scheduled, [
+    LIMITS.receiptMs, LIMITS.receiptMs, LIMITS.requestMs,
+    LIMITS.admissionMs, LIMITS.admissionMs, LIMITS.admissionMs, 4321,
+  ]);
 });
 
 test("CLI wait covers the business deadline plus bounded receipt proof", async (t) => {

@@ -23,7 +23,9 @@ import time
 
 from trading_system.agent_evidence import EvidenceInvalid, json_bytes, strict_json
 
-PREPARATION_SECONDS = 45.0
+REQUEST_INPUT_SECONDS = 45.0
+SUBMISSION_LOCK_SECONDS = 45.0
+PREPARATION_SECONDS = 600.0
 BOOTSTRAP_SECONDS = 45.0
 PROCESS_CLEANUP_SECONDS = 3.0
 MAX_RESPONSE_BYTES = 65536
