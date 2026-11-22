@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { parseOptions, prepareConfiguration, writeConfiguration } from "./tiger-agent-config.mjs";
-import { MODEL_ENV_NAMES } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { LIMITS, MODEL_ENV_NAMES } from "../bundles/trading/capabilities/workflow-client.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const python = process.env.TIGER_TEST_PYTHON ?? join(root, ".venv/bin/python");
@@ -45,6 +45,27 @@ test("R04: Codex preserves unrelated bytes, supports spaces/Unicode, is idempote
   assert.match(paper.proposed, /"--mode",\s*"paper"/u); writeConfiguration(paper);
   const readonly = prepareConfiguration(f.options); writeConfiguration(readonly);
   assert.equal(await readFile(readonly.file, "utf8"), again.proposed);
+});
+
+test("generated MCP host timeouts and examples cover the bounded proof and cleanup", async (t) => {
+  const f = await fixture(t);
+  const readExample = (file) => readFile(join(root, "config/agent-clients", file), "utf8");
+  const codex = prepareConfiguration(f.options).proposed;
+  const toolTimeout = (text) => Number(text.match(/^tool_timeout_sec = (\d+)$/mu)?.[1]);
+  assert.equal(toolTimeout(codex), Math.ceil((LIMITS.receiptMs + 5000) / 1000));
+  assert.equal(toolTimeout(await readExample("codex.toml.example")), toolTimeout(codex));
+  assert.ok(toolTimeout(codex) * 1000 > LIMITS.receiptMs + LIMITS.cleanupMs);
+
+  const qoder = prepareConfiguration({ ...f.options, client: "qoder" }).proposed;
+  const qoderExample = JSON.parse(await readExample("qoder.json.example"));
+  assert.equal(qoderOwned(qoder).timeout, LIMITS.receiptMs + 5000);
+  assert.equal(qoderExample.mcpServers["tiger-workflow"].timeout, qoderOwned(qoder).timeout);
+
+  const dsh = prepareConfiguration({ ...f.options, client: "dsh" }).proposed;
+  const yaml = require("yaml");
+  const dshTimeout = (text) => yaml.parse(text)[0].config.toolCallTimeoutMs;
+  assert.equal(dshTimeout(dsh), LIMITS.receiptMs + 5000);
+  assert.equal(dshTimeout(await readExample("dsh.yaml.example")), dshTimeout(dsh));
 });
 
 test("MC-001: both reviewed Tiger identities are admitted and identity drift fails closed", async (t) => {
@@ -299,7 +320,7 @@ test("Qoder CLI preserves comments, unrelated settings and Unicode while updatin
     assert.equal(server.type, "stdio"); assert.equal(server.command, process.execPath);
     assert.deepEqual(server.args, [join(f.project, "scripts/tiger-agent-mcp.mjs"), "--python", python,
       "--state-root", join(f.project, ".tiger-agent"), "--mode", "readonly"]);
-    assert.equal(server.cwd, f.project); assert.equal(server.timeout, 65000);
+    assert.equal(server.cwd, f.project); assert.equal(server.timeout, LIMITS.receiptMs + 5000);
     assert.equal(Object.hasOwn(server, "trust"), false); assert.equal(Object.hasOwn(server, "alwaysAllow"), false);
     assert.equal(Object.hasOwn(server, "env"), false);
     writeConfiguration(prepared);

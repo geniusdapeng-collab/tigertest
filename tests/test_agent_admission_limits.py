@@ -77,7 +77,7 @@ def test_slow_account_copy_is_inside_preparation_deadline(tmp_path, monkeypatch)
         # original admission handler, rather than requiring all preparation
         # before this point to finish in 500 ms on every hosted runner.
         remaining, interval = signal.getitimer(signal.ITIMER_REAL)
-        assert 0 < remaining <= 45 and interval == 0
+        assert 0 < remaining <= runner.PREPARATION_SECONDS and interval == 0
         assert callable(signal.getsignal(signal.SIGALRM))
         assert signal.getsignal(signal.SIGALRM) != previous_handler
         reached.append("account")
@@ -95,16 +95,37 @@ def test_slow_account_copy_is_inside_preparation_deadline(tmp_path, monkeypatch)
     assert replay["error"]["code"] == "TIMEOUT" and reached == ["account"]
 
 
-def test_submission_lock_wait_uses_same_bounded_preparation_window(tmp_path):
+def test_slow_account_staging_does_not_hold_submission_identity_lock(tmp_path, monkeypatch):
+    source = fixture_source(tmp_path / "source")
+    state = tmp_path / "state"
+    original_stage = runner.stage_account
+    def observe_during_staging(state, run, parent):
+        same = runner.submit(state, REQUEST, source=source, _preparation_seconds=.15)
+        assert same["operation_ok"] and same["run_id"] == run.name
+        assert same["status"] == "accepted" and same["data"]["idempotent_replay"]
+        other = REQUEST | {"idempotency_key": "fixture-account-already-busy"}
+        busy = runner.submit(state, other, source=source, _preparation_seconds=.15)
+        assert busy["error"]["code"] == "ACCOUNT_BUSY" and busy["run_id"] is None
+        return original_stage(state, run, parent)
+    monkeypatch.setattr(runner, "stage_account", observe_during_staging)
+    first = runner.submit(state, REQUEST, source=source)
+    assert first["operation_ok"]
+    assert wait_terminal(state, first["run_id"])["status"] == "completed_degraded"
+    assert len(list((state / "keys").iterdir())) == 1
+
+
+def test_submission_lock_wait_has_its_own_short_budget(tmp_path, monkeypatch):
     state = checked_root(tmp_path / "state", create=True)
+    monkeypatch.setattr(runner, "SUBMISSION_LOCK_SECONDS", .08)
     descriptor = runner._lock_fd(state, "submission.lock", create=True, nonblocking=True)
     started = time.monotonic()
     try:
-        value = runner.submit(state, REQUEST, source=tmp_path, _preparation_seconds=0.08)
+        value = runner.submit(state, REQUEST, source=tmp_path, _preparation_seconds=2)
     finally:
         os.close(descriptor)
     assert time.monotonic() - started < 1
-    assert value["error"]["code"] == "TIMEOUT" and value["run_id"] is None
+    assert value["error"]["code"] == "TIMEOUT" and value["error"]["stage"] == "admission.lock"
+    assert value["run_id"] is None
     assert not (state / "keys").exists()
 
 
@@ -347,7 +368,7 @@ def test_ack_observation_timeout_does_not_kill_accepted_detached_worker(tmp_path
         # acknowledgement. This separates the tested parent observation
         # timeout from variable source-copy and worker-bootstrap latency.
         remaining, interval = signal.getitimer(signal.ITIMER_REAL)
-        assert 0 < remaining <= 45 and interval == 0
+        assert 0 < remaining <= runner.PREPARATION_SECONDS and interval == 0
         assert callable(signal.getsignal(signal.SIGALRM))
         assert signal.getsignal(signal.SIGALRM) != previous_handler
         acknowledged.append(True)

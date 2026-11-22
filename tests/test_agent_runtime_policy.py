@@ -319,14 +319,14 @@ def test_thread_preparation_inherits_trusted_configuration_and_original_parent_t
         admission["clock"]["admitted_at_utc"])).total_seconds() == 5400
 
 
-def cli_process(tmp_path, request, source, *, seconds=45):
+def cli_process(tmp_path, request, source, *, seconds=45, slow_parent=None):
     """A real stdin pipe stays open until the test deliberately supplies EOF."""
     marker = tmp_path / "entry-clock.json"
     bootstrap = textwrap.dedent('''
         import json, pathlib, sys
         sys.path.insert(0, sys.argv[1])
         from trading_system import agent_runner as runner
-        source, marker, seconds, state = sys.argv[2:]
+        source, marker, seconds, state, slow_parent = sys.argv[2:]
         original_clock, original_submit = runner.frozen_clock, runner.submit
         def clock(*args, **kwargs):
             value = original_clock(*args, **kwargs)
@@ -335,11 +335,22 @@ def cli_process(tmp_path, request, source, *, seconds=45):
         def submit(state, request, **kwargs):
             return original_submit(state, request, source=pathlib.Path(source), **kwargs)
         runner.frozen_clock, runner.submit = clock, submit
-        runner.PREPARATION_SECONDS = float(seconds)
+        runner.REQUEST_INPUT_SECONDS = float(seconds)
+        if slow_parent:
+            import time
+            from trading_system import agent_runtime as runtime
+            original_verify = runtime.verify_run
+            def verify(state, run_id, **kwargs):
+                if run_id == slow_parent:
+                    assert kwargs["require_committed"] is True
+                    time.sleep(0.4)
+                    pathlib.Path(marker + ".parent-verified").touch()
+                return original_verify(state, run_id, **kwargs)
+            runtime.verify_run = verify
         raise SystemExit(runner.main(["--mode", "paper", "--state-root", state, "run"]))
     ''')
     process = subprocess.Popen([sys.executable, "-I", "-B", "-c", bootstrap,
-        str(runtime.SOURCE_ROOT), str(source), str(marker), str(seconds), str(tmp_path / "state")],
+        str(runtime.SOURCE_ROOT), str(source), str(marker), str(seconds), str(tmp_path / "state"), slow_parent or ""],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
     started = time.monotonic()
     while not marker.exists():
@@ -379,14 +390,40 @@ def test_cli_captures_business_clock_before_real_slow_stdin(tmp_path, monkeypatc
             process.communicate(timeout=5)
 
 
-def test_cli_blocked_stdin_consumes_existing_preparation_lease(tmp_path):
+def test_cli_second_run_verifies_committed_parent_after_input_timer_expires(tmp_path):
+    source = fixture_source(tmp_path / "source")
+    state = tmp_path / "state"
+    first = runner.submit(state, REQUEST, source=source)
+    assert first["operation_ok"], first
+    assert wait_terminal(state, first["run_id"])["status"] == "completed_degraded"
+    parent_before = runtime.pointer_read(state)
+    request = REQUEST | {"idempotency_key": "fixture-second-after-proof"}
+    process, marker = cli_process(tmp_path, request, source, seconds=.25, slow_parent=first["run_id"])
+    try:
+        output, errors = process.communicate(json_bytes(request), timeout=20)
+        accepted = json.loads(output)
+        assert process.returncode == 0 and accepted["operation_ok"], (accepted, errors.decode())
+        assert Path(str(marker) + ".parent-verified").exists()
+        second_id = accepted["run_id"]
+        assert wait_terminal(state, second_id)["status"] == "completed_degraded"
+        admission, _policy, _source = runtime.validate_admission(state / "runs" / second_id)
+        assert admission["clock"] == json.loads(marker.read_text())
+        assert admission["parent"] == parent_before
+        assert runtime.verify_run(state, second_id)["verification"]["ok"]
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+def test_cli_blocked_stdin_stops_before_trusted_admission(tmp_path):
     process, _marker = cli_process(tmp_path, REQUEST, runtime.SOURCE_ROOT, seconds=.12)
     try:
         process.wait(timeout=3)  # Keep stdin open; the child must terminate itself.
         output, errors = process.communicate(timeout=3)
         value = json.loads(output)
         assert process.returncode == 9, errors.decode()
-        assert value["error"]["code"] == "TIMEOUT" and value["error"]["stage"] == "admission.prepare"
+        assert value["error"]["code"] == "TIMEOUT" and value["error"]["stage"] == "admission.input"
         assert value["run_id"] is None and not (tmp_path / "state").exists()
     finally:
         if process.poll() is None:

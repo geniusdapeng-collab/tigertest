@@ -37,8 +37,10 @@ from .agent_runtime import (
     source_observation_contract, source_inventory, source_research_work_policy,
     research_readiness, _api_key_present,
 )
-from .admission_guards import (PREPARATION_SECONDS, PreparationDeadline,
-                               PreparationExpired, thread_submission)
+from .admission_guards import (
+    PREPARATION_SECONDS, REQUEST_INPUT_SECONDS, SUBMISSION_LOCK_SECONDS,
+    PreparationDeadline, PreparationExpired, thread_submission,
+)
 
 OPERATIONS = frozenset({"doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"})
 MAX_INPUT_BYTES = 65536
@@ -170,7 +172,8 @@ def _lock_fd(root: Path, name: str, *, create: bool, nonblocking: bool) -> int:
 def admission_lock(state: Path, *, deadline: float | None = None):
     # Account workers never inherit this short submission lock. Polling makes
     # contention bounded even when flock would restart an interrupted syscall.
-    deadline = deadline if deadline is not None else time.monotonic() + PREPARATION_SECONDS
+    lock_deadline = time.monotonic() + SUBMISSION_LOCK_SECONDS
+    deadline = lock_deadline if deadline is None else min(deadline, lock_deadline)
     while True:
         if time.monotonic() >= deadline:
             raise EvidenceInvalid("TIMEOUT", "Preparation lock deadline elapsed", stage="admission.lock")
@@ -367,63 +370,65 @@ def _submit(state: Path, request: dict, *, source: Path,
                 "status": "accepted", "error": None,
             })
             parent = pointer_read(state)
-            frozen_source = freeze_source(run, source)
-            if runtime_input is not None:
-                atomic_json(run, "runtime-input.json", runtime_input, exclusive=True)
-            intelligence_input = None
-            if request["profile"] in INTELLIGENCE_PROFILES:
-                from .intelligence_workflow import stage_input_packet
-                intelligence_input = stage_input_packet(run,
-                    as_of=datetime.fromisoformat(clock["admitted_at_utc"]),
-                    profile=request["profile"])
-            policy = policy_manifest(request["profile"],
-                                     scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
-                                     intelligence_input=intelligence_input, runtime_input=runtime_input,
-                                     research_work=source_research_work_policy(
-                                         frozen_source["files"], request["profile"], run / "source"),
-                                     research_scope_sha256=research_scope["manifest_sha256"]
-                                     if research_scope is not None else None,
-                                     response_observation_contract=source_observation_contract(
-                                         frozen_source["files"], request["profile"]),
-                                     readiness=(research_readiness() if request["profile"] ==
-                                                CURRENT_TECH_INTELLIGENCE_PROFILE else None))
-            atomic_json(run, "policy.json", policy, exclusive=True)
-            stage_account(state, run, parent)
-            stage_calendar(run)
-            admission = {
-                "schema": "tiger.admission.v1", "run_id": run_id, "clock": clock,
-                "parent": parent, "request_sha256": request_hash,
-                "policy_sha256": digest(json_bytes(policy)),
-                "source_sha256": digest(read_bytes(run, "source-manifest.json")),
-            }
-            if runtime_input is not None:
-                admission["runtime_input_sha256"] = digest(json_bytes(runtime_input))
-            if research_scope is not None:
-                admission["research_scope_sha256"] = research_scope["manifest_sha256"]
-            if datetime.now(timezone.utc) >= datetime.fromisoformat(clock["deadline_at_utc"]):
-                raise EvidenceInvalid("TIMEOUT", "Business deadline elapsed during preparation", stage="admission.prepare")
-            atomic_json(run, "admission.json", admission, exclusive=True)
-            ack_read, ack_write = os.pipe()
-            entry = run / "source" / "trading_system" / "agent_supervisor.py"
-            worker = subprocess.Popen(
-                [sys.executable, "-I", "-B", str(entry), "supervisor", str(state), run_id,
-                 str(account_fd), str(run_fd), str(ack_write)],
-                cwd=run / "work", env=run_environment(run / "work", model_required=policy["execution"]["model_mode"] == "enabled"),
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True, close_fds=True,
-                pass_fds=(account_fd, run_fd, ack_write),
-            )
-            os.close(ack_write)
-            ack_write = -1
-            # Close our duplicate references; never LOCK_UN shared inherited
-            # descriptions because the independent worker owns the same locks.
-            os.close(account_fd)
-            account_fd = -1
-            os.close(run_fd)
-            run_fd = -1
-            _acknowledgement(ack_read, run_id)
-            return envelope(operation, run_id=run_id, status="accepted",
-                            data={"idempotent_replay": False, "observed_status": "running"})
+        # The account and run locks still fence preparation and worker handoff.
+        # Same-key observers can recover the durable identity while proof runs.
+        frozen_source = freeze_source(run, source)
+        if runtime_input is not None:
+            atomic_json(run, "runtime-input.json", runtime_input, exclusive=True)
+        intelligence_input = None
+        if request["profile"] in INTELLIGENCE_PROFILES:
+            from .intelligence_workflow import stage_input_packet
+            intelligence_input = stage_input_packet(run,
+                as_of=datetime.fromisoformat(clock["admitted_at_utc"]),
+                profile=request["profile"])
+        policy = policy_manifest(request["profile"],
+                                 scene_policy_path=run / "source" / SCENE_POLICY_RELATIVE,
+                                 intelligence_input=intelligence_input, runtime_input=runtime_input,
+                                 research_work=source_research_work_policy(
+                                     frozen_source["files"], request["profile"], run / "source"),
+                                 research_scope_sha256=research_scope["manifest_sha256"]
+                                 if research_scope is not None else None,
+                                 response_observation_contract=source_observation_contract(
+                                     frozen_source["files"], request["profile"]),
+                                 readiness=(research_readiness() if request["profile"] ==
+                                            CURRENT_TECH_INTELLIGENCE_PROFILE else None))
+        atomic_json(run, "policy.json", policy, exclusive=True)
+        stage_account(state, run, parent)
+        stage_calendar(run)
+        admission = {
+            "schema": "tiger.admission.v1", "run_id": run_id, "clock": clock,
+            "parent": parent, "request_sha256": request_hash,
+            "policy_sha256": digest(json_bytes(policy)),
+            "source_sha256": digest(read_bytes(run, "source-manifest.json")),
+        }
+        if runtime_input is not None:
+            admission["runtime_input_sha256"] = digest(json_bytes(runtime_input))
+        if research_scope is not None:
+            admission["research_scope_sha256"] = research_scope["manifest_sha256"]
+        if datetime.now(timezone.utc) >= datetime.fromisoformat(clock["deadline_at_utc"]):
+            raise EvidenceInvalid("TIMEOUT", "Business deadline elapsed during preparation", stage="admission.prepare")
+        atomic_json(run, "admission.json", admission, exclusive=True)
+        ack_read, ack_write = os.pipe()
+        entry = run / "source" / "trading_system" / "agent_supervisor.py"
+        worker = subprocess.Popen(
+            [sys.executable, "-I", "-B", str(entry), "supervisor", str(state), run_id,
+             str(account_fd), str(run_fd), str(ack_write)],
+            cwd=run / "work", env=run_environment(run / "work", model_required=policy["execution"]["model_mode"] == "enabled"),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, close_fds=True,
+            pass_fds=(account_fd, run_fd, ack_write),
+        )
+        os.close(ack_write)
+        ack_write = -1
+        # Close our duplicate references; never LOCK_UN shared inherited
+        # descriptions because the independent worker owns the same locks.
+        os.close(account_fd)
+        account_fd = -1
+        os.close(run_fd)
+        run_fd = -1
+        _acknowledgement(ack_read, run_id)
+        return envelope(operation, run_id=run_id, status="accepted",
+                        data={"idempotent_replay": False, "observed_status": "running"})
     except (OSError, EvidenceInvalid, ValueError, PreparationExpired) as exc:
         controlled = isinstance(exc, (EvidenceInvalid, PreparationExpired))
         code = exc.code if controlled else "ARTIFACT_WRITE_FAILED" if isinstance(exc, OSError) else "RUNNER_FAILED"
@@ -490,9 +495,9 @@ def submit_supplement(state: Path, request: dict, *,
         validate_request("supplement", request)
         if threading.current_thread() is not threading.main_thread():
             raise EvidenceInvalid("RUNNER_FAILED", "Supplement admission requires the main supervisor thread")
-        checked_root(state)
-        internal, scope = _supplement_inputs(state, request, clock)
         with PreparationDeadline(_preparation_seconds) as guard:
+            checked_root(state)
+            internal, scope = _supplement_inputs(state, request, clock)
             return _submit(state, internal, source=SOURCE_ROOT,
                            preparation_deadline=guard.deadline, entry_clock=clock,
                            operation="supplement", mapping_request=request,
@@ -574,32 +579,32 @@ def submit_resume(state: Path, request: dict, *,
         validate_request("resume", request)
         if threading.current_thread() is not threading.main_thread():
             raise EvidenceInvalid("RUNNER_FAILED", "Same-run resume requires the main supervisor thread")
-        checked_root(state)
-        # The 45-second preparation budget covers lock acquisition and
-        # identity admission only. Large-run recovery gets its own phase under
-        # the original business deadline and never sends before proof exists.
-        with admission_lock(state, deadline=time.monotonic() + _preparation_seconds):
-            run = state / "runs" / run_id
-            observed = observe_run(state, run_id)
-            current = pointer_read(state)
-            if current is not None and current["run_id"] == run_id:
+        with PreparationDeadline(_preparation_seconds) as guard:
+            checked_root(state)
+            with admission_lock(state, deadline=guard.deadline):
+                run = state / "runs" / run_id
+                observed = observe_run(state, run_id)
+                current = pointer_read(state)
+                already_current = current is not None and current["run_id"] == run_id
+                if not already_current:
+                    if observed["active"]:
+                        return envelope("resume", run_id=run_id,
+                                        status="running" if observed["status"] == "accepted" else observed["status"],
+                                        data={"idempotent_replay": True, "observed_status": observed["status"]})
+                    try:
+                        account_fd = _lock_fd(state, "account.lock", create=False, nonblocking=True)
+                    except BlockingIOError as exc:
+                        raise EvidenceInvalid(
+                            "ACCOUNT_BUSY", "Another paper run owns the account lock") from exc
+                    try:
+                        run_fd = _lock_fd(run, "run.lock", create=False, nonblocking=True)
+                    except BlockingIOError:
+                        return envelope("resume", run_id=run_id, status="running",
+                                        data={"idempotent_replay": True, "observed_status": observed["status"]})
+            if already_current:
                 verify_run(state, run_id, current_source=None)
                 return envelope("resume", run_id=run_id, status="completed",
                                 data={"idempotent_replay": True, "observed_status": "completed"})
-            if observed["active"]:
-                return envelope("resume", run_id=run_id,
-                                status="running" if observed["status"] == "accepted" else observed["status"],
-                                data={"idempotent_replay": True, "observed_status": observed["status"]})
-            try:
-                account_fd = _lock_fd(state, "account.lock", create=False, nonblocking=True)
-            except BlockingIOError as exc:
-                raise EvidenceInvalid(
-                    "ACCOUNT_BUSY", "Another paper run owns the account lock") from exc
-            try:
-                run_fd = _lock_fd(run, "run.lock", create=False, nonblocking=True)
-            except BlockingIOError:
-                return envelope("resume", run_id=run_id, status="running",
-                                data={"idempotent_replay": True, "observed_status": observed["status"]})
             admission, policy, _ = validate_admission(run, validate_working_calendar=False)
             from .research_resume import prepare_resume, supported
             if not supported(policy):
@@ -800,7 +805,7 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
     try:
         # Direct Python callers use the same entry boundary as the CLI. The
         # private clock never appears among the public request fields.
-        entry_clock = (frozen_clock() if _entry_clock is None else _entry_clock) if operation == "run" else None
+        entry_clock = (frozen_clock() if _entry_clock is None else _entry_clock) if operation in {"run", "supplement"} else None
         request = validate_request(operation, request)
         run_id = request.get("run_id")
         if mode not in {"readonly", "paper"}:
@@ -814,7 +819,7 @@ def execute(operation: str, request: object, *, mode: str, state: Path,
         if operation == "resume":
             return submit_resume(state, request)
         if operation == "supplement":
-            return submit_supplement(state, request)
+            return submit_supplement(state, request, _entry_clock=entry_clock)
         if operation == "cancel":
             return submit_cancel(state, request)
         checked_root(state)
@@ -924,7 +929,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("operation")
         arguments = parser.parse_args(argv)
         operation = arguments.operation if arguments.operation in OPERATIONS else None
-        def read_and_execute():
+        with PreparationDeadline(REQUEST_INPUT_SECONDS, stage="admission.input"):
             data = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             if len(data) > MAX_INPUT_BYTES:
                 raise EvidenceInvalid("INPUT_TOO_LARGE", "Request exceeds 65536 bytes")
@@ -932,15 +937,8 @@ def main(argv: list[str] | None = None) -> int:
                 request = strict_json(data)
             except (ValueError, UnicodeError, RecursionError) as exc:
                 raise EvidenceInvalid("INVALID_REQUEST", "Request must be one strict UTF-8 JSON object") from exc
-            return execute(arguments.operation, request, mode=arguments.mode,
-                           state=Path(arguments.state_root), _entry_clock=entry_clock)
-        if arguments.operation == "run":
-            # The existing preparation lease also owns a blocked stdin read;
-            # nested submit guards preserve this earlier timer.
-            with PreparationDeadline(PREPARATION_SECONDS):
-                value = read_and_execute()
-        else:
-            value = read_and_execute()
+        value = execute(arguments.operation, request, mode=arguments.mode,
+                        state=Path(arguments.state_root), _entry_clock=entry_clock)
     except (EvidenceInvalid, PreparationExpired) as exc:
         value = failure(operation, exc.code, str(exc), stage=exc.stage)
     except KeyboardInterrupt:

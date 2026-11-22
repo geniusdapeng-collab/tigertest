@@ -12,10 +12,14 @@ export const TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v3";
 export const CURRENT_TECH_INTELLIGENCE_PROFILE = "us-tech-intelligence-paper-v4";
 export const OPERATIONS = Object.freeze(["doctor", "describe", "run", "resume", "supplement", "cancel", "status", "receipt", "verify"]);
 export const LIMITS = Object.freeze({ inputBytes: 65536, outputBytes: 1024 * 1024, stderrBytes: 65536,
-  frameBytes: 131072, requestMs: 60000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
+  frameBytes: 131072, requestMs: 60000, admissionMs: 660000, receiptMs: 5400000, waitMs: 14400000, pollMs: 1000, depth: 64, concurrent: 4,
   terminateMs: 250, cleanupMs: 2000, maxWaitSeconds: 14400 });
 const RUN_ID = /^run-[0-9a-f]{32}$/u;
 const TERMINAL_OK = new Set(["completed", "completed_degraded"]);
+const REQUEST_TIMEOUTS_MS = new Map([
+  ["run", LIMITS.admissionMs], ["resume", LIMITS.admissionMs], ["supplement", LIMITS.admissionMs],
+  ["receipt", LIMITS.receiptMs], ["verify", LIMITS.receiptMs],
+]);
 const ENV_NAMES = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
@@ -386,7 +390,9 @@ export function startupOptions(options = {}) {
 }
 
 /** No env/argv/root override comes from a business request. Accepted detached workers are owned by Python. */
-export async function invokeWorkflow(operation, input, options = {}, { signal, timeoutMs = LIMITS.requestMs } = {}) {
+export async function invokeWorkflow(operation, input, options = {}, {
+  signal, timeoutMs = REQUEST_TIMEOUTS_MS.get(operation) ?? LIMITS.requestMs,
+} = {}) {
   let config;
   try {
     config = startupOptions(options);
@@ -557,8 +563,11 @@ export async function waitForReceipt(runId, options, { operation = "run", signal
       retryDelay = pollMs;
       if (TERMINAL_OK.has(current.status)) {
         for (;;) {
+          if (signal?.aborted) throw new WorkflowError("CANCELLED", "Observation was cancelled.");
+          const receiptTimeLeft = deadline - Date.now();
+          if (receiptTimeLeft <= 0) throw new WorkflowError("TIMEOUT", "Verifying the existing run exceeded the observation deadline.");
           const receipt = await invoke("receipt", { run_id: runId }, options,
-            { signal, timeoutMs: Math.min(Math.max(1, deadline - Date.now()), LIMITS.receiptMs) });
+            { signal, timeoutMs: Math.min(receiptTimeLeft, LIMITS.receiptMs) });
           if (receipt.operation_ok) return receipt;
           const transientProof = receipt.error?.code === "TIMEOUT" || receipt.error?.retryable === true;
           if (!transientProof) return receipt;

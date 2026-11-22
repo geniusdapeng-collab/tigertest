@@ -41,6 +41,56 @@ test("v2 receipt permits partial research and variable source counts with comple
   assert.equal(validateEnvelope(row, "receipt", { run_id: RUN_ID }), row);
 });
 
+function receiptWithProofDiagnostics() {
+  const row = receipt();
+  const usage = { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 };
+  const observation = (stage, index) => ({
+    stage, call_id: index.toString(16).padStart(32, "0"), ordinal: 1,
+    request_sha256: "a".repeat(64),
+    observation_ref: { path: `snapshots/model-${index}.json`, schema: "fixture-observation", bytes: 240, sha256: "b".repeat(64) },
+    response_id: `fixture-model-${index}`, diagnostic: null, usage,
+  });
+  row.summary.model.chat_accounting = {
+    accounting_scope: "chat_completions_only", source_accounting: "not_certified_by_this_report",
+    other_model_io_count: 7, native_count: 6, observed_attempts_count: 6, known_native_attempts: 5,
+    known_usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    unknown_attempts: 1, observation_state: "usage_unknown", requires_reconciliation: true, format_reanswers: 0,
+    observed_attempts: [...stages.map(observation), {
+      ...observation(stages[0], 5), response_id: null, diagnostic: { code: "MODEL_TIMEOUT" }, usage: null,
+    }],
+  };
+  row.summary.model.research_work = {
+    quarantined_attempts: [{
+      attempt_id: "attempt-" + "1".repeat(64), unit_id: "unit-fixture", scope: "model",
+      affected_targets: ["global:macro"], usage_state: "unknown", reservation_state: "held",
+      reason: "MODEL_TIMEOUT", event_sha256: "c".repeat(64),
+    }],
+    quarantined_targets: ["global:macro"],
+  };
+  return row;
+}
+
+test("verified paper receipt transports native accounting and quarantine disclosures", async (t) => {
+  const expected = receiptWithProofDiagnostics();
+  const fixture = await runnerFixture(t, `send(${JSON.stringify(expected)});`);
+  const receipt = await invokeWorkflow("receipt", { run_id: RUN_ID }, { ...fixture.options, mode: "readonly" });
+  assert.deepEqual(receipt, expected);
+});
+
+for (const [name, change] of [
+  ["an unrecognized model member", model => { model.unrecognized = {}; }],
+  ["accounting without required fields", model => { model.chat_accounting = {}; }],
+  ["unstructured observations", model => { model.chat_accounting.observed_attempts = ["not-an-observation"]; }],
+  ["a malformed quarantine reservation", model => { model.research_work.quarantined_attempts[0].reservation_state = 7; }],
+  ["quarantine targets that are not identifiers", model => { model.research_work.quarantined_targets = [false]; }],
+]) {
+  test(`receipt rejects ${name}`, () => {
+    const row = receiptWithProofDiagnostics();
+    change(row.summary.model);
+    assert.throws(() => validateEnvelope(row, "receipt", { run_id: RUN_ID }), { code: "RESULT_INVALID" });
+  });
+}
+
 for (const [name, change] of [
   ["no acquisition", row => { delete row.summary.disclosures.intelligence; }],
   ["missing bundle", row => { delete row.summary.disclosures.intelligence.bundle; }],

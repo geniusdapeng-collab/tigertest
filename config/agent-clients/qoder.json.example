@@ -13,7 +13,7 @@
         "readonly"
       ],
       "cwd": "/absolute/path/to/workroom-tiger",
-      "timeout": 65000
+      "timeout": 5405000
     }
   }
 }

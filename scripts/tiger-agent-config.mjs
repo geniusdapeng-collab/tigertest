@@ -9,7 +9,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-import { ENGINE_ROOT, MODEL_ENV_NAMES, WorkflowError, parseJson, plain, runtimeEnvironment, sanitizeMessage } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { ENGINE_ROOT, LIMITS, MODEL_ENV_NAMES, WorkflowError, parseJson, plain, runtimeEnvironment, sanitizeMessage } from "../bundles/trading/capabilities/workflow-client.mjs";
 
 const require = createRequire(new URL("../governance/package.json", import.meta.url));
 const SERVER = "tiger-workflow";
@@ -19,6 +19,8 @@ const END = "# END TIGER AGENT MCP v1";
 const JSON_BEGIN = "// BEGIN TIGER AGENT MCP v1";
 const JSON_END = "// END TIGER AGENT MCP v1";
 const MAX_CONFIG_BYTES = 1024 * 1024;
+// Let the runner return a proof or its bounded timeout after request cleanup.
+const MCP_TOOL_TIMEOUT_MS = LIMITS.receiptMs + 5000;
 const TIGER_IDENTITIES = new Map([
   ["workroom-tiger", new Set([
     "cnb.cool/workloom-ai/workroom-tiger",
@@ -306,7 +308,7 @@ export function prepareConfiguration(options = {}) {
   const python = selectedPython(project, options.python);
   const probe = toml("", python, project);
   const server = { command: process.execPath, args: [entry, "--python", probe.python, "--state-root", resolve(stateRoot), "--mode", mode], cwd: project,
-    startup_timeout_sec: 15, tool_timeout_sec: 65,
+    startup_timeout_sec: 15, tool_timeout_sec: Math.ceil(MCP_TOOL_TIMEOUT_MS / 1000),
     ...(options.client === "codex" && mode === "paper" ? { env_vars: [...MODEL_ENV_NAMES] } : {}) };
   let proposed;
   if (options.client === "codex") {
@@ -323,13 +325,13 @@ export function prepareConfiguration(options = {}) {
     const after = toml(proposed, python, project).value;
     if (!isDeepStrictEqual(withoutCodex(original), withoutCodex(after)) || !isDeepStrictEqual(after.mcp_servers?.[SERVER], server)) fail("Generated TOML would alter unrelated configuration.");
   } else if (options.client === "qoder") {
-    proposed = qoderConfiguration(before.text, range, { type: "stdio", command: server.command, args: server.args, cwd: project, timeout: 65000 });
+    proposed = qoderConfiguration(before.text, range, { type: "stdio", command: server.command, args: server.args, cwd: project, timeout: MCP_TOOL_TIMEOUT_MS });
   } else {
     const original = yaml(before.text);
     const ownedItems = original.value.filter((item) => item.id === PLUGIN);
     if (ownedItems.length !== Number(Boolean(range)) || original.value.some((item) => item.id !== PLUGIN && item.config?.serverName === SERVER)) fail("Existing Tiger DSH plugin conflicts with the managed entry.");
     const plugin = { id: PLUGIN, name: "@deepseek-ai/dsh-mcp-client", config: { serverName: SERVER, transport: "stdio", command: server.command,
-      args: server.args, cwd: project, toolCallTimeoutMs: 65000, failOnStartupError: true } };
+      args: server.args, cwd: project, toolCallTimeoutMs: MCP_TOOL_TIMEOUT_MS, failOnStartupError: true } };
     const flow = original.doc.contents?.flow === true;
     if (range) {
       let ownedBody = range.body.trim();

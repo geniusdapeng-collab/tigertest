@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { REQUEST, RUN_ID, collectProcess, eventually, runnerFixture } from "./tiger-agent-test-support.mjs";
+import { LIMITS, invokeWorkflow, waitForReceipt } from "../bundles/trading/capabilities/workflow-client.mjs";
+import { REQUEST, RUN_ID, collectProcess, eventually, result, runnerFixture } from "./tiger-agent-test-support.mjs";
 import { parseArgs } from "./tiger-agent.mjs";
 
 function launch(fixture, operation, extra = []) {
@@ -125,11 +126,86 @@ test("CLI wait timeout retains accepted identity without a replacement key", asy
   assert.equal((await fixture.calls()).filter((call) => call.operation === "run").length, 1);
 });
 
+test("receipt observation returns the original run ID and starts no query after its deadline", async (t) => {
+  let now = 1000;
+  const calls = [];
+  t.mock.method(Date, "now", () => now);
+  const value = await waitForReceipt(RUN_ID, {}, {
+    waitMs: 20,
+    pollMs: 1,
+    async invoke(operation, request, _options, { timeoutMs }) {
+      calls.push({ operation, runId: request.run_id, timeoutMs });
+      if (operation === "status") return result(operation);
+      assert.equal(calls.length, 2, "receipt must not be requested again after the deadline");
+      now = 1020;
+      return result(operation, { operation_ok: false, error: { code: "TIMEOUT" } });
+    },
+  });
+  assert.equal(value.error?.code, "TIMEOUT");
+  assert.equal(value.run_id, RUN_ID);
+  assert.equal(value.error.run_id, RUN_ID);
+  assert.deepEqual(calls, [
+    { operation: "status", runId: RUN_ID, timeoutMs: 20 },
+    { operation: "receipt", runId: RUN_ID, timeoutMs: 20 },
+  ]);
+});
+
+test("receipt observation can retry a transient failure within its remaining time", async (t) => {
+  let now = 1000;
+  const budgets = [];
+  t.mock.method(Date, "now", () => now);
+  const value = await waitForReceipt(RUN_ID, {}, {
+    waitMs: 20,
+    pollMs: 1,
+    async invoke(operation, request, _options, { timeoutMs }) {
+      assert.equal(request.run_id, RUN_ID);
+      if (operation === "status") return result(operation);
+      budgets.push(timeoutMs);
+      if (budgets.length === 1) {
+        now = 1005;
+        return result(operation, { operation_ok: false, error: { code: "TIMEOUT" } });
+      }
+      return result(operation);
+    },
+  });
+  assert.equal(value.verification.ok, true);
+  assert.equal(value.run_id, RUN_ID);
+  assert.deepEqual(budgets, [20, 15]);
+});
+
+
 test("CLI input files with spaces/nonASCII work and failed status is only a query success", async (t) => {
   const fixture = await runnerFixture(t, "send(result(operation,{status:'failed'}));");
   const file = join(fixture.dir, "输入 request.json"); await writeFile(file, JSON.stringify({ run_id: RUN_ID }));
   const proc = launch(fixture, "status", ["--input-file", file]); proc.child.stdin.end();
   const value = envelope(await proc.closed, 0); assert.equal(value.status, "failed"); assert.equal(value.summary, null);
+});
+
+test("direct requests select admission, proof or short observation time and preserve overrides", async (t) => {
+  const fixture = await runnerFixture(t);
+  const scheduled = [];
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, timeout, ...args) => {
+    scheduled.push(timeout);
+    return schedule(callback, timeout, ...args);
+  });
+  const request = { run_id: RUN_ID };
+  await invokeWorkflow("receipt", request, fixture.options);
+  await invokeWorkflow("verify", request, fixture.options);
+  await invokeWorkflow("status", request, fixture.options);
+  await invokeWorkflow("run", REQUEST, fixture.options);
+  await invokeWorkflow("resume", request, fixture.options);
+  await invokeWorkflow("supplement", {
+    schema_version: "tiger.research-supplement-request/v1",
+    parent_run_id: RUN_ID,
+    symbols: ["NVDA"],
+    idempotency_key: "supplement-transport-budget",
+  }, fixture.options);
+  await invokeWorkflow("receipt", request, fixture.options, { timeoutMs: 4321 });
+  assert.deepEqual(scheduled, [
+    LIMITS.receiptMs, LIMITS.receiptMs, LIMITS.requestMs,
+    LIMITS.admissionMs, LIMITS.admissionMs, LIMITS.admissionMs, 4321,
+  ]);
 });
 
 test("CLI wait covers the business deadline plus bounded receipt proof", async (t) => {

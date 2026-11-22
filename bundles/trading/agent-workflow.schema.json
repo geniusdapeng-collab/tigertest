@@ -61,7 +61,79 @@
             "fetch_count": {"type": "integer", "minimum": 0, "maximum": 10000},
             "acquisition_contract": {"type": "string", "const": "tiger.intelligence-acquisition.v2"},
             "bundle_id": {"type": "string", "pattern": "^bundle_[0-9a-f]{32}$"},
-            "source_requests": {"type": "integer", "minimum": 0, "maximum": 10000}
+            "source_requests": {"type": "integer", "minimum": 0, "maximum": 10000},
+            "chat_accounting": {"type": "object", "additionalProperties": false,
+              "required": ["accounting_scope", "source_accounting", "other_model_io_count", "native_count", "observed_attempts_count",
+                "known_native_attempts", "known_usage", "unknown_attempts", "observation_state", "requires_reconciliation",
+                "format_reanswers", "observed_attempts"],
+              "properties": {
+                "accounting_scope": {"const": "chat_completions_only"},
+                "source_accounting": {"const": "not_certified_by_this_report"},
+                "other_model_io_count": {"type": "integer", "minimum": 0},
+                "native_count": {"type": "integer", "minimum": 0},
+                "observed_attempts_count": {"type": "integer", "minimum": 0},
+                "known_native_attempts": {"type": "integer", "minimum": 0},
+                "known_usage": {"type": ["object", "null"], "additionalProperties": false,
+                  "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+                  "properties": {
+                    "prompt_tokens": {"type": "integer", "minimum": 0},
+                    "completion_tokens": {"type": "integer", "minimum": 0},
+                    "total_tokens": {"type": "integer", "minimum": 0}
+                  }
+                },
+                "unknown_attempts": {"type": "integer", "minimum": 0},
+                "observation_state": {"enum": ["no_chat_observation", "usage_unknown", "known_usage"]},
+                "requires_reconciliation": {"type": "boolean"},
+                "format_reanswers": {"type": "integer", "minimum": 0},
+                "observed_attempts": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+                  "required": ["stage", "call_id", "request_sha256", "ordinal", "observation_ref", "response_id", "diagnostic", "usage"],
+                  "properties": {
+                    "stage": {"type": "string", "minLength": 1},
+                    "call_id": {"type": "string", "minLength": 1},
+                    "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "ordinal": {"type": "integer", "minimum": 1},
+                    "observation_ref": {"type": "object", "additionalProperties": false,
+                      "required": ["path", "schema", "bytes", "sha256"],
+                      "properties": {
+                        "path": {"type": "string", "minLength": 1},
+                        "schema": {"type": "string", "minLength": 1},
+                        "bytes": {"type": "integer", "minimum": 0},
+                        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                      }
+                    },
+                    "response_id": {"type": ["string", "null"], "minLength": 1},
+                    "diagnostic": {"type": ["object", "null"], "required": ["code"],
+                      "properties": {"code": {"type": "string", "minLength": 1}}},
+                    "usage": {"type": ["object", "null"], "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+                      "properties": {
+                        "prompt_tokens": {"type": "integer", "minimum": 0},
+                        "completion_tokens": {"type": "integer", "minimum": 0},
+                        "total_tokens": {"type": "integer", "minimum": 0}
+                      }
+                    }
+                  }
+                }}
+              }
+            },
+            "research_work": {"type": "object", "additionalProperties": false,
+              "required": ["quarantined_attempts", "quarantined_targets"],
+              "properties": {
+                "quarantined_attempts": {"type": "array", "items": {"type": "object", "additionalProperties": false,
+                  "required": ["attempt_id", "unit_id", "scope", "affected_targets", "usage_state", "reservation_state", "reason", "event_sha256"],
+                  "properties": {
+                    "attempt_id": {"type": "string", "minLength": 1},
+                    "unit_id": {"type": "string", "minLength": 1},
+                    "scope": {"enum": ["source", "model"]},
+                    "affected_targets": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                    "usage_state": {"enum": ["known", "unknown"]},
+                    "reservation_state": {"const": "held"},
+                    "reason": {"type": "string", "minLength": 1},
+                    "event_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                  }
+                }},
+                "quarantined_targets": {"type": "array", "items": {"type": "string", "minLength": 1}}
+              }
+            }
           }
         },
         "action_summary": {"type": "string", "minLength": 1, "maxLength": 2000},

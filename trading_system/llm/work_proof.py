@@ -460,21 +460,24 @@ class ResearchWorkProof:
                              "phase": "metadata_synthesis",
                              "unit_id": summary_spec.unit_id, "arguments": args})
             if type(value) is dict and value.get("schema") == SEMANTIC_FAILURE_SCHEMA:
-                try:
-                    merged = merge_segment_annotations(
-                        raw, annotations, summary_zh=native["summary_zh"],
-                        limits=merged_annotation_limits(len(segments)),
-                        target_ids=legacy.TARGET_IDS)
-                    validate_annotation(merged, self.replay.cutoff, **validation_context)
-                except Exception as error:
-                    code = semantic_failure_code(error)
-                    if code is None:
-                        _fail(stage)
+                if "schema_failure_code" in native:
+                    expect_semantic_failure(value, native, raw, "metadata_synthesis", None)
                 else:
-                    _fail(stage)
-                expected = semantic_failure_value(
-                    "metadata_synthesis", raw, None, code)
-                _same(value, expected, stage)
+                    try:
+                        merged = merge_segment_annotations(
+                            raw, annotations, summary_zh=native["summary_zh"],
+                            limits=merged_annotation_limits(len(segments)),
+                            target_ids=legacy.TARGET_IDS)
+                        validate_annotation(merged, self.replay.cutoff, **validation_context)
+                    except Exception as error:
+                        code = semantic_failure_code(error)
+                        if code is None:
+                            _fail(stage)
+                    else:
+                        _fail(stage)
+                    expected = semantic_failure_value(
+                        "metadata_synthesis", raw, None, code)
+                    _same(value, expected, stage)
                 terminal_disposition(result, TERMINAL_REASON)
                 self.document_hashes[raw.doc_id] = text_digest(raw.content)
                 return (None, index) if return_count else None

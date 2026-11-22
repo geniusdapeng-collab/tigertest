@@ -125,7 +125,7 @@ def synthetic_transport(monkeypatch, *, review_value=None, extract_mutation=None
     return wires
 
 
-def segmented_transport(monkeypatch, *, extract_mutation=None):
+def segmented_transport(monkeypatch, *, extract_mutation=None, summary_value=None):
     wires, lock = [], Lock()
     def post(url, **kwargs):
         wire = json.loads(kwargs["data"])
@@ -145,7 +145,8 @@ def segmented_transport(monkeypatch, *, extract_mutation=None):
             if extract_mutation is not None:
                 extract_mutation(value, payload)
         elif phase == "metadata_synthesis":
-            value = {"summary_zh": "分段摘要已按完整原文覆盖并逐段复核。"}
+            value = ({"summary_zh": "分段摘要已按完整原文覆盖并逐段复核。"}
+                     if summary_value is None else summary_value)
         else:
             value = review()
         with lock:
@@ -403,6 +404,56 @@ def test_segmented_document_proof_rebuilds_every_core_range_and_review(segmented
     summary = verifier.assert_complete()
     assert summary["document_count"] == 1 and summary["verified_units"] == consumed
     assert verifier.store.document_dispositions()["documents"][fixture.originals[0].doc_id]["state"] == "eligible"
+
+
+def test_v4_overlong_segment_summary_is_replayed_without_losing_other_documents(observed, monkeypatch):
+    # The frozen real failure had a well-formed native reply whose summary was
+    # one character over the limit. Recreate the shape without its source text.
+    from trading_system.research_work import _V4_RELIABILITY
+    monkeypatch.setitem(_V4_RELIABILITY, "segment_input_token_limit", 5000)
+    admission, policy, acquisition, client = prepare_proof_context(
+        observed, profile=CURRENT_TECH_INTELLIGENCE_PROFILE, readiness=research_readiness(),
+    )
+    wires = segmented_transport(monkeypatch, summary_value={"summary_zh": "摘" * 601})
+    content = "\n\n".join(
+        f"Section {number}. Complete issuer disclosure paragraph with revenue "
+        f"and risk evidence number {number}." for number in range(1, 401))
+    originals = [raw(content=content), raw("source-2")]
+    with observed.step("clean.llm_semantic", {"TEST_FIXTURE": "overlong segment summary"}) as scope:
+        documents = clean_round(client, originals, acquisition=acquisition)
+        scope.output(documents)
+        joins = deepcopy(scope.io_calls)
+    assert [document.raw.doc_id for document in documents] == ["source-2"]
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("Proof opened a network connection"))
+
+    fixture = SimpleNamespace(acquisition=acquisition)
+    replay = FixtureReplay(observed, admission, policy)
+    verifier = ResearchWorkProof(replay)
+    failed, consumed = verifier.verify_document(
+        originals[0], joins, validation_context=validation_context(fixture), return_count=True)
+    surviving, remaining = verifier.verify_document(
+        originals[1], joins[consumed:], validation_context=validation_context(fixture), return_count=True)
+    assert failed is None and consumed > 2 and consumed + remaining == len(joins)
+    assert asdict(surviving) == asdict(documents[0])
+
+    summary_unit = next(row for row in verifier.store.status()["units"]
+                        if row["spec"]["kind"] == "document.metadata_synthesis")
+    saved = verifier.store.read_result(summary_unit["unit_id"])
+    assert saved["value"]["output"]["schema"] == "tiger.document-semantic-failure/v1"
+    assert saved["value"]["output"]["error_code"] == "WORK_OUTPUT_SCHEMA_MISMATCH"
+    assert saved["dispositions"]["source-1"] == {
+        "state": "unverifiable", "reason": "upstream_document_semantics_unverifiable"}
+    assert verifier.store.document_dispositions()["documents"]["source-2"]["state"] == "eligible"
+
+    summary = verifier.assert_complete()
+    assert summary["document_count"] == 2 and summary["verified_units"] == len(joins)
+    assert summary["format_reanswers"] == 0 and summary["native_count"] == len(wires)
+    assert replay.counts["clean.llm_semantic"] == len(wires) - 1
+    failures = [row for row in replay.chat_observations if row["diagnostic"] is not None]
+    assert len(failures) == 1 and failures[0]["usage"] is not None
+    diagnostic = failures[0]["diagnostic"]
+    assert diagnostic["code"] == "OUTPUT_SCHEMA_MISMATCH"
+    assert diagnostic["schema_path"] == "/summary_zh" and diagnostic["schema_keyword"] == "maxLength"
 
 
 def test_negative_review_is_verified_as_an_unverifiable_terminal(unreviewable):
