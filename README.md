@@ -1,6 +1,6 @@
 # TigerTest · 美股科技情报研究
 
-TigerTest 是 Tiger 的独立实验分支，面向**半导体周期和 AI 基础设施**两个主题。它先确定一组有限的研究对象，再按证券查找财报、指引、不利事项和反证。报告把依据充分的纸面计划、条件观察和仍缺的证据列给读者。
+TigerTest 是聚焦**半导体周期和 AI 基础设施**的独立美股科技研究系统。它从高流动性标的中先冻结深研对象，再按证券核对财报、指引、不利事项和反证。报告给出有实证支撑的纸面计划、条件观察及证据缺口，所有账户动作限于模拟盘。
 
 [English](README_EN.md) · [研究范围](#研究范围) · [研究流程](#研究流程) · [示例界面](#示例界面) · [Agent 操作指南](docs/TIGER-OPERATOR.md)
 
@@ -166,7 +166,7 @@ Apache-2.0。
 
 ## 桌面 Agent 接入（Codex / Qoder / DeepSeek Harness）
 
-完整后端研究使用 `node scripts/tiger-agent.mjs`（固定八操作 CLI）或
+完整后端研究使用 `node scripts/tiger-agent.mjs`（固定 CLI）或
 `node scripts/tiger-agent-mcp.mjs`（独立 STDIO MCP）。通过
 `node scripts/tiger-agent-config.mjs --client codex` 生成 Codex 本机项目配置，默认只读；
 Qoder CLI 与 DSH 分别选择 `--client qoder` 和 `--client dsh`。
