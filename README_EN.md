@@ -1,14 +1,8 @@
 # TigerTest Intelligence-First US Tech Selector
 
-> A paper-only US tech selector centered on two themes, a bounded 16-name research frontier and evidence-complete decisions.
->
-> **No prediction. Process, discipline, audit.**
+TigerTest is a US technology research system for two themes: the semiconductor cycle and AI infrastructure. Each run freezes up to 16 high-liquidity securities for deep research, checks the original evidence for each name, and records paper plans, watch conditions, and evidence gaps.
 
-TigerTest is a complete fork of `workroom-tiger@d833064`. It inherits the
-[Caishen AI trading system](docs/CAISHEN_README.md) and
-[WorkLoom IM](governance/README.md), while narrowing the default universe to
-high-liquidity US semiconductor-cycle and AI-infrastructure names. The full
-design is in [TIGERTEST-ARCHITECTURE.md](docs/TIGERTEST-ARCHITECTURE.md).
+The system uses the [Caishen trading kernel](docs/CAISHEN_README.md) and [WorkLoom governance workspace](governance/README.md). See the [TigerTest architecture](docs/TIGERTEST-ARCHITECTURE.md) for the research universe and evidence requirements.
 
 **This system currently runs in paper trading only. It is not investment advice and promises no returns.**
 
@@ -47,9 +41,9 @@ and profile; a new daily task changes its logical idempotency key.
 ```bash
 bash scripts/setup.sh full
 # backend-only: bash scripts/setup.sh backend
-python3 -m pytest tests/ -q          # 252 tests
-python3 main.py --demo               # offline demo (synthetic data, end-to-end 21 steps)
-python3 main.py --universe full --top 30 --picks 8   # production mode (daily full market)
+python3 -m pytest tests/ -q                              # trading-kernel test suite
+python3 main.py --demo --universe tech --top 16 --picks 5 # offline two-theme demo
+python3 main.py --universe full --top 30 --picks 8        # historical full-universe comparison
 
 # S6 review loop & approval flow
 python3 main.py --review-list                              # list WFA parameter proposals
@@ -59,10 +53,10 @@ python3 main.py --review-reject <id> --reason "..."        # reject (reason requ
 
 ## Controlled Research and Evidence Acquisition
 
-New controlled AI research explicitly selects `us-public-intelligence-paper-v2`
-through the Tiger CLI/MCP workflow. It binds a separately frozen numeric research
-frontier, registered-source acquisition, original documents/attachments, typed
-subject/event/time evidence, target-specific eligibility and an immutable bundle.
+New controlled AI research selects `us-tech-intelligence-paper-v4` through the
+TigerTest CLI/MCP workflow. It freezes a two-theme research frontier, collects
+original documents and attachments from registered sources, checks each
+security’s eligibility, and binds the evidence in an immutable bundle.
 Missing evidence remains a gap with null semantic scores. All five semantic
 stages still require the admitted DeepSeek model; optional discovery providers
 do not replace that text model or numeric risk gates. Historical profiles and
